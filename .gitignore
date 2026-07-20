@@ -1,0 +1,17 @@
+/.idea
+/.vscode
+*.log
+.env
+.constant
+.claude
+.codebuddy
+.understand-anything
+.DS_Store
+install/install.lock
+app/controller/api/Test.php
+cert_crmeb.key
+CLAUDE.md
+/install/
+/runtime/
+/vendor/
+/backup/
