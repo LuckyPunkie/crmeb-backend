@@ -15,10 +15,13 @@ use app\common\middleware\UserTokenMiddleware;
 // 需要登录认证的路由
 Route::group(function () {
     Route::post('community/paid/create', 'api.community.CommunityPaidContent/create');
+    Route::post('community/paid/update/:id', 'api.community.CommunityPaidContent/update');
     Route::post('community/paid/unlock/:id', 'api.community.CommunityPaidContent/unlock');
     Route::get('community/paid/check/:id', 'api.community.CommunityPaidContent/check');
     Route::get('community/paid/income', 'api.community.CommunityPaidContent/income');
     Route::get('community/paid/orders', 'api.community.CommunityPaidContent/orders');
+    Route::get('community/paid/published', 'api.community.CommunityPaidContent/published');
+    Route::get('community/paid/unlocked', 'api.community.CommunityPaidContent/unlocked');
 })->middleware(UserTokenMiddleware::class, true);
 
 // 无需登录的路由

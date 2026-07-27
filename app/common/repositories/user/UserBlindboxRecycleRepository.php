@@ -152,7 +152,7 @@ class UserBlindboxRecycleRepository extends BaseRepository
             ->order('create_time DESC')
             ->with([
                 'cabinet.attrValue' => function ($query) {
-                    $query->field('value_id,suk,image');
+                    $query->field('value_id,sku,image');
                 },
                 'product' => function ($query) {
                     $query->field('product_id,store_name');

@@ -137,6 +137,9 @@ class StoreCart extends BaseController
             // 更新购物车
             $cart_id = $cart['cart_id'];
             $cart_num = ['cart_num' => ($cart['cart_num'] + $data['cart_num'])];
+            if (!empty($data['share_mer_id'])) {
+                $cart_num['share_mer_id'] = (int)$data['share_mer_id'];
+            }
             $storeCart = $this->repository->update($cart_id,$cart_num);
         } else {
             // 添加购物车
@@ -334,7 +337,7 @@ class StoreCart extends BaseController
     public function checkParams(validate $validate)
     {
         // 从请求中提取指定参数，包括产品ID、产品属性唯一标识、购物车数量、是否为新品、产品类型、团购ID和传播者ID。
-        $data = $this->request->params(['product_id','product_attr_unique','cart_num','is_new',['product_type',0],['group_buying_id',0],['spread_id',0],['reservation_id',0],['reservation_date','']]);
+        $data = $this->request->params(['product_id','product_attr_unique','cart_num','is_new',['product_type',0],['group_buying_id',0],['spread_id',0],['share_mer_id',0],['reservation_id',0],['reservation_date','']]);
 
         // 使用验证器对提取的参数数据进行验证。
         $validate->check($data);
@@ -351,6 +354,11 @@ class StoreCart extends BaseController
                 $data['spread_id'] = 0;
             }
         }
+
+        // 盲盒入口分享店铺归因（普通店带用户进盲盒）
+        $shareMerId = (int)($data['share_mer_id'] ?? 0);
+        $data['share_mer_id'] = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
+            ->resolve((int)$this->request->uid(), $shareMerId);
 
         // 返回处理后的参数数据。
         return $data;

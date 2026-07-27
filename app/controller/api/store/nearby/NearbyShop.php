@@ -43,7 +43,13 @@ class NearbyShop extends BaseController
             'longitude',
             'tags',
             'is_open',
+            ['store_type', 'offline'], // offline=实体店/线下店，online=线上店
         ]);
+
+        // 前端传 category_id，仓库统一用 nearby_category_id
+        if (!empty($where['category_id'])) {
+            $where['nearby_category_id'] = (int)$where['category_id'];
+        }
 
         return app('json')->success($this->repository->getList($where, $page, $limit));
     }

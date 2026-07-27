@@ -59,15 +59,40 @@ class Community extends BaseController
      */
     public function lst()
     {
-        $where = $this->request->params(['keyword','topic_id','is_hot','category_id','spu_id','search_type','community_type']);
-        if (!$where['category_id']) {
+        $where = $this->request->params([
+            'keyword', 'topic_id', 'is_hot', 'category_id', 'spu_id', 'search_type', 'community_type',
+            'order', 'is_news_bot', 'topic_name', 'topic_keywords', 'has_spu', 'city', 'skip_category',
+            'sex', 'age_min', 'age_max', 'education',
+            'category_topic_match', 'category_topic_or'
+        ]);
+        // 内容类别 Tab 用语义筛选时，不再按帖子 category_id 过滤
+        if (!empty($where['skip_category'])) {
+            unset($where['category_id'], $where['skip_category']);
+        } elseif (!$where['category_id']) {
             unset($where['category_id']);
-        } else  if ($where['category_id'] == -1) {
+        } else if ($where['category_id'] == -1) {
             $where['is_type'] = $this->repository::COMMUNIT_TYPE_VIDEO;
             unset($where['category_id']);
         }
-        $where = array_merge($where,$this->repository::IS_SHOW_WHERE);
-        $where['order'] = 'start';
+        // 话题命中类别：类型条件与话题命中取 OR 时，转成内部字段避免被 AND
+        if (!empty($where['category_id']) && !empty($where['category_topic_or'])) {
+            if (isset($where['community_type']) && $where['community_type'] !== '') {
+                $where['_or_community_type'] = $where['community_type'];
+                unset($where['community_type']);
+            }
+            if (isset($where['has_spu']) && $where['has_spu'] !== '') {
+                $where['_or_has_spu'] = $where['has_spu'];
+                unset($where['has_spu']);
+            }
+            $where['category_topic_match'] = 1;
+        }
+        $where = array_merge($where, $this->repository::IS_SHOW_WHERE);
+        $order = $where['order'] ?? '';
+        if ($order === 'new' || $order === 'create_time') {
+            $where['order'] = 'create_time';
+        } else {
+            $where['order'] = 'start';
+        }
         [$page, $limit] = $this->getPage();
         return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user));
     }
@@ -80,7 +105,7 @@ class Community extends BaseController
      */
     public function userList()
     {
-        $where = $this->request->params(['keyword']);
+        $where = $this->request->params(['keyword', 'sex', 'age_min', 'age_max', 'education']);
         [$page, $limit] = $this->getPage();
 
         $userRepository = app()->make(UserRepository::class);
@@ -305,7 +330,7 @@ class Community extends BaseController
      */
     public function checkParams()
     {
-        $data = $this->request->params(['image','topic_id','content','spu_id','order_id',['is_type',1],'video_link']);
+        $data = $this->request->params(['image','topic_id','topic_names','content','spu_id','order_id',['is_type',1],'video_link']);
         $config = systemConfig(["community_app_switch",'community_audit','community_video_audit']);
         $data['status'] = 0;
         $data['is_show'] = 0;
@@ -386,6 +411,19 @@ class Community extends BaseController
     }
 
     /**
+     * 笔记收藏 / 取消收藏
+     */
+    public function collectCommunity($id)
+    {
+        $status = $this->request->param('status') == 1 ? 1 : 0;
+        $this->repository->setCommunityCollect((int)$id, (int)$this->user->uid, $status);
+        if ($status) {
+            return app('json')->success('收藏成功');
+        }
+        return app('json')->success('取消收藏');
+    }
+
+    /**
      *  用户关注/取消
      * @param $id
      * @param RelevanceRepository $relevanceRepository
@@ -449,6 +487,7 @@ class Community extends BaseController
      */
     public function userInfo($id)
     {
+        $id = intval($id);
         if (!$id)  return app('json')->fail('缺少参数');
         $data = $this->repository->getUserInfo($id, $this->user);
         return app('json')->success($data);

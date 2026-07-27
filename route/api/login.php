@@ -199,6 +199,14 @@ Route::group(function () {
         Route::post('fields/save', 'UserFields/save');
         Route::delete('fields/delete', 'UserFields/delete');
 
+        // 社交档案
+        Route::get('profile', 'UserProfile/detail');
+        Route::post('profile/save', 'UserProfile/save');
+
+        // 资质认证
+        Route::get('certification', 'UserCertification/list');
+        Route::post('certification/save', 'UserCertification/save');
+
     })->prefix('api.user.');
 
     //购物车
@@ -248,6 +256,7 @@ Route::group(function () {
 
         Route::post('start/:id', 'Community/startCommunity');
         Route::get('start/lst', 'Community/getUserStartCommunity');
+        Route::post('collect/:id', 'Community/collectCommunity');
 
         Route::post('reply/create/:id', 'CommunityReply/create');
         Route::post('reply/start/:id', 'CommunityReply/start');

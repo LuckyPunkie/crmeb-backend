@@ -11,13 +11,18 @@
 
 namespace app\controller\api\store;
 
+use app\common\repositories\store\BlindBoxShareRepository;
 use app\common\repositories\store\product\ProductAttrValueRepository;
 use app\common\repositories\store\product\ProductRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\repositories\user\UserAddressRepository;
 use app\common\repositories\user\UserBlindboxCabinetRepository;
 use app\common\repositories\user\UserBlindboxRecycleRepository;
+use app\common\model\store\order\StoreOrder;
+use app\common\model\store\order\StoreGroupOrder;
 use crmeb\basic\BaseController;
 use think\App;
+use think\exception\ValidateException;
 use think\facade\Db;
 
 class BlindBox extends BaseController
@@ -27,7 +32,47 @@ class BlindBox extends BaseController
     public function __construct(App $app)
     {
         parent::__construct($app);
-        $this->userInfo = $this->request->isLogin() ? $this->request->userInfo() : null;
+        try {
+            $this->userInfo = $this->request->isLogin() ? $this->request->userInfo() : null;
+        } catch (\Throwable $e) {
+            $this->userInfo = null;
+        }
+    }
+
+    /**
+     * 普通店铺主页盲盒入口
+     * GET /api/store/blindbox/entry?mer_id=
+     */
+    public function entry(BlindBoxShareRepository $shareRepo)
+    {
+        $merId = (int)$this->request->param('mer_id', 0);
+        try {
+            $data = $shareRepo->entryInfo($merId);
+            if ($this->userInfo) {
+                $data['bound_share_mer_id'] = $shareRepo->getBound((int)$this->userInfo->uid);
+            }
+            return app('json')->success($data);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 绑定盲盒分享来源店铺（从普通店点进盲盒时调用）
+     * POST /api/store/blindbox/bind_share  share_mer_id
+     */
+    public function bindShare(BlindBoxShareRepository $shareRepo)
+    {
+        $shareMerId = (int)$this->request->param('share_mer_id', 0);
+        try {
+            $bound = $shareRepo->bind((int)$this->request->uid(), $shareMerId);
+            return app('json')->success('绑定成功', [
+                'share_mer_id' => $bound,
+                'ttl' => BlindBoxShareRepository::BIND_TTL,
+            ]);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
     }
 
     /**
@@ -37,6 +82,7 @@ class BlindBox extends BaseController
     {
         [$page, $limit] = $this->getPage();
         $where = $this->request->params(['keyword', 'category_id', 'order']);
+        $this->tryBindShareFromRequest();
 
         $query = app()->make(MerchantRepository::class)->search(array_merge($where, [
             'is_del' => 0,
@@ -70,6 +116,7 @@ class BlindBox extends BaseController
         [$page, $limit] = $this->getPage();
         $merId = (int)$this->request->param('mer_id');
         $type = $this->request->param('type', 'all');
+        $this->tryBindShareFromRequest();
 
         if ($merId <= 0) {
             return app('json')->fail('请选择盲盒店铺');
@@ -82,33 +129,32 @@ class BlindBox extends BaseController
         }
 
         $productRepository = app()->make(ProductRepository::class);
-        $where = [
-            'mer_id' => $merId,
-            'is_del' => 0,
-            'is_show' => 1,
-            'status' => 1,
-        ];
-
-        $query = $productRepository->search($merId, $where);
+        $query = $productRepository->getSearch([])
+            ->alias('Product')
+            ->where('Product.mer_id', $merId)
+            ->where('Product.is_del', 0)
+            ->where('Product.is_show', 1)
+            ->where('Product.status', 1)
+            ->where('Product.is_used', 1);
 
         switch ($type) {
             case 'hot':
-                $query->order('sales DESC');
+                $query->order('Product.sales DESC');
                 break;
             case 'new':
-                $query->order('product_id DESC');
+                $query->order('Product.product_id DESC');
                 break;
             case 'low':
-                $query->order('price ASC');
+                $query->order('Product.price ASC');
                 break;
             default:
-                $query->order('sort DESC, product_id DESC');
+                $query->order('Product.sort DESC, Product.product_id DESC');
                 break;
         }
 
         $count = $query->count();
         $list = $query->page($page, $limit)
-            ->field('product_id,mer_id,store_name,image,price,ot_price,sales,stock')
+            ->field('Product.product_id,Product.mer_id,Product.store_name,Product.image,Product.price,Product.ot_price,Product.sales,Product.stock')
             ->select();
 
         return app('json')->success(compact('list', 'count'));
@@ -120,6 +166,7 @@ class BlindBox extends BaseController
     public function detail($id)
     {
         $id = (int)$id;
+        $this->tryBindShareFromRequest();
         $productRepository = app()->make(ProductRepository::class);
         $merchantRepository = app()->make(MerchantRepository::class);
 
@@ -137,18 +184,22 @@ class BlindBox extends BaseController
 
         $attrValueRepository = app()->make(ProductAttrValueRepository::class);
         $attrValues = $attrValueRepository->search(['product_id' => $id])->select();
+        $attrList = $attrValues ? $attrValues->toArray() : [];
 
-        $totalWeight = $attrValues->sum('probability_weight');
+        $totalWeight = 0;
+        foreach ($attrList as $attr) {
+            $totalWeight += (int)($attr['probability_weight'] ?? 0);
+        }
         $totalWeight = max($totalWeight, 1);
 
         $formattedAttrs = [];
-        foreach ($attrValues as $attr) {
-            $probabilityPercent = round($attr['probability_weight'] / $totalWeight * 100, 1);
+        foreach ($attrList as $attr) {
+            $probabilityPercent = round(($attr['probability_weight'] ?? 0) / $totalWeight * 100, 1);
             $rarity = app()->make(UserBlindboxCabinetRepository::class)->calcRarity($probabilityPercent);
 
             $formattedAttrs[] = [
                 'value_id' => $attr['value_id'],
-                'sku' => $attr['suk'],
+                'sku' => $attr['sku'] ?? ($attr['suk'] ?? ''),
                 'detail' => $attr['detail'],
                 'unique' => $attr['unique'],
                 'image' => $attr['image'],
@@ -209,40 +260,100 @@ class BlindBox extends BaseController
 
     /**
      * 开盒结果（支付成功后查看抽中的款式）
+     * $orderId 可为子订单 order_id，或支付页传来的 group_order_id
+     *
+     * 注意：盒柜按 uid+product+sku 合并数量，重复抽中同款时不会新建 order_id 行，
+     * 因此开盒结果必须以订单 cart_info 为准，不能只靠盒柜 order_id 反查。
      */
     public function result($orderId)
     {
         $orderId = (int)$orderId;
         $uid = $this->request->uid();
-
+        $orderRepo = app()->make(\app\common\repositories\store\order\StoreOrderRepository::class);
         $cabinetRepo = app()->make(UserBlindboxCabinetRepository::class);
-        $cabinet = $cabinetRepo->getWhere(['order_id' => $orderId, 'uid' => $uid]);
 
-        if (!$cabinet) {
+        // 1) 先定位订单（兼容 group_order_id / order_id）
+        $order = $orderRepo->search([
+            'order_id' => $orderId,
+            'uid' => $uid,
+        ])->with(['orderProduct'])->find();
+        if (!$order) {
+            $order = $orderRepo->search([
+                'group_order_id' => $orderId,
+                'uid' => $uid,
+            ])->with(['orderProduct'])->find();
+        }
+        if (!$order || empty($order['is_blindbox_order'])) {
+            return app('json')->fail('开盒结果不存在');
+        }
+        if ((int)$order['paid'] !== 1) {
+            return app('json')->fail('订单未支付，暂无开盒结果');
+        }
+
+        $orderId = (int)$order['order_id'];
+        $orderProduct = $order->orderProduct[0] ?? null;
+        if (!$orderProduct) {
             return app('json')->fail('开盒结果不存在');
         }
 
-        $product = $cabinet->product;
-        $attrValue = $cabinet->attrValue;
+        $cartInfo = $orderProduct['cart_info'] ?? [];
+        if (is_string($cartInfo)) {
+            $cartInfo = json_decode($cartInfo, true) ?: [];
+        }
+        $productInfo = $cartInfo['product'] ?? [];
+        $attr = $cartInfo['productAttr'] ?? [];
+        if (!$attr) {
+            return app('json')->fail('开盒结果不存在');
+        }
+
+        $productId = (int)($orderProduct['product_id'] ?? ($productInfo['product_id'] ?? 0));
+        $skuName = (string)($attr['sku'] ?? ($attr['suk'] ?? ''));
+        $skuImage = (string)($attr['image'] ?? '');
+        $price = $attr['price'] ?? 0;
+        $weight = (float)($attr['probability_weight'] ?? 0);
+
+        // 若 cart_info 缺权重，回表补齐
+        if ($weight <= 0) {
+            $valueId = (int)($attr['value_id'] ?? 0);
+            $unique = (string)($attr['unique'] ?? ($orderProduct['product_sku'] ?? ''));
+            $attrRow = null;
+            if ($valueId > 0) {
+                $attrRow = \app\common\model\store\product\ProductAttrValue::where('value_id', $valueId)->find();
+            } elseif ($unique !== '') {
+                $attrRow = \app\common\model\store\product\ProductAttrValue::where('unique', $unique)->find();
+            }
+            if ($attrRow) {
+                $weight = (float)$attrRow['probability_weight'];
+                if ($skuName === '') {
+                    $skuName = (string)($attrRow['sku'] ?? ($attrRow['suk'] ?? ''));
+                }
+                if ($skuImage === '') {
+                    $skuImage = (string)$attrRow['image'];
+                }
+                if (!$price) {
+                    $price = $attrRow['price'];
+                }
+            }
+        }
 
         $rarity = ['code' => 'C', 'name' => '普通'];
-        if ($attrValue && $attrValue->probability_weight > 0) {
-            $productId = $cabinet->product_id;
+        if ($productId > 0 && $weight > 0) {
             $totalWeight = \app\common\model\store\product\ProductAttrValue::where('product_id', $productId)->sum('probability_weight');
-            $totalWeight = max($totalWeight, 1);
-            $probabilityPercent = round($attrValue->probability_weight / $totalWeight * 100, 1);
+            $totalWeight = max((float)$totalWeight, 1);
+            $probabilityPercent = round($weight / $totalWeight * 100, 1);
             $rarity = $cabinetRepo->calcRarity($probabilityPercent);
         }
 
         $data = [
-            'product_name' => $product ? $product['store_name'] : '',
-            'product_image' => $product ? $product['image'] : '',
-            'sku_name' => $attrValue ? $attrValue['suk'] : '',
-            'sku_image' => $attrValue ? $attrValue['image'] : '',
-            'price' => $attrValue ? $attrValue['price'] : 0,
+            'product_name' => (string)($productInfo['store_name'] ?? ''),
+            'product_image' => (string)($productInfo['image'] ?? ''),
+            'sku_name' => $skuName,
+            'sku_image' => $skuImage ?: (string)($productInfo['image'] ?? ''),
+            'price' => $price,
             'rarity' => $rarity['code'],
             'rarity_name' => $rarity['name'],
             'order_id' => $orderId,
+            'product_id' => $productId,
         ];
 
         return app('json')->success($data);
@@ -324,5 +435,76 @@ class BlindBox extends BaseController
         [$page, $limit] = $this->getPage();
 
         return app('json')->success($repo->getUserRecords($uid, $page, $limit));
+    }
+
+    /**
+     * 盲盒申请发货：用户填写收货地址后调用，将地址写入订单
+     * POST /api/store/blindbox/apply_ship  order_id address_id
+     */
+    public function applyShip(UserAddressRepository $addressRepo)
+    {
+        $orderId   = (int)$this->request->param('order_id');
+        $addressId = (int)$this->request->param('address_id');
+        $uid       = $this->request->uid();
+
+        if ($orderId <= 0 || $addressId <= 0) {
+            return app('json')->fail('参数错误');
+        }
+
+        $order = StoreOrder::where('order_id', $orderId)
+            ->where('uid', $uid)
+            ->where('paid', 1)
+            ->where('is_blindbox_order', 1)
+            ->where('status', 0)
+            ->find();
+
+        if (!$order) {
+            return app('json')->fail('订单不存在或状态不符');
+        }
+
+        if (!empty($order->user_address)) {
+            return app('json')->fail('该订单已设置收货地址');
+        }
+
+        $address = $addressRepo->getWhere(['address_id' => $addressId, 'uid' => $uid]);
+        if (!$address) {
+            return app('json')->fail('收货地址不存在');
+        }
+
+        $userAddress = ($address['province'] ?? '') . ($address['city'] ?? '') . ($address['district'] ?? '') . ($address['street'] ?? '') . ($address['detail'] ?? '');
+
+        Db::transaction(function () use ($order, $address, $userAddress) {
+            $order->real_name   = $address['real_name'];
+            $order->user_phone  = $address['phone'];
+            $order->user_address = $userAddress;
+            $order->save();
+
+            StoreGroupOrder::where('group_order_id', $order->group_order_id)->update([
+                'real_name'    => $address['real_name'],
+                'user_phone'   => $address['phone'],
+                'user_address' => $userAddress,
+            ]);
+        });
+
+        return app('json')->success('申请发货成功');
+    }
+
+    /**
+     * 请求带 share_mer_id 且已登录时自动绑定归因
+     */
+    protected function tryBindShareFromRequest(): void
+    {
+        if (!$this->userInfo) {
+            return;
+        }
+        $shareMerId = (int)$this->request->param('share_mer_id', 0);
+        if ($shareMerId <= 0) {
+            return;
+        }
+        try {
+            app()->make(BlindBoxShareRepository::class)->bind((int)$this->userInfo->uid, $shareMerId);
+        } catch (\Throwable $e) {
+            // 入口浏览不阻断主流程
+        }
     }
 }

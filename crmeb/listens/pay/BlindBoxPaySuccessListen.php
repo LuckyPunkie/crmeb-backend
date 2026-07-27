@@ -11,6 +11,7 @@
 
 namespace crmeb\listens\pay;
 
+use app\common\model\store\product\ProductAttrValue;
 use app\common\repositories\store\order\StoreGroupOrderRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\user\UserBlindboxCabinetRepository;
@@ -26,18 +27,25 @@ class BlindBoxPaySuccessListen implements ListenerInterface
 
     public function handle($data): void
     {
-        $orderSn = $data['order_sn'] ?? '';
-        if (!$orderSn) {
-            return;
-        }
-
         try {
-            $groupOrder = app()->make(StoreGroupOrderRepository::class)->getWhere(['group_order_sn' => $orderSn]);
-            if (!$groupOrder || $groupOrder->paid != 1) return;
+            // 兼容两种来源：
+            // 1) order.paySuccess => ['groupOrder' => ...]（含模拟支付 / paySuccess 内抛出）
+            // 2) pay_success_order => ['order_sn' => ...]（微信回调）
+            $groupOrder = $data['groupOrder'] ?? null;
+            if (!$groupOrder) {
+                $orderSn = $data['order_sn'] ?? '';
+                if (!$orderSn) {
+                    return;
+                }
+                $groupOrder = app()->make(StoreGroupOrderRepository::class)->getWhere(['group_order_sn' => $orderSn]);
+            }
+            if (!$groupOrder || $groupOrder->paid != 1) {
+                return;
+            }
 
             $orderList = app()->make(StoreOrderRepository::class)->search([
                 'group_order_id' => $groupOrder->group_order_id,
-            ])->select();
+            ])->with(['orderProduct'])->select();
 
             foreach ($orderList as $order) {
                 if (empty($order['is_blindbox_order'])) {
@@ -45,14 +53,31 @@ class BlindBoxPaySuccessListen implements ListenerInterface
                 }
 
                 foreach ($order->orderProduct as $product) {
-                    $skuId = $product['product_sku_id'] ?? 0;
-                    if ($skuId <= 0) {
-                        Log::error('盲盒入柜跳过：product_sku_id 无效', ['order_id' => $order['order_id'], 'product_id' => $product['product_id'] ?? 0]);
+                    $cartInfo = $product['cart_info'] ?? [];
+                    if (is_string($cartInfo)) {
+                        $cartInfo = json_decode($cartInfo, true) ?: [];
+                    }
+                    if (!is_array($cartInfo) || empty($cartInfo['productAttr'])) {
+                        Log::error('盲盒入柜跳过：cart_info.productAttr 缺失', [
+                            'order_id' => $order['order_id'],
+                            'product_id' => $product['product_id'] ?? 0,
+                        ]);
                         continue;
                     }
 
-                    $cartInfo = json_decode($product['cart_info'], true);
-                    if (!$cartInfo || !isset($cartInfo['productAttr'])) {
+                    $attr = $cartInfo['productAttr'];
+                    // 订单商品表存的是 product_sku(=unique)，没有 product_sku_id
+                    $skuId = (int)($attr['value_id'] ?? 0);
+                    $skuUnique = (string)($attr['unique'] ?? ($product['product_sku'] ?? ''));
+                    if ($skuId <= 0 && $skuUnique !== '') {
+                        $skuId = (int)ProductAttrValue::where('unique', $skuUnique)->value('value_id');
+                    }
+                    if ($skuId <= 0) {
+                        Log::error('盲盒入柜跳过：无法解析 attr_value_id', [
+                            'order_id' => $order['order_id'],
+                            'product_id' => $product['product_id'] ?? 0,
+                            'product_sku' => $skuUnique,
+                        ]);
                         continue;
                     }
 
@@ -73,7 +98,7 @@ class BlindBoxPaySuccessListen implements ListenerInterface
                         'uid' => $order['uid'],
                         'product_id' => $product['product_id'],
                         'attr_value_id' => $skuId,
-                        'sku_unique' => $cartInfo['productAttr']['unique'] ?? '',
+                        'sku_unique' => $skuUnique,
                         'order_id' => $order['order_id'],
                         'quantity' => $product['product_num'] ?? 1,
                         'random_seed' => uniqid('bb_', true),
@@ -81,9 +106,9 @@ class BlindBoxPaySuccessListen implements ListenerInterface
 
                     $cabinetRepo->addToCabinet($cabinetData);
 
-                    Log::info('盲盒入柜成功：uid=' . $order['uid'] . ', product_id=' . $product['product_id'] . ', attr_value_id=' . $product['product_sku_id']);
+                    Log::info('盲盒入柜成功：uid=' . $order['uid'] . ', product_id=' . $product['product_id'] . ', attr_value_id=' . $skuId);
 
-                    $this->checkCollectionAchievement($order['uid'], $product['product_id'], $cabinetRepo);
+                    $this->checkCollectionAchievement((int)$order['uid'], (int)$product['product_id'], $cabinetRepo);
                 }
             }
         } catch (\Exception $e) {

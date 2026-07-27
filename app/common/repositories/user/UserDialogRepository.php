@@ -37,8 +37,11 @@ class UserDialogRepository extends BaseRepository
     /**
      * 获取消息列表（合并私信+客服）
      */
-    public function dialogList(int $uid, int $page, int $limit, string $type = 'all')
+    public function dialogList(int $uid, int $page, int $limit, string $type = 'all', array $filter = [])
     {
+        $matchingUids = $this->getMatchingUserUids($filter);
+        $hasUserFilter = $matchingUids !== null;
+
         $dialogQuery = Db::name('user_dialog')
             ->alias('d')
             ->field([
@@ -95,6 +98,17 @@ class UserDialogRepository extends BaseRepository
             $q->whereRaw('NOT (d.uid_b = ? AND d.is_clear_b = 1)', [$uid]);
         });
 
+        if ($hasUserFilter) {
+            $uids = $matchingUids ?: [0];
+            $dialogQuery->where(function ($q) use ($uid, $uids) {
+                $q->where(function ($sq) use ($uid, $uids) {
+                    $sq->where('d.uid_a', $uid)->whereIn('d.uid_b', $uids);
+                })->whereOr(function ($sq) use ($uid, $uids) {
+                    $sq->where('d.uid_b', $uid)->whereIn('d.uid_a', $uids);
+                });
+            });
+        }
+
         $userCount = $dialogQuery->count();
         $list = $dialogQuery->order('d.last_message_time', 'desc')
             ->page($page, $limit)->select()->toArray();
@@ -105,8 +119,9 @@ class UserDialogRepository extends BaseRepository
         }
         $userMap = [];
         if ($chatUids) {
-            $rows = Db::name('user')->field('uid,nickname,avatar')
-                ->whereIn('uid', $chatUids)->select()->toArray();
+            $rows = Db::name('user')->field('uid,nickname,avatar,sex')
+                ->whereIn('uid', $chatUids)
+                ->select()->toArray();
             foreach ($rows as $r) {
                 $userMap[$r['uid']] = $r;
             }
@@ -156,12 +171,13 @@ class UserDialogRepository extends BaseRepository
                 'unread_count'      => $isMeA ? $item['unread_a'] : $item['unread_b'],
                 'relation_type'     => $myRelation,
                 'is_blacked'        => $isMeA ? $item['is_black_b'] : $item['is_black_a'],
+                'sex'               => (int)($userInfo['sex'] ?? 0),
             ];
         }
 
         $count = $userCount;
 
-        if ($type === 'all' || $type === 'merchant') {
+        if (($type === 'all' || $type === 'merchant') && !$hasUserFilter) {
             try {
                 $merchantData = app()->make(StoreServiceUserRepository::class)
                     ->userMerchantList($uid, $page, $limit);
@@ -208,6 +224,75 @@ class UserDialogRepository extends BaseRepository
         }
 
         return compact('count') + ['list' => $result];
+    }
+
+    private function getMatchingUserUids(array $filter): ?array
+    {
+        $gender = $this->normalizeGender($filter['sex'] ?? ($filter['gender'] ?? ''));
+        $ageMin = max(0, (int)($filter['age_min'] ?? 0));
+        $ageMax = max(0, (int)($filter['age_max'] ?? 0));
+        $hasAgeFilter = $ageMin > 0 || $ageMax > 0;
+
+        $educations = [];
+        if (!empty($filter['education'])) {
+            $educations = is_array($filter['education'])
+                ? $filter['education']
+                : array_filter(explode(',', (string)$filter['education']));
+            $educations = array_values(array_filter(array_map('intval', $educations)));
+        }
+        $hasEduFilter = !empty($educations);
+
+        if ($gender === null && !$hasAgeFilter && !$hasEduFilter) {
+            return null;
+        }
+
+        $query = Db::name('user')->field('uid');
+
+        if ($gender !== null) {
+            $query->where('sex', $gender);
+        }
+
+        if ($hasAgeFilter) {
+            $birthdayStart = $ageMax > 0 ? date('Y-m-d', strtotime('-' . $ageMax . ' years')) : null;
+            $birthdayEnd = $ageMin > 0 ? date('Y-m-d', strtotime('-' . $ageMin . ' years')) : null;
+            $query->where(function ($q) use ($birthdayStart, $birthdayEnd) {
+                $q->where(function ($q2) {
+                    $q2->whereNull('birthday')->whereOr('birthday', '')->whereOr('birthday', '0000-00-00');
+                })->whereOr(function ($q2) use ($birthdayStart, $birthdayEnd) {
+                    $q2->whereNotNull('birthday')->where('birthday', '<>', '')->where('birthday', '<>', '0000-00-00');
+                    if ($birthdayStart) {
+                        $q2->where('birthday', '>=', $birthdayStart);
+                    }
+                    if ($birthdayEnd) {
+                        $q2->where('birthday', '<=', $birthdayEnd);
+                    }
+                });
+            });
+        }
+
+        if ($hasEduFilter) {
+            $eduUids = Db::name('user_profile')->whereIn('education', $educations)->column('uid');
+            $query->whereIn('uid', $eduUids ?: [0]);
+        }
+
+        return $query->column('uid');
+    }
+
+    private function normalizeGender($gender): ?int
+    {
+        if ($gender === '' || $gender === null || $gender === 0 || $gender === '0') {
+            return null;
+        }
+        if (in_array((string)$gender, ['1', '2'], true)) {
+            return (int)$gender;
+        }
+        if (in_array($gender, ['male', '1', 'man'], true)) {
+            return 1;
+        }
+        if (in_array($gender, ['female', '2', 'woman'], true)) {
+            return 2;
+        }
+        return null;
     }
 
     private function resolveRelation(array $row, bool $isMeA): int

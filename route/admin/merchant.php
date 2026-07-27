@@ -53,6 +53,29 @@ Route::group(function () {
     ]);
 
 
+    //商家标签
+    Route::group('system/merchant/label', function () {
+        Route::get('lst', '/lst')->name('systemMerchantLabelLst')->option([
+            '_alias' => '列表',
+        ]);
+        Route::post('create', '/create')->name('systemMerchantLabelCreate')->option([
+            '_alias' => '添加',
+        ]);
+        Route::post('update/:id', '/update')->name('systemMerchantLabelUpdate')->option([
+            '_alias' => '编辑',
+        ]);
+        Route::delete('delete/:id', '/delete')->name('systemMerchantLabelDelete')->option([
+            '_alias' => '删除',
+        ]);
+        Route::get('options', '/options')->option([
+            '_alias' => '筛选',
+            '_auth'  => false,
+        ]);
+    })->prefix('admin.system.merchant.MerchantLabel')->option([
+        '_path' => '/merchant/label',
+        '_auth' => true,
+    ]);
+
     //店铺分类
     Route::group('system/merchant', function () {
         Route::get('category/lst', '/lst')->name('systemMerchantCategoryLst')->option([
@@ -314,6 +337,19 @@ Route::group(function () {
             '_alias' => '扣除保证金表单',
             '_auth' => false,
             '_form' => 'systemMarginLocalSet',
+        ]);
+        // 标签保证金列表
+        Route::get('label/lst', 'merchant.MerchantLabel/depositLst')->name('systemMarginLabelLst')->option([
+            '_alias' => '标签保证金列表',
+        ]);
+        // 标签保证金线下缴纳
+        Route::get('label/local/:id/form', 'merchant.MerchantLabel/localLabelMarginForm')->name('systemMarginLabelLocalForm')->option([
+            '_alias' => '标签保证金线下缴纳表单',
+            '_auth' => false,
+            '_form' => 'systemMarginLabelLocalSet',
+        ]);
+        Route::post('label/local/:id', 'merchant.MerchantLabel/localLabelMarginSet')->name('systemMarginLabelLocalSet')->option([
+            '_alias' => '标签保证金线下缴纳',
         ]);
     })->prefix('admin.system.')->option([
         '_path' => '/merchant/deposit_list',

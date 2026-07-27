@@ -179,6 +179,16 @@ Route::group(function () {
         '_auth'  => true,
     ]);
 
+    // 商家标签
+    Route::group('merchant_label', function () {
+        Route::get('lst', 'merchant.system.MerchantLabel/labels');
+        Route::post('join/:id', 'merchant.system.MerchantLabel/join');
+        Route::get('margin_code/:id', 'merchant.system.MerchantLabel/marginCode');
+    })->option([
+        '_path' => '/merchant_label/lst',
+        '_auth' => false,
+    ]);
+
     Route::group( function () {
         Route::get('take/info', 'merchant.system.Merchant/takeInfo')->name('merchantTakeInfo')->option([
             '_alias' => '到店自提信息',

@@ -465,10 +465,12 @@ class MerchantRepository extends BaseRepository
             $admin_info = $data['admin_info'] ?: [];
             unset($data['admin_info']);
         }
+        $bindUid = (int)($data['bind_uid'] ?? 0);
+        unset($data['bind_uid']);
 
         // 使用数据库事务来确保所有操作的一致性
-        return app()->make(MerchantCoreService::class)->createMerchant($data, function () use ($data, $make,$admin_info) {
-            return Db::transaction(function () use ($data, $make,$admin_info) {
+        return app()->make(MerchantCoreService::class)->createMerchant($data, function () use ($data, $make,$admin_info, $bindUid) {
+            return Db::transaction(function () use ($data, $make,$admin_info, $bindUid) {
             // 从数据数组中提取账号和密码，并删除这些字段
             $account = $data['mer_account'];
             $password = $data['mer_password'];
@@ -478,6 +480,8 @@ class MerchantRepository extends BaseRepository
             $merchant = $this->dao->create($data);
             // 创建商家管理员账号
             $make->createMerchantAccount($merchant, $account, $password);
+            // 同步小程序用户：写入 eb_user 账号密码并绑定 mer_id
+            $this->syncMerchantMiniUser($merchant, $account, $password, $bindUid);
             // 创建默认的配送模板
             app()->make(ShippingTemplateRepository::class)->createDefault($merchant->mer_id);
             // 设置默认的商品复制数量
@@ -511,6 +515,81 @@ class MerchantRepository extends BaseRepository
             return $merchant;
             });
         });
+    }
+
+    /**
+     * 创建/更新小程序用户，写入店铺登录账号密码并绑定 mer_id
+     * 使店主可用同一账号密码登录小程序（发招聘等）
+     */
+    public function syncMerchantMiniUser($merchant, string $account, string $password, int $bindUid = 0)
+    {
+        $userRepository = app()->make(\app\common\repositories\user\UserRepository::class);
+        $pwd = $userRepository->encodePassword($password);
+        $phone = $merchant->mer_phone ?: '';
+        // isPhone 在本项目中「返回 true 表示不合法」
+        if ($phone && isPhone($phone)) {
+            $phone = '';
+        }
+        if (!$phone && $account && !isPhone($account)) {
+            $phone = $account;
+        }
+
+        $user = null;
+        if ($bindUid > 0) {
+            $user = $userRepository->get($bindUid);
+        }
+        if (!$user && $account) {
+            $user = $userRepository->accountByUser($account);
+        }
+        if (!$user && $phone) {
+            $user = $userRepository->getWhere(['phone' => $phone]);
+        }
+
+        if ($user) {
+            $uid = (int)$user['uid'];
+            $update = [
+                'pwd' => $pwd,
+                'mer_id' => (int)$merchant->mer_id,
+            ];
+            if (empty($user['phone']) && $phone) {
+                $update['phone'] = $phone;
+            }
+            if (empty($user['account']) && $account) {
+                $update['account'] = $account;
+            }
+            $userRepository->update($uid, $update);
+            // 强制写 mer_id：schema 缓存可能不含该字段，模型 update 会静默丢弃
+            Db::execute(
+                'UPDATE `eb_user` SET `mer_id`=?, `pwd`=? WHERE `uid`=?',
+                [(int)$merchant->mer_id, $pwd, $uid]
+            );
+            if (!empty($update['phone'])) {
+                Db::execute('UPDATE `eb_user` SET `phone`=? WHERE `uid`=? AND (`phone` IS NULL OR `phone`=\'\')', [$phone, $uid]);
+            }
+            if (!empty($update['account'])) {
+                Db::execute('UPDATE `eb_user` SET `account`=? WHERE `uid`=? AND (`account` IS NULL OR `account`=\'\')', [$account, $uid]);
+            }
+            return $userRepository->get($uid);
+        }
+
+        $nickname = $merchant->mer_name ?: ($merchant->real_name ?: ($phone ?: $account));
+        $user = $userRepository->create('h5', [
+            'account' => $account,
+            'pwd' => $pwd,
+            'phone' => $phone ?: '',
+            'nickname' => $nickname,
+            'avatar' => $merchant->mer_avatar ?: '',
+            'mer_id' => (int)$merchant->mer_id,
+            'status' => 1,
+        ]);
+        $uid = (int)(is_array($user) ? ($user['uid'] ?? 0) : ($user->uid ?? 0));
+        if ($uid > 0) {
+            Db::execute(
+                'UPDATE `eb_user` SET `mer_id`=? WHERE `uid`=?',
+                [(int)$merchant->mer_id, $uid]
+            );
+        }
+        return $user;
     }
 
     /**
@@ -647,6 +726,19 @@ class MerchantRepository extends BaseRepository
         if ($userInfo)
             $merchant['care'] = $this->getCareByUser($id, $userInfo->uid);
         $merchant['take_time'] = app()->make(MerchantTakeRepository::class)->get($id) + systemConfig(['tx_map_key']);
+
+        // 普通店铺主页盲盒入口（有盲盒供给则展示）
+        try {
+            $entry = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)->entryInfo((int)$id);
+            $merchant['blindbox_entry'] = $entry;
+        } catch (\Throwable $e) {
+            $merchant['blindbox_entry'] = [
+                'show_entry' => false,
+                'share_mer_id' => (int)$id,
+                'is_blindbox_shop' => false,
+                'jump_path' => '/pages/blindbox/index',
+            ];
+        }
 
         return $merchant; // 返回处理后的商家详情信息
     }

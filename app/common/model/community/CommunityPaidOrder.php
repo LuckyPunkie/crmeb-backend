@@ -31,6 +31,21 @@ class CommunityPaidOrder extends BaseModel
         return $this->hasOne(CommunityPaidContent::class, 'id', 'paid_content_id');
     }
 
+    public function community()
+    {
+        return $this->hasOne(Community::class, 'community_id', 'community_id');
+    }
+
+    public function buyer()
+    {
+        return $this->hasOne(\app\common\model\user\User::class, 'uid', 'buyer_uid');
+    }
+
+    public function seller()
+    {
+        return $this->hasOne(\app\common\model\user\User::class, 'uid', 'seller_uid');
+    }
+
     public function searchOrderNoAttr($query, $value)
     {
         $query->where('order_no', $value);

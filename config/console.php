@@ -35,6 +35,8 @@ return [
         'reset:imagePath' => 'app\command\resetImagePath',
         //清除登录限制
         'clear:cache' => 'app\command\clearCache',
+        //清理 ThinkORM 表结构缓存（ALTER 加字段后）
+        'schema:clear' => 'app\command\ClearSchemaCache',
         //更新热卖榜单
         'change:hotTop' => 'app\command\changeHotTop',
         //更新城市数据，导入/更新子集

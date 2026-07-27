@@ -146,7 +146,7 @@ class BlindBox extends BaseController
 
         $repo->update($id, ['is_blindbox' => 1]);
 
-        return app('json')->success(null, '盲盒权限已开启');
+        return app('json')->success('盲盒权限已开启');
     }
 
     /**
@@ -165,7 +165,7 @@ class BlindBox extends BaseController
 
         $repo->update($id, ['is_blindbox' => 0]);
 
-        return app('json')->success(null, '盲盒权限已关闭');
+        return app('json')->success('盲盒权限已关闭');
     }
 
     /**
@@ -184,6 +184,6 @@ class BlindBox extends BaseController
         $repo->updates($merIds, ['is_blindbox' => $status]);
 
         $action = $status === 1 ? '开启' : '关闭';
-        return app('json')->success(['affected' => count($merIds)], '已批量' . $action . '盲盒权限');
+        return app('json')->success('已批量' . $action . '盲盒权限', ['affected' => count($merIds)]);
     }
 }

@@ -15,6 +15,7 @@ namespace app\controller\api\message;
 use app\common\repositories\user\UserNotificationRepository;
 use crmeb\basic\BaseController;
 use think\App;
+use think\exception\ValidateException;
 
 class Notification extends BaseController
 {
@@ -36,6 +37,17 @@ class Notification extends BaseController
         return app('json')->success($result);
     }
 
+    public function detail($id)
+    {
+        $uid = $this->request->uid();
+        try {
+            $detail = $this->repository->getDetail(intval($id), $uid);
+            return app('json')->success($detail);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
     public function markRead($id)
     {
         $uid = $this->request->uid();
@@ -48,5 +60,11 @@ class Notification extends BaseController
         $uid = $this->request->uid();
         $count = $this->repository->getUnreadCount($uid);
         return app('json')->success(['unread_count' => $count]);
+    }
+
+    public function unreadTotal()
+    {
+        $uid = $this->request->uid();
+        return app('json')->success($this->repository->getUnreadTotal($uid));
     }
 }

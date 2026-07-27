@@ -14,6 +14,7 @@ namespace app\common\repositories\store\nearby;
 use app\common\dao\system\merchant\MerchantDao;
 use app\common\dao\store\nearby\NearbyShopCategoryDao;
 use app\common\model\system\merchant\Merchant;
+use app\common\model\system\merchant\MerchantType;
 use app\common\repositories\BaseRepository;
 use think\db\exception\DataNotFoundException;
 use think\db\exception\DbException;
@@ -21,7 +22,8 @@ use think\db\exception\ModelNotFoundException;
 
 /**
  * 附近好店 Repository
- * 底层数据源为 eb_merchant 表（通过 nearby_is_show=1 标记附近的商户）
+ * 底层数据源为 eb_merchant 表
+ * 展示条件：nearby_is_show=1 且 nearby_category_id>0（商户端已完成附近好店设置）
  */
 class NearbyShopRepository extends BaseRepository
 {
@@ -49,10 +51,20 @@ class NearbyShopRepository extends BaseRepository
     {
         $limit = min($limit, 100); // 分页上限保护
 
+        // 仅展示：开关开启 + 已在商户端完成附近好店设置（至少选了分类）
         $query = Merchant::getDB()->alias('m')
             ->where('m.nearby_is_show', 1)
+            ->where('m.nearby_category_id', '>', 0)
             ->where('m.status', 1)
             ->where('m.is_del', 0);
+
+        // 店铺类型：默认线下/实体店，逛网店时传 online
+        $storeType = $where['store_type'] ?? 'offline';
+        $typeIds = $this->resolveStoreTypeIds($storeType);
+        if ($typeIds === []) {
+            return ['count' => 0, 'list' => []];
+        }
+        $query->whereIn('m.type_id', $typeIds);
 
         // 分类筛选
         if (!empty($where['nearby_category_id'])) {
@@ -139,12 +151,12 @@ class NearbyShopRepository extends BaseRepository
         $catIds = array_filter(array_unique(array_column($list->toArray(), 'nearby_category_id')));
         $categories = [];
         if (!empty($catIds)) {
-            $categories = collect(
-                \app\common\model\store\nearby\NearbyShopCategory::getDB()
-                    ->whereIn('id', $catIds)
-                    ->select()
-                    ->toArray()
-            )->keyBy('id')->toArray();
+            $rows = \app\common\model\store\nearby\NearbyShopCategory::getDB()
+                ->whereIn('id', $catIds)
+                ->select()
+                ->toArray();
+            // ThinkPHP Collection 无 keyBy，用 array_column 按 id 索引
+            $categories = array_column($rows, null, 'id');
         }
 
         // 格式化列表数据
@@ -166,6 +178,7 @@ class NearbyShopRepository extends BaseRepository
             ->where('status', 1)
             ->where('is_del', 0)
             ->where('nearby_is_show', 1)
+            ->where('nearby_category_id', '>', 0)
             ->find();
 
         if (!$merchant) {
@@ -197,11 +210,24 @@ class NearbyShopRepository extends BaseRepository
         // 标签
         $data['tags'] = !empty($data['nearby_tags']) ? explode(',', $data['nearby_tags']) : [];
 
-        // 分类名称
+        // 分类名称 / 是否餐饮店（父级或自身名为「餐饮美食」）
         $data['nearby_category_name'] = '';
+        $data['nearby_category_pid'] = 0;
+        $data['is_catering'] = 0;
         if (!empty($data['nearby_category_id'])) {
             $category = $this->categoryDao->get($data['nearby_category_id']);
-            $data['nearby_category_name'] = $category ? $category['name'] : '';
+            if ($category) {
+                $data['nearby_category_name'] = $category['name'] ?? '';
+                $data['nearby_category_pid'] = (int)($category['pid'] ?? 0);
+                $parentName = '';
+                if ($data['nearby_category_pid'] > 0) {
+                    $parent = $this->categoryDao->get($data['nearby_category_pid']);
+                    $parentName = $parent ? ($parent['name'] ?? '') : '';
+                } else {
+                    $parentName = $data['nearby_category_name'];
+                }
+                $data['is_catering'] = (mb_strpos($parentName, '餐饮') !== false || mb_strpos($data['nearby_category_name'], '餐饮') !== false) ? 1 : 0;
+            }
         }
 
         // 是否营业中
@@ -371,5 +397,26 @@ class NearbyShopRepository extends BaseRepository
             return ($now >= $start || $now <= $end);
         }
         return ($now >= $start && $now <= $end);
+    }
+
+    /**
+     * 按店铺类型名称解析 type_id
+     * online → 线上店；offline（默认）→ 实体店/线下店
+     *
+     * @return int[]
+     */
+    protected function resolveStoreTypeIds(string $storeType): array
+    {
+        $query = MerchantType::getDB();
+        if ($storeType === 'online') {
+            $query->where('type_name', 'like', '%线上%');
+        } else {
+            $query->where(function ($q) {
+                $q->where('type_name', 'like', '%实体%')
+                    ->whereOr('type_name', 'like', '%线下%');
+            });
+        }
+
+        return array_map('intval', $query->column('mer_type_id') ?: []);
     }
 }

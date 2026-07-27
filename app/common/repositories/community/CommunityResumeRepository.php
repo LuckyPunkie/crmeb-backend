@@ -38,6 +38,7 @@ class CommunityResumeRepository extends BaseRepository
     public function create(array $data, int $uid)
     {
         $data['uid'] = $uid;
+        $data['completeness'] = $this->calculateCompleteness($data);
         return Db::transaction(function () use ($data) {
             // 如果设为默认，先取消其他默认
             if (isset($data['is_default']) && $data['is_default'] == 1) {
@@ -57,6 +58,8 @@ class CommunityResumeRepository extends BaseRepository
         $resume = $this->dao->search(['id' => $id, 'uid' => $uid])->find();
         if (!$resume) throw new ValidateException('简历不存在或不属于您');
         unset($data['uid']);
+        $merged = array_merge($resume->toArray(), $data);
+        $data['completeness'] = $this->calculateCompleteness($merged);
 
         return Db::transaction(function () use ($id, $data) {
             if (isset($data['is_default']) && $data['is_default'] == 1) {
@@ -75,7 +78,17 @@ class CommunityResumeRepository extends BaseRepository
     {
         $resume = $this->dao->search(['id' => $id, 'uid' => $uid])->find();
         if (!$resume) throw new ValidateException('简历不存在或不属于您');
-        return $resume;
+        return $this->formatResume($resume);
+    }
+
+    /**
+     * 按 ID 获取简历详情（不校验归属，供商家/管理员预览）
+     */
+    public function getDetailById(int $id)
+    {
+        $resume = $this->dao->get($id);
+        if (!$resume) throw new ValidateException('简历不存在');
+        return $this->formatResume($resume);
     }
 
     /**
@@ -83,7 +96,11 @@ class CommunityResumeRepository extends BaseRepository
      */
     public function myList(int $uid)
     {
-        return $this->dao->search(['uid' => $uid])->order('is_default DESC, id DESC')->select();
+        $list = $this->dao->search(['uid' => $uid])->order('is_default DESC, id DESC')->select();
+        foreach ($list as $item) {
+            $item->completeness = $this->calculateCompleteness($item->toArray());
+        }
+        return $list;
     }
 
     /**
@@ -117,7 +134,100 @@ class CommunityResumeRepository extends BaseRepository
     {
         $resume = $this->dao->search(['id' => $id, 'uid' => $uid])->find();
         if (!$resume) throw new ValidateException('简历不存在或不属于您');
-        $this->dao->update($id, ['resume_file' => $filePath]);
+        $data = $resume->toArray();
+        $data['resume_file'] = $filePath;
+        $this->dao->update($id, [
+            'resume_file' => $filePath,
+            'completeness' => $this->calculateCompleteness($data)
+        ]);
+    }
+
+    public function normalizeResumePayload(array $data): array
+    {
+        if (isset($data['education_list']) && !isset($data['education_history'])) {
+            $data['education_history'] = $data['education_list'];
+        }
+        if (isset($data['work_list']) && !isset($data['work_history'])) {
+            $data['work_history'] = $data['work_list'];
+        }
+        if (isset($data['skills']) && is_array($data['skills'])) {
+            $data['skills'] = json_encode(array_values(array_filter($data['skills'], function ($skill) {
+                return $skill !== null && $skill !== '';
+            })), JSON_UNESCAPED_UNICODE);
+        }
+        if (isset($data['education_history']) && is_array($data['education_history'])) {
+            $data['education_history'] = json_encode(array_values($data['education_history']), JSON_UNESCAPED_UNICODE);
+        }
+        if (isset($data['work_history']) && is_array($data['work_history'])) {
+            $data['work_history'] = json_encode(array_values($data['work_history']), JSON_UNESCAPED_UNICODE);
+        }
+        unset($data['education_list'], $data['work_list']);
+        return $data;
+    }
+
+    protected function formatResume($resume)
+    {
+        $data = $resume->toArray();
+        $data['education_list'] = $this->decodeJsonList($data['education_history'] ?? []);
+        $data['work_list'] = $this->decodeJsonList($data['work_history'] ?? []);
+        $data['skills'] = $this->decodeJsonList($data['skills'] ?? []);
+        $data['completeness'] = $this->calculateCompleteness($data);
+        return $data;
+    }
+
+    protected function decodeJsonList($value): array
+    {
+        if (!$value) return [];
+        if (is_array($value)) return $value;
+        if (!is_string($value)) return [];
+        $decoded = json_decode($value, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    protected function hasFilledList(array $list, array $keys = []): bool
+    {
+        foreach ($list as $row) {
+            if (!is_array($row)) continue;
+            if (!$keys) {
+                foreach ($row as $value) {
+                    if ($value !== null && $value !== '') return true;
+                }
+                continue;
+            }
+            foreach ($keys as $key) {
+                if (!empty($row[$key])) return true;
+            }
+        }
+        return false;
+    }
+
+    protected function calculateCompleteness(array $data): int
+    {
+        $score = 0;
+
+        $score += !empty($data['real_name']) ? 10 : 0;
+        $score += !empty($data['phone']) ? 10 : 0;
+        $score += !empty($data['email']) ? 10 : 0;
+        $score += !empty($data['birthday']) ? 5 : 0;
+        $score += !empty($data['gender']) ? 5 : 0;
+        $score += !empty($data['education']) ? 10 : 0;
+        $score += !empty($data['work_years']) ? 10 : 0;
+        $score += !empty($data['city']) ? 5 : 0;
+        $score += !empty($data['expect_job']) ? 10 : 0;
+        $score += !empty($data['expect_salary']) ? 5 : 0;
+
+        $educationList = $this->decodeJsonList($data['education_history'] ?? []);
+        $workList = $this->decodeJsonList($data['work_history'] ?? []);
+        $skills = $this->decodeJsonList($data['skills'] ?? []);
+
+        $score += $this->hasFilledList($educationList, ['school', 'degree', 'major', 'graduation_year']) ? 10 : 0;
+        $score += $this->hasFilledList($workList, ['company', 'position', 'period', 'description']) ? 10 : 0;
+        $score += count(array_filter($skills, function ($skill) {
+            return $skill !== null && $skill !== '';
+        })) > 0 ? 5 : 0;
+        $score += (!empty($data['self_evaluation']) || !empty($data['introduction']) || !empty($data['work_summary'])) ? 5 : 0;
+
+        return min(100, $score);
     }
 
     /**

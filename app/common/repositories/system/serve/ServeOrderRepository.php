@@ -45,6 +45,8 @@ class ServeOrderRepository extends BaseRepository
     const TYPE_MARGIN_MAKE_UP = 11;
     //同城配送delivery
     const TYPE_DELIVERY = 20;
+    //标签保证金
+    const TYPE_LABEL_MARGIN = 30;
 
     const PAY_TYPE_WEIXIN = 1;
     const PAY_TYPE_ALIPAY= 2;
@@ -159,6 +161,32 @@ class ServeOrderRepository extends BaseRepository
         return compact('key', 'param');
     }
 
+
+    /**
+     * 标签保证金 支付
+     */
+    public function labelMargin($merId, $data)
+    {
+        $label = \think\facade\Db::name('merchant_label')->where('id', $data['label_id'])->find();
+        if (!$label) throw new ValidateException('标签不存在');
+        $store = \think\facade\Db::name('merchant_label_store')
+            ->where('label_id', $data['label_id'])->where('mer_id', $merId)->find();
+        if (!$store || $store['is_margin'] != 1) throw new ValidateException('无需缴纳或已缴纳');
+        $key = 'LabelMargin_' . $merId . '_' . $data['label_id'] . '_' . date('YmdH', time());
+        $arr = ['label_id' => $data['label_id'], 'deposit_amount' => $label['deposit_amount']];
+        $param = [
+            'status'     => 0,
+            'is_del'     => 0,
+            'mer_id'     => $merId,
+            'type'       => self::TYPE_LABEL_MARGIN,
+            'meal_id'    => $data['label_id'],
+            'pay_type'   => $data['pay_type'],
+            'attach'     => 'meal',
+            'order_info' => json_encode($arr, JSON_UNESCAPED_UNICODE),
+            'pay_price'  => $label['deposit_amount'],
+        ];
+        return compact('key', 'param');
+    }
 
     /**
      * 生成二维码
@@ -343,6 +371,23 @@ class ServeOrderRepository extends BaseRepository
                     'balance' => $res->margin,
                 ];
                 app()->make(UserBillRepository::class)->bill(0, 'mer_margin', 'pay_margin', 1, $bill);
+                break;
+            case self::TYPE_LABEL_MARGIN:
+                $info = json_decode($dat['order_info'], true);
+                if (bccomp($info['deposit_amount'], $dat['pay_price'], 2) === 0) {
+                    Db::name('merchant_label_store')
+                        ->where('label_id', $info['label_id'])
+                        ->where('mer_id', $dat['mer_id'])
+                        ->update(['is_margin' => 10, 'paid_deposit' => $dat['pay_price']]);
+                }
+                $bill = [
+                    'title'   => '标签保证金',
+                    'mer_id'  => $dat['mer_id'],
+                    'number'  => $dat['pay_price'],
+                    'mark'    => '缴纳标签保证金',
+                    'balance' => $dat['pay_price'],
+                ];
+                app()->make(UserBillRepository::class)->bill(0, 'mer_margin', 'label_margin', 1, $bill);
                 break;
             case self::TYPE_DELIVERY:
                 // 处理同城配送充值

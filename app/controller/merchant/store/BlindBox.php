@@ -135,22 +135,27 @@ class BlindBox extends BaseController
         }
 
         $list = $repo->search(['product_id' => $productId])
-            ->field('value_id,product_id,suk,image,price,stock,probability_weight,unique')
+            ->field('value_id,product_id,sku,image,price,stock,probability_weight,`unique`')
             ->select();
+        $rows = $list ? $list->toArray() : [];
 
-        $totalWeight = $list->sum('probability_weight');
+        $totalWeight = 0;
+        foreach ($rows as $item) {
+            $totalWeight += (int)($item['probability_weight'] ?? 0);
+        }
         $totalWeight = max($totalWeight, 1);
 
         $formatted = [];
-        foreach ($list as $item) {
+        foreach ($rows as $item) {
             $formatted[] = [
                 'value_id' => $item['value_id'],
-                'suk' => $item['suk'],
+                'suk' => $item['sku'] ?? ($item['suk'] ?? ''),
+                'sku' => $item['sku'] ?? ($item['suk'] ?? ''),
                 'image' => $item['image'],
                 'price' => $item['price'],
                 'stock' => $item['stock'],
                 'probability_weight' => (int)$item['probability_weight'],
-                'probability' => round($item['probability_weight'] / $totalWeight * 100, 1) . '%',
+                'probability' => round(($item['probability_weight'] ?? 0) / $totalWeight * 100, 1) . '%',
             ];
         }
 

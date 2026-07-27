@@ -71,7 +71,15 @@ class UserMessageRepository extends BaseRepository
         ];
         $message = $this->dao->create($messageData);
 
-        $dialog->last_message = ($data['msn_type'] == 1) ? $data['msn'] : '';
+        if ((int)$data['msn_type'] === 1) {
+            $dialog->last_message = $data['msn'];
+        } elseif ((int)$data['msn_type'] === 3) {
+            $dialog->last_message = '[图片]';
+        } elseif ((int)$data['msn_type'] === 9) {
+            $dialog->last_message = '[语音]';
+        } else {
+            $dialog->last_message = '[消息]';
+        }
         $dialog->last_message_type = $data['msn_type'];
         $dialog->last_message_time = date('Y-m-d H:i:s');
         $dialog->last_sender_uid = $fromUid;

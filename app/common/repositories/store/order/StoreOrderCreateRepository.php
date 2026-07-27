@@ -39,7 +39,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
     //获取商户的配置
     public $configFiled = ['mer_integral_status', 'mer_integral_rate', 'mer_store_stock', 'svip_coupon_merge','enable_assigned','enable_tostore_assigned'];
     //商户的字段
-    public $merchantField = ['mer_id,category_id,mer_name,mer_state,mer_avatar,is_trader,type_id,delivery_way,commission_rate,commission_switch'];
+    public $merchantField = ['mer_id,category_id,mer_name,mer_state,mer_avatar,is_trader,type_id,delivery_way,commission_rate,commission_switch,is_blindbox'];
 
     const DEFAULT_DELIVERY = ['mer_delivery','mer_take','mer_city_takes'];
 
@@ -731,7 +731,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $allow_no_address = true;
 
         foreach ($merchantCartList as &$merchantCart) {
-            $allow_no_address = $allow_no_address && $merchantCart['order']['isTake'];
+            $allow_no_address = $allow_no_address && ($merchantCart['order']['isTake'] || !empty($merchantCart['is_blindbox']));
             $merIntegralConfig = $merchantCart['take'];
             $merIntegralConfig['mer_integral_rate'] = min(1, $merIntegralConfig['mer_integral_rate'] > 0 ? bcdiv($merIntegralConfig['mer_integral_rate'], 100, 4) : $merIntegralConfig['mer_integral_rate']);
             $total_integral = 0;
@@ -887,6 +887,24 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'order_refund_switch',
                 'order'
             ) + ['allow_address' => !$allow_no_address, 'order_delivery_status' => $orderDeliveryStatus];
+
+        // 盲盒确认页脱敏：不暴露真实款式名称/SKU图（创建订单时仍会按权重随机并写入真实 SKU）
+        foreach ($data['order'] as &$merchantCart) {
+            if (empty($merchantCart['is_blindbox'])) {
+                continue;
+            }
+            foreach ($merchantCart['list'] as &$cart) {
+                if (!empty($cart['productAttr']) && is_array($cart['productAttr'])) {
+                    $cart['productAttr']['sku'] = '惊喜开盒 · 款式随机揭晓';
+                    if (!empty($cart['product']['image'])) {
+                        $cart['productAttr']['image'] = $cart['product']['image'];
+                    }
+                }
+            }
+            unset($cart);
+        }
+        unset($merchantCart);
+
         Cache::set('order_create_cache' . $uid . '_' . $key, $data, 600);
         return $data;
     }
@@ -1171,11 +1189,26 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             $user_address = isset($address) ? ($address['province'] . $address['city'] . $address['district'] . $address['street'] . $address['detail']) : '';
             $_merchantCheck = $merchantRepository->get($merchantCart['mer_id']);
             $_isBlindbox = $_merchantCheck && !empty($_merchantCheck['is_blindbox']);
+            // 盲盒订单：写入分享来源店铺（普通店入口归因），分销规则后续再算
+            $_shareMerId = 0;
+            if ($_isBlindbox) {
+                foreach ($merchantCart['list'] as $_shareCart) {
+                    if (!empty($_shareCart['share_mer_id'])) {
+                        $_shareMerId = (int)$_shareCart['share_mer_id'];
+                        break;
+                    }
+                }
+                if (!$_shareMerId) {
+                    $_shareMerId = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
+                        ->getBound((int)$uid);
+                }
+            }
             //整理订单数据
             $_order = [
                 'cartInfo' => $merchantCart,
                 'activity_type' => $orderInfo['order_type'],
                 'is_blindbox_order' => (int)$_isBlindbox,
+                'share_mer_id' => $_shareMerId,
                 'commission_rate' => (float)$rate,
                 'order_type' => $merchantCart['order']['isTake'] ? 1 : ($merchantCart['order']['isCityTake'] ? 2 : 0),
                 'is_virtual' => $order_model,

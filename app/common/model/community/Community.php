@@ -59,6 +59,27 @@ class Community extends BaseModel
         return $this->hasOne(CommunityTopic::class,'topic_id','topic_id');
     }
 
+    /**
+     * 多话题关联
+     */
+    public function topicRels()
+    {
+        return $this->hasMany(CommunityTopicRel::class, 'community_id', 'community_id')->order('sort ASC,id ASC');
+    }
+
+    /**
+     * 多话题实体
+     */
+    public function topics()
+    {
+        return $this->belongsToMany(
+            CommunityTopic::class,
+            CommunityTopicRel::class,
+            'topic_id',
+            'community_id'
+        );
+    }
+
     public function reply()
     {
         return $this->hasMany(CommunityReply::class,'community_id','community_id');

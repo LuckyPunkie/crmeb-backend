@@ -15,6 +15,8 @@ use app\common\middleware\UserTokenMiddleware;
 // 需要登录认证的路由
 Route::group(function () {
     Route::post('community/redpacket/create', 'api.community.CommunityRedpacket/create');
+    Route::post('community/redpacket/update/:id', 'api.community.CommunityRedpacket/update');
+    Route::post('community/redpacket/pay', 'api.community.CommunityRedpacket/pay');
     Route::post('community/redpacket/take/:id', 'api.community.CommunityRedpacket/take');
     Route::post('community/redpacket/submit/:taskId', 'api.community.CommunityRedpacket/submit');
     Route::post('community/redpacket/confirm/:taskId', 'api.community.CommunityRedpacket/confirm');
@@ -25,4 +27,5 @@ Route::group(function () {
 Route::group(function () {
     Route::get('community/redpacket/detail/:id', 'api.community.CommunityRedpacket/detail');
     Route::get('community/redpacket/task-list/:id', 'api.community.CommunityRedpacket/taskList');
+    Route::get('commission/rates', 'api.CommissionConfig/rates');
 })->middleware(UserTokenMiddleware::class, false);

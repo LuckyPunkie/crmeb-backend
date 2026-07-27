@@ -19,6 +19,7 @@ use app\common\repositories\store\order\StoreGroupOrderRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\store\order\StoreRefundOrderRepository;
 use app\common\repositories\system\notice\SystemNoticeConfigRepository;
+use app\common\repositories\system\RelevanceRepository;
 use app\common\repositories\user\UserOrderRepository;
 use app\common\repositories\user\UserRechargeRepository;
 use app\common\repositories\user\UserBrokerageRepository;
@@ -57,21 +58,21 @@ class Auth extends BaseController
 {
     public function test()
     {
-//        $data = [
-//            'tempId' => '',
-//            'id' => '',
-//        ];
-//        Queue::push(SendSmsJob::class,$data);
-//        $status = app()->make(SystemNoticeConfigRepository::class)->getNoticeStatusByConstKey($data['tempId']);
-//        if ($status['notice_sms'] == 1) {
-//            SmsService::sendMessage($data);
-//        }
-//        if ($status['notice_wechat'] == 1) {
-//            app()->make(WechatTemplateMessageService::class)->sendTemplate($data);
-//        }
-//        if ($status['notice_routine'] == 1) {
-//            app()->make(WechatTemplateMessageService::class)->subscribeSendTemplate($data);
-//        }
+        //        $data = [
+        //            'tempId' => '',
+        //            'id' => '',
+        //        ];
+        //        Queue::push(SendSmsJob::class,$data);
+        //        $status = app()->make(SystemNoticeConfigRepository::class)->getNoticeStatusByConstKey($data['tempId']);
+        //        if ($status['notice_sms'] == 1) {
+        //            SmsService::sendMessage($data);
+        //        }
+        //        if ($status['notice_wechat'] == 1) {
+        //            app()->make(WechatTemplateMessageService::class)->sendTemplate($data);
+        //        }
+        //        if ($status['notice_routine'] == 1) {
+        //            app()->make(WechatTemplateMessageService::class)->subscribeSendTemplate($data);
+        //        }
     }
 
     /**
@@ -90,9 +91,9 @@ class Auth extends BaseController
         if (!$account)
             return app('json')->fail('请输入账号');
         $user = $repository->accountByUser($this->request->param('account/s'));
-//        if($auth_token && $user){
-//            return app('json')->fail('用户已存在');
-//        }
+        //        if($auth_token && $user){
+        //            return app('json')->fail('用户已存在');
+        //        }
         if (!$user) $this->loginFailure($account);
         if (!password_verify($pwd = (string)$this->request->param('password/s'), $user['pwd'])) $this->loginFailure($account);
         $auth = $this->parseAuthToken($auth_token);
@@ -110,7 +111,7 @@ class Auth extends BaseController
     }
 
     /**
-     * 登录尝试次数限制
+     * 登录尝试22次数限制
      * @param $account
      * @param int $number
      * @param int $n
@@ -126,7 +127,6 @@ class Auth extends BaseController
             $fail_key = 'api_login_freeze_' . $account;
             Cache::set($fail_key, 1, 15 * 60);
             throw new ValidateException('账号或密码错误次数太多，请稍后在尝试');
-
         } else {
             Cache::set($key, $numb, 5 * 60);
 
@@ -148,15 +148,24 @@ class Auth extends BaseController
     public function userInfo()
     {
         $user = $this->request->userInfo()->hidden(['label_id', 'group_id', 'pwd', 'addres', 'card_id', 'last_time', 'last_ip', 'create_time', 'mark', 'status', 'spread_uid', 'spread_time', 'real_name', 'birthday', 'brokerage_price']);
-        $user->append(['service', 'topService', 'total_collect_product', 'total_collect_store', 'total_coupon', 'total_visit_product', 'total_unread', 'total_recharge', 'lock_integral', 'total_integral', 'staffs','delivery']);
+        $user->append(['service', 'topService', 'total_collect_product', 'total_collect_store', 'total_coupon', 'total_visit_product', 'total_unread', 'total_recharge', 'lock_integral', 'total_integral', 'staffs', 'delivery']);
         $data = $user->toArray();
+        // 显式带回 mer_id，避免字段缓存/隐藏导致前端误判非商家
+        $data['mer_id'] = (int)($user['mer_id'] ?? 0);
+        /** @var RelevanceRepository $relevanceRepository */
+        $relevanceRepository = app()->make(RelevanceRepository::class);
+        $data['focus_count'] = $relevanceRepository->getFieldCount('left_id', (int)$user['uid'], RelevanceRepository::TYPE_COMMUNITY_FANS);
+        $data['focus'] = $data['focus_count'];
+        $labels = $this->request->userInfo()->user_label;
+        $data['user_label'] = $labels ? $labels->toArray() : [];
+        $data['user_label_name'] = $data['user_label'] ? array_column($data['user_label'], 'label_name') : [];
         $data['total_consume'] = $user['pay_price'];
         $promoter = get_extension_info($user);
         $promoter['isShow'] = false;
         if ($promoter['isPromoter']) {
             $promoter['isShow'] = true;
         } else {
-            if (!in_array($promoter['promoter_type'],[1,2])) {
+            if (!in_array($promoter['promoter_type'], [1, 2])) {
                 $promoter['isShow'] = true;
             }
         }
@@ -178,9 +187,9 @@ class Auth extends BaseController
                 Cache::set($key, true, new \DateTime($day . ' 23:59:59'));
             }
         }
-        if ($data['member_level'] == 0){
+        if ($data['member_level'] == 0) {
             $data['member_level'] = app()->make(UserRepository::class)
-                ->updateLevel($user['uid'], ['member_level' => 1], 1,false);
+                ->updateLevel($user['uid'], ['member_level' => 1], 1, false);
         }
         $data['staff_mer'] = !empty($data['staffs']) ? array_column($data['staffs'] instanceof \think\Collection ? $data['staffs']->toArray() : (array)$data['staffs'], 'mer_id') : [];
         return app('json')->success($data);
@@ -344,23 +353,23 @@ class Auth extends BaseController
         if ($sms_limit && $limit > $sms_limit) {
             return app('json')->fail('请求太频繁请稍后再试');
         }
-        //if(!env('APP_DEBUG', false)){
-        try {
-            $sms_code = str_pad(random_int(1, 9999), 4, 0, STR_PAD_LEFT);
+        // 调试模式：不调一号通，固定验证码 1234（正式环境务必关闭 APP_DEBUG）
+        if (env('APP_DEBUG', false)) {
+            $sms_code = '1234';
             $sms_time = systemConfig('sms_time') ? systemConfig('sms_time') : 30;
-            SmsService::create()->send($data['phone'], 'VERIFICATION_CODE', ['code' => $sms_code, 'time' => $sms_time]);
-        } catch (Exception $e) {
-            return app('json')->fail($e->getMessage());
+        } else {
+            try {
+                $sms_code = str_pad(random_int(1, 9999), 4, 0, STR_PAD_LEFT);
+                $sms_time = systemConfig('sms_time') ? systemConfig('sms_time') : 30;
+                SmsService::create()->send($data['phone'], 'VERIFICATION_CODE', ['code' => $sms_code, 'time' => $sms_time]);
+            } catch (Exception $e) {
+                return app('json')->fail($e->getMessage());
+            }
         }
-        //}else{
-        //    $sms_code =  1234;
-        //    $sms_time = 5;
-        //}
         $sms_key = app()->make(SmsService::class)->sendSmsKey($data['phone'], $data['type']);
         Cache::set($sms_key, $sms_code, $sms_time * 60);
         Cache::set($sms_limit_key, $limit + 1, 60);
-        //'短信发送成功'
-        return app('json')->success('短信发送成功');
+        return app('json')->success(env('APP_DEBUG', false) ? '调试模式：验证码 1234' : '短信发送成功');
     }
 
 
@@ -526,7 +535,7 @@ class Auth extends BaseController
             $key = 'U' . md5(time() . $uni);
             Cache::set('u_try' . $key, ['id' => $authInfo['wechat_user_id'], 'type' => $authInfo['user_type'], 'spread' => $auth['auth']['spread'] ?? 0], 3600);
             $wechat_phone_switch = systemConfig('wechat_phone_switch');
-            return app('json')->status(201, compact('key','wechat_phone_switch'));
+            return app('json')->status(201, compact('key', 'wechat_phone_switch'));
         }
 
         if ($auth['auth']['spread'] ?? 0) {
@@ -548,8 +557,8 @@ class Auth extends BaseController
     {
         $code = $this->request->param('code/s');
         if (!$code)  return app('json')->fail('请获取code参数');
-        $spread = $this->request->param('spread/d',0);
-        $data = app()->make(WechatUserRepository::class)->mpLoginType($code,$spread);
+        $spread = $this->request->param('spread/d', 0);
+        $data = app()->make(WechatUserRepository::class)->mpLoginType($code, $spread);
         return app('json')->success($data);
     }
 
@@ -706,9 +715,9 @@ class Auth extends BaseController
 
         $phone = $data['purePhoneNumber'];
         $user = $userRepository->accountByUser($phone);
-//        if($user && $auth_token){
-//            return app('json')->fail('用户已存在');
-//        }
+        //        if($user && $auth_token){
+        //            return app('json')->fail('用户已存在');
+        //        }
         $auth = $this->parseAuthToken($auth_token);
         if ($user && $auth) {
             $userRepository->syncBaseAuth($auth, $user);
@@ -722,7 +731,7 @@ class Auth extends BaseController
             $user->account = $phone;
             $user->save();
             if ($auth['spread']) {
-                $userRepository->bindSpread($user,(int)$auth['spread']);
+                $userRepository->bindSpread($user, (int)$auth['spread']);
             }
         }
         $tokenInfo = $userRepository->createToken($user);
@@ -756,5 +765,4 @@ class Auth extends BaseController
             return app('json')->fail($e->getMessage());
         }
     }
-
 }

@@ -124,6 +124,8 @@ class CommunityReplyRepository extends BaseRepository
 
         // 设置查询状态为已发布
         $where['status'] = 1;
+        $sort = $where['sort'] ?? 'new';
+        unset($where['sort']);
         // 计算符合条件的总内容数量
         $all = $this->dao->getSearch($where)->count();
         // 计算已开始的内容数量
@@ -131,20 +133,25 @@ class CommunityReplyRepository extends BaseRepository
         // 设置查询父级内容的条件
         $where['pid'] = 0;
 
+        // 最热按点赞数，最新按时间
+        $order = ($sort === 'hot')
+            ? 'count_start DESC, create_time DESC'
+            : 'create_time DESC';
+
         // 设置查询顺序和隐藏字段，并加载关联数据
         $query = $this->dao->getSearch($where)
-            ->order('create_time DESC')
+            ->order($order)
             ->hidden(['refusal'])
             ->with([
                 'author' => function ($query) {
-                    $query->field('uid,nickname,avatar');
+                    $query->field('uid,nickname,avatar,sex');
                 },
                 'is_start' => function ($query) use ($userInfo) {
                     $query->where('left_id', $userInfo->uid ?? null);
                 },
                 'children' => [
                     'author' => function ($query) {
-                        $query->field('uid,nickname,avatar');
+                        $query->field('uid,nickname,avatar,sex');
                     },
                     'reply' => function ($query) {
                         $query->field('uid,nickname,avatar')->order('create_time ASC');
@@ -160,8 +167,58 @@ class CommunityReplyRepository extends BaseRepository
         // 获取当前页的列表数据
         $list = $query->page($page, $limit)->select();
 
+        // 一级评论作者附带资料简要（出身年份·学历·身高）
+        $list = $this->attachAuthorProfileBrief($list);
+
         // 返回包含所有、开始、计数和列表的数组
         return compact('all', 'start', 'count', 'list');
+    }
+
+    /**
+     * 仅为一级评论作者附加 profile_brief（出身年份·学历·身高）
+     */
+    protected function attachAuthorProfileBrief($list)
+    {
+        if (!$list || (is_countable($list) && count($list) === 0)) {
+            return $list;
+        }
+
+        $uids = [];
+        foreach ($list as $item) {
+            $uid = 0;
+            if (is_array($item)) {
+                $uid = (int)($item['author']['uid'] ?? 0);
+            } elseif (!empty($item->author)) {
+                $uid = (int)($item->author->uid ?? 0);
+            }
+            if ($uid) {
+                $uids[] = $uid;
+            }
+        }
+
+        $briefMap = app()->make(\app\common\repositories\user\UserProfileRepository::class)
+            ->getBriefMapByUids($uids);
+
+        foreach ($list as $item) {
+            if (is_array($item)) {
+                continue;
+            }
+            if (!empty($item->author) && !empty($item->author->uid)) {
+                $brief = $briefMap[(int)$item->author->uid] ?? '';
+                $item->author->setAttr('profile_brief', $brief);
+                $item->author->setAttr('gender', (int)($item->author->sex ?? 0));
+            }
+            // 二级评论作者也补 gender，供头像描边使用
+            if (!empty($item->children)) {
+                foreach ($item->children as $child) {
+                    if (!empty($child->author)) {
+                        $child->author->setAttr('gender', (int)($child->author->sex ?? 0));
+                    }
+                }
+            }
+        }
+
+        return $list;
     }
 
 
@@ -197,12 +254,56 @@ class CommunityReplyRepository extends BaseRepository
 
         $ret = $this->dao->getWhere(['reply_id' => $res->reply_id], '*', [
             'author' => function ($query) {
-                $query->field('uid,nickname,avatar');
+                $query->field('uid,nickname,avatar,sex');
             },
             'reply' => function ($query) {
                 $query->field('uid,nickname,avatar')->order('create_time ASC');
             },
         ]);
+
+        // 评论作者附带性别；一级评论额外附带资料简要
+        if ($ret && !empty($ret->author) && !empty($ret->author->uid)) {
+            $ret->author->setAttr('gender', (int)($ret->author->sex ?? 0));
+            if ((int)($ret['pid'] ?? 0) === 0) {
+                $brief = app()->make(\app\common\repositories\user\UserProfileRepository::class)
+                    ->getBriefByUid((int)$ret->author->uid);
+                $ret->author->setAttr('profile_brief', $brief);
+            }
+        }
+
+        // 互动通知
+        try {
+            $fromUid = (int)($data['uid'] ?? 0);
+            $communityId = (int)($data['community_id'] ?? 0);
+            $note = \app\common\repositories\user\UserNotificationRepository::noteBriefById($communityId);
+            $notifyRepo = app()->make(\app\common\repositories\user\UserNotificationRepository::class);
+            $contentText = mb_substr((string)($data['content'] ?? ''), 0, 100);
+            if ($replyId) {
+                // 回复评论
+                $parent = $this->dao->get($replyId);
+                $toUid = (int)($data['re_uid'] ?? ($parent['uid'] ?? 0));
+                $payload = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                    'community_id' => $communityId,
+                    'reply_id' => (int)$res->reply_id,
+                    'title' => $note['title'],
+                    'image' => $note['image'],
+                    'content' => $contentText,
+                ]);
+                $notifyRepo->createAndPush($toUid, $fromUid, 'comment_reply', '评论被回复', $payload, 'community_reply', (int)$res->reply_id);
+            } else {
+                // 回复笔记
+                $payload = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                    'community_id' => $communityId,
+                    'reply_id' => (int)$res->reply_id,
+                    'title' => $note['title'],
+                    'image' => $note['image'],
+                    'content' => $contentText,
+                ]);
+                $notifyRepo->createAndPush((int)$note['uid'], $fromUid, 'reply', '笔记被回复', $payload, 'community', $communityId);
+            }
+        } catch (\Throwable $e) {
+        }
+
         return $ret;
     }
 
@@ -251,6 +352,23 @@ class CommunityReplyRepository extends BaseRepository
             if ($check) throw new ValidateException('您已经赞过他了～');
             $make->create($uid, $id, RelevanceRepository::TYPE_COMMUNITY_REPLY_START, true);
             $this->dao->incField($id, 'count_start', 1);
+
+            $reply = $this->dao->get($id);
+            if ($reply) {
+                $note = \app\common\repositories\user\UserNotificationRepository::noteBriefById((int)$reply['community_id']);
+                $payload = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                    'community_id' => (int)$reply['community_id'],
+                    'reply_id' => $id,
+                    'title' => $note['title'],
+                    'image' => $note['image'],
+                    'content' => mb_substr((string)($reply['content'] ?? ''), 0, 100),
+                ]);
+                try {
+                    app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                        ->createAndPush((int)$reply['uid'], $uid, 'comment_like', '评论被点赞', $payload, 'community_reply', $id);
+                } catch (\Throwable $e) {
+                }
+            }
         } else {
             if (!$check) throw new ValidateException('您还未赞过他哦～');
             $make->destory($uid, $id, RelevanceRepository::TYPE_COMMUNITY_REPLY_START);

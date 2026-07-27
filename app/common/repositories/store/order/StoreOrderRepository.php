@@ -109,6 +109,13 @@ class StoreOrderRepository extends BaseRepository
      */
     public function pay(string $type, ?User $user, StoreGroupOrder $groupOrder, $return_url = '', $isApp = false, $combine = null, $authCode = '')
     {
+        // TEMP_MOCK_PAY: 开发期强制模拟支付成功（正式上线前务必删除）
+        $this->paySuccess($groupOrder);
+        return app('json')->status('success', '支付成功', [
+            'order_id' => $groupOrder['group_order_id'],
+            'pay_price' => $groupOrder['pay_price'],
+        ]);
+
         // 如果支付方式为余额支付，则直接调用余额支付方法
         if ($type === 'balance') {
             return $this->payBalance($user, $groupOrder);

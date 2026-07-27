@@ -39,12 +39,12 @@ class CommunityRedpacket extends BaseController
     }
 
     /**
-     * 创建红包求助笔记
+     * 创建红包求助笔记（待支付，支付成功后上线）
      */
     public function create()
     {
         $data = $this->request->params([
-            'title', 'content', 'images', 'topic_id', 'spu_id',
+            'title', 'content', 'images', 'topic_id', 'topic_names', 'spu_id',
             'amount_per_person', 'total_count', 'deadline'
         ]);
         app()->make(CommunityRedpacketValidate::class)->check($data);
@@ -58,7 +58,7 @@ class CommunityRedpacket extends BaseController
         if ($deadline - time() < 3600) throw new ValidateException('截止时间至少为1小时后');
         if ($deadline - time() > 2592000) throw new ValidateException('截止时间不能超过30天');
 
-        // 创建 community 记录
+        // 创建 community 记录（未支付先隐藏）
         $communityData = [
             'uid' => $uid,
             'title' => $data['title'],
@@ -71,30 +71,123 @@ class CommunityRedpacket extends BaseController
                 'total_amount' => $totalAmount,
             ]),
             'status' => 1,
-            'is_show' => 1,
+            'is_show' => 0,
         ];
         if (!empty($data['images'])) $communityData['image'] = implode(',', $data['images']);
         if (!empty($data['topic_id'])) $communityData['topic_id'] = $data['topic_id'];
+        if (!empty($data['topic_names'])) $communityData['topic_names'] = $data['topic_names'];
+        $communityData['spu_id'] = $data['spu_id'] ?? [];
 
         $communityId = $this->communityRepository->create($communityData);
+        $result = $this->repository->createPending($uid, $data, $communityId, $totalAmount);
 
-        // 创建 redpacket 记录
-        $redpacketData = [
-            'community_id' => $communityId,
-            'uid' => $uid,
-            'amount_per_person' => $data['amount_per_person'],
-            'total_count' => $data['total_count'],
-            'total_amount' => $totalAmount,
+        return app('json')->success($result);
+    }
+
+    /**
+     * 更新红包求助笔记（作者）
+     */
+    public function update($id)
+    {
+        $uid = $this->request->uid();
+        $communityId = (int)$id;
+        $community = $this->communityRepository->get($communityId);
+        if (!$community || (int)$community['is_del'] === 1) {
+            throw new ValidateException('内容不存在');
+        }
+        if ((int)$community['uid'] !== (int)$uid) {
+            throw new ValidateException('无权编辑');
+        }
+        if ((int)$community['community_type'] !== 1) {
+            throw new ValidateException('非红包求助内容');
+        }
+
+        $data = $this->request->params([
+            'title', 'content', 'images', 'topic_id', 'topic_names', 'spu_id',
+            'amount_per_person', 'total_count', 'deadline'
+        ]);
+
+        $redpacketDao = app()->make(\app\common\dao\community\CommunityRedpacketDao::class);
+        $redpacket = $redpacketDao->search(['community_id' => $communityId])->find();
+        if (!$redpacket) {
+            throw new ValidateException('红包配置不存在');
+        }
+
+        $paid = (int)$redpacket['pay_status'] === 1;
+        // 已支付后不允许改金额/人数，仅允许改文案、图片、话题、截止时间
+        if (!$paid) {
+            app()->make(CommunityRedpacketValidate::class)->check($data);
+            $totalAmount = bcmul($data['amount_per_person'], $data['total_count'], 2);
+            if ($totalAmount > 10000) throw new ValidateException('预付总额不能超过10000元', 10012);
+        } else {
+            if (empty($data['deadline'])) {
+                $data['deadline'] = $redpacket['deadline'];
+            }
+            $data['amount_per_person'] = $redpacket['amount_per_person'];
+            $data['total_count'] = $redpacket['total_count'];
+            $totalAmount = $redpacket['total_amount'];
+        }
+
+        $deadline = strtotime($data['deadline']);
+        if ($deadline === false) throw new ValidateException('截止时间格式错误');
+        if ($deadline - time() < 3600) throw new ValidateException('截止时间至少为1小时后');
+        if ($deadline - time() > 2592000) throw new ValidateException('截止时间不能超过30天');
+
+        $title = trim((string)($data['title'] ?? ''));
+        $content = trim((string)($data['content'] ?? ''));
+        if ($title === '') {
+            $title = mb_substr($content, 0, 30) ?: '红包求助';
+        }
+
+        $communityData = [
+            'title' => $title,
+            'content' => $content,
+            'community_type' => 1,
+            'community_type_data' => json_encode([
+                'amount_per_person' => $data['amount_per_person'],
+                'total_count' => $data['total_count'],
+                'total_amount' => $totalAmount,
+            ], JSON_UNESCAPED_UNICODE),
+            'topic_names' => $data['topic_names'] ?? [],
+        ];
+        if (!empty($data['images'])) {
+            $communityData['image'] = is_array($data['images'])
+                ? implode(',', $data['images'])
+                : (string)$data['images'];
+        }
+        if (!empty($data['topic_id'])) {
+            $communityData['topic_id'] = $data['topic_id'];
+        }
+        if (isset($data['spu_id'])) {
+            $communityData['spu_id'] = $data['spu_id'] ?? [];
+        }
+
+        $this->communityRepository->edit($communityId, $communityData);
+
+        $rpUpdate = [
             'deadline' => $data['deadline'],
         ];
+        if (!$paid) {
+            $rpUpdate['amount_per_person'] = $data['amount_per_person'];
+            $rpUpdate['total_count'] = $data['total_count'];
+            $rpUpdate['total_amount'] = $totalAmount;
+        }
+        $redpacketDao->update($redpacket['id'], $rpUpdate);
 
-        $redpacket = app()->make(\app\common\dao\community\CommunityRedpacketDao::class)->create($redpacketData);
+        return app('json')->success(['community_id' => $communityId]);
+    }
 
-        return app('json')->success([
-            'community_id' => $communityId,
-            'total_amount' => $totalAmount,
-            'redpacket_id' => $redpacket['id'],
-        ]);
+    /**
+     * 支付红包预存（对齐付费解锁）
+     */
+    public function pay()
+    {
+        $uid = $this->request->uid();
+        $orderNo = (string)$this->request->param('order_no', '');
+        $payType = (string)$this->request->param('pay_type', 'balance');
+        if ($orderNo === '') throw new ValidateException('缺少订单号');
+        $result = $this->repository->pay($uid, $orderNo, $payType);
+        return app('json')->success($result);
     }
 
     /**
@@ -102,8 +195,21 @@ class CommunityRedpacket extends BaseController
      */
     public function detail($id)
     {
-        $uid = $this->request->isLogin() ? $this->request->userInfo()->uid : null;
-        $data = $this->repository->getDetail((int)$id, $uid);
+        $user = $this->request->isLogin() ? $this->request->userInfo() : null;
+        $data = $this->communityRepository->show((int)$id, $user);
+
+        // 把 type_data（红包配置）重命名为 redpacket，my_task 提到顶层
+        $typeData = $data['type_data'] ?? null;
+        if ($typeData) {
+            $data['my_task'] = $typeData['my_task'] ?? null;
+            unset($typeData['my_task']);
+            $data['redpacket'] = $typeData;
+        } else {
+            $data['redpacket'] = null;
+            $data['my_task'] = null;
+        }
+        unset($data['type_data']);
+
         return app('json')->success($data);
     }
 

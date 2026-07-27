@@ -102,6 +102,8 @@ class Cache extends BaseController
                 break;
             default:
                 BaseCache::clear();
+                // 同时清理 ThinkORM 表结构缓存，避免加字段后静默丢列
+                \crmeb\services\SchemaCacheService::clearAll();
                 break;
         }
         $configValueRepository = app()->make(ConfigValueRepository::class);

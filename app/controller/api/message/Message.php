@@ -36,7 +36,14 @@ class Message extends BaseController
         [$page, $limit] = $this->getPage();
         $type = $this->request->param('type', 'all');
         $uid = $this->request->uid();
-        $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type);
+        $filter = [
+            'sex' => (int)$this->request->param('sex', 0),
+            'gender' => (string)$this->request->param('gender', ''),
+            'age_min' => (int)$this->request->param('age_min', 0),
+            'age_max' => (int)$this->request->param('age_max', 0),
+            'education' => (string)$this->request->param('education', ''),
+        ];
+        $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type, $filter);
         return app('json')->success($result);
     }
 
@@ -115,8 +122,11 @@ class Message extends BaseController
             return app('json')->fail('请选择语音文件');
         }
 
-        $ext = strtolower(pathinfo($file->getOriginalName(), PATHINFO_EXTENSION));
-        if (!in_array($ext, ['amr', 'mp3', 'wav', 'aac', 'webm'])) {
+        $ext = strtolower(pathinfo($file->getOriginalName(), PATHINFO_EXTENSION) ?: '');
+        if (!$ext) {
+            $ext = 'mp3';
+        }
+        if (!in_array($ext, ['amr', 'mp3', 'wav', 'aac', 'webm', 'm4a'], true)) {
             return app('json')->fail('语音文件格式不支持');
         }
         if ($file->getSize() > 5 * 1024 * 1024) {
@@ -125,11 +135,15 @@ class Message extends BaseController
 
         try {
             $upload = UploadService::create();
-            $result = $upload->to('attach')->validate()->move('voice');
+            $result = $upload->to('attach')->asFile([
+                'filesize' => 5 * 1024 * 1024,
+                'fileExt' => ['amr', 'mp3', 'wav', 'aac', 'webm', 'm4a'],
+                'fileMime' => [],
+            ])->move('voice');
             if ($result === false) {
                 return app('json')->fail($upload->getError());
             }
-            return app('json')->success(['url' => tidy_url($upload->getFileInfo()->filePath)]);
+            return app('json')->success(['url' => tidy_url($upload->getFileInfo()->filePath, 0)]);
         } catch (\Exception $e) {
             return app('json')->fail('上传失败: ' . $e->getMessage());
         }
@@ -142,8 +156,8 @@ class Message extends BaseController
             return app('json')->fail('请选择图片文件');
         }
 
-        $ext = strtolower(pathinfo($file->getOriginalName(), PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
+        $ext = strtolower(pathinfo($file->getOriginalName(), PATHINFO_EXTENSION) ?: '');
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'], true)) {
             return app('json')->fail('图片格式不支持，仅支持 jpg/png/gif/webp');
         }
         if ($file->getSize() > 10 * 1024 * 1024) {
@@ -156,7 +170,7 @@ class Message extends BaseController
             if ($result === false) {
                 return app('json')->fail($upload->getError());
             }
-            return app('json')->success(['url' => tidy_url($upload->getFileInfo()->filePath)]);
+            return app('json')->success(['url' => tidy_url($upload->getFileInfo()->filePath, 0)]);
         } catch (\Exception $e) {
             return app('json')->fail('上传失败: ' . $e->getMessage());
         }

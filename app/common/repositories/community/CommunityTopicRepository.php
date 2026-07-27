@@ -13,9 +13,12 @@
 namespace app\common\repositories\community;
 
 use app\common\dao\community\CommunityTopicDao;
+use app\common\dao\community\CommunityTopicRelDao;
+use app\common\model\community\CommunityTopic;
 use app\common\repositories\BaseRepository;
 use FormBuilder\Factory\Elm;
 use think\exception\ValidateException;
+use think\facade\Db;
 use think\facade\Route;
 
 /**
@@ -169,14 +172,226 @@ class CommunityTopicRepository extends BaseRepository
     public function sumCountUse(?int $id)
     {
         if (!$id) {
-            $id = $this->dao->getSearch(['status' => 1,'is_del' =>0])->column('topic_id');
+            $id = $this->dao->getSearch(['status' => 1, 'is_del' => 0])->column('topic_id');
         } else {
             $id = [$id];
         }
+        $relDao = app()->make(CommunityTopicRelDao::class);
+        $communityRepo = app()->make(CommunityRepository::class);
         foreach ($id as $item) {
-            $count = app()->make(CommunityRepository::class)
-                ->getSearch(CommunityRepository::IS_SHOW_WHERE)->where('topic_id',$item)->count();
+            $relCommunityIds = $relDao->communityIdsByTopicIds([(int)$item]);
+            $count = $communityRepo->getSearch(CommunityRepository::IS_SHOW_WHERE)
+                ->where(function ($q) use ($item, $relCommunityIds) {
+                    $q->where('topic_id', $item);
+                    if ($relCommunityIds) {
+                        $q->whereOr('community_id', 'in', $relCommunityIds);
+                    }
+                })
+                ->count();
             $this->dao->update($item, ['count_use' => $count]);
+        }
+    }
+
+    /**
+     * 规范化话题名
+     */
+    public function normalizeName(string $name): string
+    {
+        $name = trim($name);
+        $name = ltrim($name, "#＃");
+        $name = preg_replace('/\s+/u', '', $name);
+        $name = mb_substr((string)$name, 0, 20, 'utf-8');
+        return trim((string)$name);
+    }
+
+    /**
+     * 从正文解析话题名（#话题）
+     * @return string[]
+     */
+    public function parseNamesFromContent(string $content): array
+    {
+        if ($content === '') {
+            return [];
+        }
+        if (!preg_match_all('/[#＃]([^\s#＃]{1,20})/u', $content, $matches)) {
+            return [];
+        }
+        $names = [];
+        foreach ($matches[1] as $raw) {
+            $name = $this->normalizeName($raw);
+            if ($name !== '') {
+                $names[] = $name;
+            }
+        }
+        return array_values(array_unique($names));
+    }
+
+    /**
+     * 按文字查找或创建话题（同名复用）
+     * 若话题名命中首页类别标签，自动绑定对应 category_id
+     */
+    public function findOrCreateByName(string $name): CommunityTopic
+    {
+        $name = $this->normalizeName($name);
+        if ($name === '') {
+            throw new ValidateException('话题名称不能为空');
+        }
+
+        $matchedCategoryId = $this->matchCategoryIdByTopicName($name);
+
+        $topic = CommunityTopic::getDB()
+            ->where('topic_name', $name)
+            ->where('is_del', 0)
+            ->find();
+        if ($topic) {
+            // 历史自由话题补绑类别
+            if ($matchedCategoryId > 0 && (int)$topic['category_id'] <= 0) {
+                $this->dao->update((int)$topic['topic_id'], ['category_id' => $matchedCategoryId]);
+                $topic['category_id'] = $matchedCategoryId;
+            }
+            return $topic;
+        }
+
+        $deleted = CommunityTopic::getDB()
+            ->where('topic_name', $name)
+            ->where('is_del', 1)
+            ->find();
+        if ($deleted) {
+            $this->dao->update((int)$deleted['topic_id'], [
+                'is_del' => 0,
+                'status' => 1,
+                'category_id' => $matchedCategoryId > 0 ? $matchedCategoryId : (int)$deleted['category_id'],
+            ]);
+            return $this->dao->get((int)$deleted['topic_id']);
+        }
+
+        return $this->dao->create([
+            'topic_name' => $name,
+            'category_id' => $matchedCategoryId,
+            'status' => 1,
+            'is_hot' => 0,
+            'is_del' => 0,
+            'pic' => '',
+            'count_use' => 0,
+            'count_view' => 0,
+            'sort' => 0,
+        ]);
+    }
+
+    /**
+     * 话题名命中首页类别标签时返回 category_id（精确优先，其次包含）
+     */
+    public function matchCategoryIdByTopicName(string $name): int
+    {
+        $name = $this->normalizeName($name);
+        if ($name === '') {
+            return 0;
+        }
+        $list = Db::name('community_category')
+            ->where('is_show', 1)
+            ->field('category_id,cate_name,tab_key')
+            ->order('sort DESC,category_id ASC')
+            ->select()
+            ->toArray();
+        if (!$list) {
+            return 0;
+        }
+        // 1) 精确等于类别名
+        foreach ($list as $cate) {
+            $cateName = trim((string)($cate['cate_name'] ?? ''));
+            if ($cateName !== '' && $cateName === $name) {
+                return (int)$cate['category_id'];
+            }
+        }
+        // 2) 别名精确命中
+        $aliasMap = [
+            '找搭子' => 'partner',
+            '搭子' => 'partner',
+            '红包' => 'rp_help',
+        ];
+        if (isset($aliasMap[$name])) {
+            foreach ($list as $cate) {
+                if (($cate['tab_key'] ?? '') === $aliasMap[$name]) {
+                    return (int)$cate['category_id'];
+                }
+            }
+        }
+        // 3) 话题名包含类别名（如 #公益活动 → 公益）
+        foreach ($list as $cate) {
+            $cateName = trim((string)($cate['cate_name'] ?? ''));
+            if ($cateName !== '' && mb_strpos($name, $cateName) !== false) {
+                return (int)$cate['category_id'];
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * 批量 findOrCreate，最多 10 个
+     * @param array $names
+     * @return CommunityTopic[]
+     */
+    public function findOrCreateByNames(array $names): array
+    {
+        $result = [];
+        $seen = [];
+        foreach ($names as $name) {
+            $normalized = $this->normalizeName((string)$name);
+            if ($normalized === '' || isset($seen[$normalized])) {
+                continue;
+            }
+            $seen[$normalized] = true;
+            $result[] = $this->findOrCreateByName($normalized);
+            if (count($result) >= 10) {
+                break;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * 从请求数据解析话题列表（topic_names / content / topic_id）
+     * @return CommunityTopic[]
+     */
+    public function resolveTopicsFromPayload(array $data): array
+    {
+        $names = [];
+        if (!empty($data['topic_names'])) {
+            $raw = $data['topic_names'];
+            if (is_string($raw)) {
+                $raw = array_filter(explode(',', $raw));
+            }
+            if (is_array($raw)) {
+                $names = array_merge($names, $raw);
+            }
+        }
+        if (!empty($data['content'])) {
+            $names = array_merge($names, $this->parseNamesFromContent((string)$data['content']));
+        }
+        if (!empty($data['free_content'])) {
+            $names = array_merge($names, $this->parseNamesFromContent((string)$data['free_content']));
+        }
+        if (!empty($data['topic_id'])) {
+            $legacy = $this->dao->get((int)$data['topic_id']);
+            if ($legacy && !(int)$legacy['is_del']) {
+                $names[] = $legacy['topic_name'];
+            }
+        }
+        return $this->findOrCreateByNames($names);
+    }
+
+    /**
+     * 同步笔记话题关联，并刷新 count_use
+     */
+    public function syncCommunityTopics(int $communityId, array $topicIds): void
+    {
+        $relDao = app()->make(CommunityTopicRelDao::class);
+        $oldIds = Db::name('community_topic_rel')->where('community_id', $communityId)->column('topic_id') ?: [];
+        $relDao->sync($communityId, $topicIds);
+        foreach (array_unique(array_merge($oldIds, $topicIds)) as $tid) {
+            if ($tid) {
+                $this->sumCountUse((int)$tid);
+            }
         }
     }
 

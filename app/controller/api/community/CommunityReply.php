@@ -59,6 +59,7 @@ class CommunityReply extends BaseController
                 'list' => []
             ]);
         $where['community_id'] = $id;
+        $where['sort'] = $this->request->param('sort', 'new');
         [$page, $limit] = $this->getPage();
         $userInfo = $this->request->isLogin() ? $this->request->userInfo() : null;
         return app('json')->success($this->repository->getApiList($where, $page, $limit, $userInfo));

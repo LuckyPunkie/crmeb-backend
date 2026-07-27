@@ -25,6 +25,9 @@ class CommunityResumeDao extends BaseDao
     public function search(array $where)
     {
         return CommunityResume::getDB()
+            ->when(isset($where['id']) && $where['id'] !== '', function ($query) use ($where) {
+                $query->where('id', $where['id']);
+            })
             ->when(isset($where['uid']) && $where['uid'] !== '', function ($query) use ($where) {
                 $query->where('uid', $where['uid']);
             })

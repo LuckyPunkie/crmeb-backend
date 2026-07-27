@@ -203,6 +203,35 @@ class DingDanXiaService extends BaseServices
         ];
         return $this->request('vip/query', $params, 'POST');
     }
+
+    /**
+     * 京东关键词搜索
+     */
+    public function jdGoodsSearch(string $keyword, int $page = 1, int $pageSize = 20): array
+    {
+        return $this->request('jd/query', [
+            'keyword' => $keyword,
+            'pageIndex' => $page,
+            'pageSize' => $pageSize,
+        ], 'POST');
+    }
+
+    /**
+     * 抖音精选联盟商品搜索
+     */
+    public function douyinGoodsSearch(string $title = '', int $page = 1, int $pageSize = 20): array
+    {
+        $params = [
+            'page' => $page,
+            'page_size' => $pageSize,
+            'search_type' => 0,
+            'sort_type' => 0,
+        ];
+        if ($title !== '') {
+            $params['title'] = $title;
+        }
+        return $this->request('douyin/product_search', $params, 'POST');
+    }
     
      //唯品会商品
     public function vipGoodsDetail(int $goods_id): array

@@ -517,6 +517,9 @@ class DiyRepository extends BaseRepository
     public function getProductDetail()
     {
         $diyInfo = $this->dao->getWhere(['is_diy' => self::IS_DIY_PRODUCT,'is_del' => 0,'mer_id' => 0]);
+        if (!$diyInfo || empty($diyInfo['value'])) {
+            return ['product_detail_diy' => null];
+        }
         $data['product_detail_diy'] = json_decode($diyInfo['value'], true);
         return $data;
     }

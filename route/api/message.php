@@ -15,6 +15,7 @@ use app\common\middleware\UserTokenMiddleware;
 
 Route::group('message', function () {
     Route::get('dialog/list', 'api.message.Message/dialogList');
+    Route::get('unread-total', 'api.message.Notification/unreadTotal');
 
     Route::group('user', function () {
         Route::get('history/:uid', 'api.message.Message/messageHistory');
@@ -25,6 +26,7 @@ Route::group('message', function () {
 
     Route::group('notification', function () {
         Route::get('list', 'api.message.Notification/list');
+        Route::get('detail/:id', 'api.message.Notification/detail');
         Route::put('read/:id', 'api.message.Notification/markRead');
         Route::get('unread-count', 'api.message.Notification/unreadCount');
     });

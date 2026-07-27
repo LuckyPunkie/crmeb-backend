@@ -90,7 +90,7 @@ class CommunityPaidContentRepository extends BaseRepository
     }
 
     /**
-     * 解锁付费内容（创建订单）
+     * 解锁付费内容（创建订单并处理支付）
      */
     public function unlock(int $communityId, int $buyerUid, string $payType = 'balance')
     {
@@ -122,7 +122,88 @@ class CommunityPaidContentRepository extends BaseRepository
             'platform_ratio' => $platformRatio,
         ]);
 
-        return $order;
+        if ($payType === 'balance') {
+            $this->payBalanceForUnlock($order, $buyerUid);
+            $this->notifySellerUnlock($data, $buyerUid, (float)$data['price']);
+            return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$data['price']];
+        }
+
+        // TEMP_MOCK_PAY: 非余额支付开发期模拟成功，正式接入 SDK 后替换此处
+        $this->paySuccess($orderNo);
+        $this->notifySellerUnlock($data, $buyerUid, (float)$data['price']);
+        return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$data['price']];
+    }
+
+    /**
+     * 通知作者：付费内容被解锁
+     */
+    protected function notifySellerUnlock($paid, int $buyerUid, float $amount): void
+    {
+        $sellerUid = (int)($paid['uid'] ?? 0);
+        $communityId = (int)($paid['community_id'] ?? 0);
+        if ($sellerUid <= 0 || $sellerUid === $buyerUid) {
+            return;
+        }
+        try {
+            $brief = \app\common\repositories\user\UserNotificationRepository::noteBriefById($communityId);
+            $desc = '解锁了你的付费内容';
+            if ($amount > 0) {
+                $desc .= '，支付 ¥' . number_format($amount, 2, '.', '');
+            }
+            $payload = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                'community_id' => $communityId,
+                'title' => $brief['title'],
+                'image' => $brief['image'],
+                'content' => $desc,
+                'text' => $desc,
+                'amount' => $amount,
+            ]);
+            app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                ->createAndPush($sellerUid, $buyerUid, 'paid_unlock', '付费内容被解锁', $payload, 'community', $communityId);
+        } catch (\Throwable $e) {
+        }
+    }
+
+    /**
+     * 余额支付解锁：扣款 + 写账单 + 标记订单已支付
+     */
+    protected function payBalanceForUnlock($order, int $uid): void
+    {
+        if (!systemConfig('yue_pay_status') || !systemConfig('balance_func_status')) {
+            throw new ValidateException('未开启余额支付');
+        }
+
+        $user = app()->make(\app\common\repositories\user\UserRepository::class)->get($uid);
+        if ((float)($user['now_money'] ?? 0) < (float)$order['amount']) {
+            throw new ValidateException('余额不足，请更换支付方式');
+        }
+
+        Db::transaction(function () use ($user, $order, $uid) {
+            $user->now_money = bcsub((string)$user->now_money, (string)$order['amount'], 2);
+            $user->save();
+
+            app()->make(\app\common\repositories\user\UserBillRepository::class)->decBill(
+                $uid, 'now_money', 'pay_product', [
+                    'link_id' => $order['id'],
+                    'status' => 1,
+                    'title' => '付费内容解锁',
+                    'number' => $order['amount'],
+                    'mark' => '余额支付' . floatval($order['amount']) . '元解锁付费内容',
+                    'balance' => $user->now_money,
+                ]
+            );
+
+            $sellerIncome = round((float)$order['amount'] * (1 - (float)$order['platform_ratio']), 2);
+            app()->make(CommunityPaidOrderDao::class)->update($order['id'], [
+                'pay_status' => 1,
+                'pay_time' => date('Y-m-d H:i:s'),
+                'seller_income' => $sellerIncome,
+            ]);
+            $this->dao->update($order['paid_content_id'], [
+                'buy_count' => Db::raw('buy_count + 1'),
+                'total_income' => Db::raw('total_income + ' . $order['amount']),
+            ]);
+        });
     }
 
     /**
@@ -152,28 +233,80 @@ class CommunityPaidContentRepository extends BaseRepository
 
     /**
      * 我的付费收益
+     * 可提现余额 = 用户余额 eb_user.now_money（与余额页一致）
      */
     public function getIncome(int $uid, array $dateRange = [], int $page = 1, int $limit = 10)
     {
-        $query = $this->dao->search(['uid' => $uid]);
+        $user = Db::name('user')->where('uid', $uid)->field('uid,now_money')->find();
+        $withdrawable = $user ? (float)$user['now_money'] : 0.0;
+
+        $orderDao = app()->make(CommunityPaidOrderDao::class);
+        $baseWhere = ['seller_uid' => $uid, 'pay_status' => 1];
+
+        $listQuery = $orderDao->search($baseWhere);
         if (!empty($dateRange[0])) {
-            $query->where('create_time', '>=', $dateRange[0]);
+            $listQuery->where('pay_time', '>=', $dateRange[0]);
         }
         if (!empty($dateRange[1])) {
-            $query->where('create_time', '<=', $dateRange[1] . ' 23:59:59');
+            $listQuery->where('pay_time', '<=', $dateRange[1] . ' 23:59:59');
         }
-        $query->with(['community' => function ($q) {
-            $q->field('community_id,title');
-        }]);
-        $count = $query->count();
-        $list = $query->page($page, $limit)->order('id DESC')->select();
 
-        $totalIncome = $this->dao->search(['uid' => $uid])->sum('total_income');
+        $unlockCount = $orderDao->search($baseWhere)->count();
+        if (!empty($dateRange[0]) || !empty($dateRange[1])) {
+            $countQuery = $orderDao->search($baseWhere);
+            if (!empty($dateRange[0])) {
+                $countQuery->where('pay_time', '>=', $dateRange[0]);
+            }
+            if (!empty($dateRange[1])) {
+                $countQuery->where('pay_time', '<=', $dateRange[1] . ' 23:59:59');
+            }
+            $unlockCount = $countQuery->count();
+        }
+
+        $list = $listQuery->with([
+            'community' => function ($q) {
+                $q->field('community_id,title');
+            },
+            'buyer' => function ($q) {
+                $q->field('uid,nickname,avatar');
+            },
+        ])->page($page, $limit)->order('pay_time DESC,id DESC')->select();
+
+        $totalIncome = (float)$orderDao->search($baseWhere)->sum('seller_income');
+        if ($totalIncome <= 0) {
+            $totalIncome = (float)$this->dao->search(['uid' => $uid])->sum('total_income');
+        }
+
+        $todayStart = date('Y-m-d 00:00:00');
+        $todayIncome = (float)$orderDao->search($baseWhere)
+            ->where('pay_time', '>=', $todayStart)
+            ->sum('seller_income');
+
+        $items = [];
+        foreach ($list as $row) {
+            $arr = is_array($row) ? $row : $row->toArray();
+            $buyer = $arr['buyer'] ?? [];
+            $community = $arr['community'] ?? [];
+            $amount = (float)($arr['amount'] ?? 0);
+            $income = (float)($arr['seller_income'] ?? 0);
+            $items[] = array_merge($arr, [
+                'nickname' => $buyer['nickname'] ?? '匿名用户',
+                'avatar' => $buyer['avatar'] ?? '',
+                'title' => $community['title'] ?? '付费内容',
+                'price' => $amount,
+                'income' => $income,
+                'commission' => round(max(0, $amount - $income), 2),
+            ]);
+        }
 
         return [
-            'total_income' => (float)$totalIncome,
-            'count' => $count,
-            'list' => $list,
+            'total_income' => $totalIncome,
+            'withdrawable' => $withdrawable,
+            'now_money' => $withdrawable,
+            'today_income' => $todayIncome,
+            'unlock_count' => $unlockCount,
+            'count' => $unlockCount,
+            'list' => $items,
         ];
     }
 
@@ -191,6 +324,123 @@ class CommunityPaidContentRepository extends BaseRepository
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
         return compact('count', 'list');
+    }
+
+    /**
+     * 我发布的付费笔记（含汇总）
+     */
+    public function getPublishedList(int $uid, int $page = 1, int $limit = 10)
+    {
+        $orderDao = app()->make(CommunityPaidOrderDao::class);
+        $paidCount = $this->dao->search(['uid' => $uid])->count();
+        $totalIncome = (float)$this->dao->search(['uid' => $uid])->sum('total_income');
+        if ($totalIncome <= 0) {
+            $totalIncome = (float)$orderDao->search(['seller_uid' => $uid, 'pay_status' => 1])->sum('seller_income');
+        }
+        $buyerCount = (int)Db::name('community_paid_order')
+            ->where('seller_uid', $uid)
+            ->where('pay_status', 1)
+            ->count('DISTINCT buyer_uid');
+
+        $list = $this->dao->search(['uid' => $uid])
+            ->with([
+                'community' => function ($q) {
+                    $q->field('community_id,title,image,create_time');
+                },
+            ])
+            ->order('id DESC')
+            ->page($page, $limit)
+            ->select();
+
+        $items = [];
+        foreach ($list as $row) {
+            $arr = is_array($row) ? $row : $row->toArray();
+            $community = $arr['community'] ?? [];
+            $image = $community['image'] ?? [];
+            if (is_string($image)) {
+                $image = $image === '' ? [] : explode(',', $image);
+            }
+            if (!is_array($image)) {
+                $image = [];
+            }
+            $items[] = [
+                'id' => (int)($arr['id'] ?? 0),
+                'community_id' => (int)($arr['community_id'] ?? 0),
+                'title' => $community['title'] ?? ($arr['title'] ?? '付费内容'),
+                'image' => $image,
+                'cover' => $image[0] ?? '',
+                'price' => (float)($arr['price'] ?? 0),
+                'buy_count' => (int)($arr['buy_count'] ?? 0),
+                'total_income' => (float)($arr['total_income'] ?? 0),
+                'create_time' => $community['create_time'] ?? ($arr['create_time'] ?? ''),
+            ];
+        }
+
+        return [
+            'total_income' => $totalIncome,
+            'paid_count' => $paidCount,
+            'buyer_count' => $buyerCount,
+            'count' => $paidCount,
+            'list' => $items,
+        ];
+    }
+
+    /**
+     * 我解锁的付费笔记（含汇总）
+     */
+    public function getUnlockedList(int $uid, int $page = 1, int $limit = 10)
+    {
+        $orderDao = app()->make(CommunityPaidOrderDao::class);
+        $baseWhere = ['buyer_uid' => $uid, 'pay_status' => 1];
+        $unlockCount = $orderDao->search($baseWhere)->count();
+        $totalSpent = (float)$orderDao->search($baseWhere)->sum('amount');
+
+        $list = $orderDao->search($baseWhere)
+            ->with([
+                'community' => function ($q) {
+                    $q->field('community_id,title,image,uid');
+                },
+                'seller' => function ($q) {
+                    $q->field('uid,nickname,avatar');
+                },
+            ])
+            ->order('pay_time DESC,id DESC')
+            ->page($page, $limit)
+            ->select();
+
+        $items = [];
+        foreach ($list as $row) {
+            $arr = is_array($row) ? $row : $row->toArray();
+            $community = $arr['community'] ?? [];
+            $seller = $arr['seller'] ?? [];
+            $image = $community['image'] ?? [];
+            if (is_string($image)) {
+                $image = $image === '' ? [] : explode(',', $image);
+            }
+            $payTime = $arr['pay_time'] ?? ($arr['create_time'] ?? '');
+            $items[] = [
+                'id' => (int)($arr['id'] ?? 0),
+                'order_no' => $arr['order_no'] ?? '',
+                'community_id' => (int)($arr['community_id'] ?? 0),
+                'title' => $community['title'] ?? '付费内容',
+                'image' => $image,
+                'cover' => $image[0] ?? '',
+                'price' => (float)($arr['amount'] ?? 0),
+                'amount' => (float)($arr['amount'] ?? 0),
+                'author_uid' => (int)($seller['uid'] ?? ($community['uid'] ?? 0)),
+                'author_nickname' => $seller['nickname'] ?? '匿名作者',
+                'author_avatar' => $seller['avatar'] ?? '',
+                'unlock_time' => $payTime,
+                'pay_time' => $payTime,
+            ];
+        }
+
+        return [
+            'total_spent' => $totalSpent,
+            'unlock_count' => $unlockCount,
+            'count' => $unlockCount,
+            'list' => $items,
+        ];
     }
 
     /**

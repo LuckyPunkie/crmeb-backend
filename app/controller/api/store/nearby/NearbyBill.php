@@ -13,7 +13,6 @@ namespace app\controller\api\store\nearby;
 
 use think\App;
 use crmeb\basic\BaseController;
-use crmeb\services\pay\Pay;
 use crmeb\services\PayService;
 use app\common\repositories\store\nearby\NearbyShopBillOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
@@ -59,22 +58,33 @@ class NearbyBill extends BaseController
         $data['uid'] = $this->request->uid();
         $order = $this->repository->createBillOrder($data);
 
+        // 模拟支付（开发阶段）：直接标记已支付，正式上线前改回 routine
+        if ($data['pay_type'] === 'mock') {
+            $this->repository->paySuccess($order['order_sn'], 'mock');
+            return app('json')->success([
+                'order_sn'  => $order['order_sn'],
+                'pay_price' => $order['pay_price'],
+                'mock_paid' => true,
+            ]);
+        }
+
         // 调起支付
         try {
             $payType = $data['pay_type'];
             $payService = new PayService($payType, [
                 'order_sn' => $order['order_sn'],
                 'pay_price' => (float)$data['pay_price'],
-                'attach' => 'bill_pay',
+                'body'      => '到店买单',
+                'attach'    => 'bill_pay',
             ], 'bill');
 
             $user = $this->request->userInfo();
-            $config = $payService->pay($user);
+            $payResult = $payService->pay($user);
 
             return app('json')->success([
                 'order_sn' => $order['order_sn'],
                 'pay_price' => $order['pay_price'],
-                'config' => $config,
+                'config' => $payResult['config'] ?? $payResult,
             ]);
         } catch (\Exception $e) {
             return app('json')->fail('支付配置失败: ' . $e->getMessage());
@@ -104,16 +114,17 @@ class NearbyBill extends BaseController
             $payService = new PayService($order['pay_type'], [
                 'order_sn' => $order['order_sn'],
                 'pay_price' => (float)$order['pay_price'],
-                'attach' => 'bill_pay',
+                'body'      => '到店买单',
+                'attach'    => 'bill_pay',
             ], 'bill');
 
             $user = $this->request->userInfo();
-            $config = $payService->pay($user);
+            $payResult = $payService->pay($user);
 
             return app('json')->success([
                 'order_sn' => $order['order_sn'],
                 'pay_price' => $order['pay_price'],
-                'config' => $config,
+                'config' => $payResult['config'] ?? $payResult,
             ]);
         } catch (\Exception $e) {
             return app('json')->fail('支付配置失败: ' . $e->getMessage());

@@ -266,10 +266,34 @@ class StoreOrder extends BaseController
 
         $this->repository->changePayType($groupOrder, array_search($type, StoreOrderRepository::PAY_TYPE));
 
+        // TEMP_MOCK_PAY: 开发期强制模拟支付成功（正式上线前务必删除）
+        // 注意：本站走 Swoole，改 PHP 后必须重启 swoole 进程才生效
+        try {
+            $this->repository->paySuccess($groupOrder);
+        } catch (\Throwable $e) {
+            // 已支付等场景忽略，仍返回成功方便联调
+        }
+        $isBlindbox = false;
+        try {
+            $orders = $this->repository->search(['group_order_id' => $groupOrder['group_order_id']])->select();
+            foreach ($orders as $order) {
+                if (!empty($order['is_blindbox_order'])) {
+                    $isBlindbox = true;
+                    break;
+                }
+            }
+        } catch (\Throwable $e) {}
+        return app('json')->status('success', '模拟支付成功', [
+            'order_id' => $groupOrder['group_order_id'],
+            'pay_price' => $groupOrder['pay_price'],
+            'is_blindbox' => $isBlindbox ? 1 : 0,
+        ]);
+
         if ($groupOrder['pay_price'] == 0) {
             $this->repository->paySuccess($groupOrder);
             return app('json')->status('success', '支付成功', ['order_id' => $groupOrder['group_order_id']]);
         }
+
         if ($type == 'offline')  {
             if (count($groupOrder['orderList']) > 1) {
                 return app('json')->fail('线下支付仅支持同店铺商品');

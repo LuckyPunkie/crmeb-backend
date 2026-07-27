@@ -337,6 +337,19 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // 用户认证审核
+    Route::group('user/certification', function () {
+        Route::get('lst', '/lst')->name('adminUserCertificationLst')->option([
+            '_alias' => '认证列表',
+        ]);
+        Route::post('review/:id', '/review')->name('adminUserCertificationReview')->option([
+            '_alias' => '认证审核',
+        ]);
+    })->prefix('admin.user.UserCertification')->option([
+        '_path' => '/user/certification',
+        '_auth' => true,
+    ]);
+
     //用户反馈
     Route::group('user/feedback', function () {
         Route::get('category/lst', '/lst')->name('systemUserFeedBackCategoryLst')->option([

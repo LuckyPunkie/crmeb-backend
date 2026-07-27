@@ -28,6 +28,14 @@ class CommunityResume extends BaseController
      */
     protected $repository;
 
+    protected $resumeFields = [
+        'real_name', 'gender', 'birthday', 'phone', 'email',
+        'education', 'work_years', 'city', 'expect_job', 'expect_salary',
+        'education_history', 'work_history', 'education_list', 'work_list', 'skills',
+        'introduction', 'work_summary', 'self_evaluation', 'resume_file',
+        'is_default'
+    ];
+
     public function __construct(App $app, CommunityResumeRepository $repository)
     {
         parent::__construct($app);
@@ -53,20 +61,9 @@ class CommunityResume extends BaseController
     public function create()
     {
         $uid = $this->request->uid();
-        $data = $this->request->params([
-            'real_name', 'gender', 'birthday', 'phone', 'email',
-            'education', 'work_years', 'city', 'expect_job', 'expect_salary',
-            'education_history', 'work_history', 'self_evaluation', 'resume_file',
-            'is_default'
-        ]);
+        $data = $this->getResumePayload();
         app()->make(CommunityResumeValidate::class)->check($data);
-
-        if (isset($data['education_history']) && is_array($data['education_history'])) {
-            $data['education_history'] = json_encode($data['education_history']);
-        }
-        if (isset($data['work_history']) && is_array($data['work_history'])) {
-            $data['work_history'] = json_encode($data['work_history']);
-        }
+        $data = $this->repository->normalizeResumePayload($data);
 
         $resume = $this->repository->create($data, $uid);
         return app('json')->success(['resume_id' => $resume['id']]);
@@ -78,22 +75,31 @@ class CommunityResume extends BaseController
     public function update($id)
     {
         $uid = $this->request->uid();
-        $data = $this->request->params([
-            'real_name', 'gender', 'birthday', 'phone', 'email',
-            'education', 'work_years', 'city', 'expect_job', 'expect_salary',
-            'education_history', 'work_history', 'self_evaluation', 'resume_file',
-            'is_default'
-        ]);
-
-        if (isset($data['education_history']) && is_array($data['education_history'])) {
-            $data['education_history'] = json_encode($data['education_history']);
-        }
-        if (isset($data['work_history']) && is_array($data['work_history'])) {
-            $data['work_history'] = json_encode($data['work_history']);
-        }
+        $data = $this->getResumePayload();
+        $data = $this->repository->normalizeResumePayload($data);
 
         $this->repository->updateResume((int)$id, $uid, $data);
         return app('json')->success(['resume_id' => (int)$id]);
+    }
+
+    protected function getResumePayload(): array
+    {
+        $data = $this->request->params($this->resumeFields);
+        $contentType = (string)$this->request->header('content-type', '');
+
+        if (stripos($contentType, 'application/json') !== false) {
+            $raw = file_get_contents('php://input');
+            $json = json_decode($raw, true);
+            if (is_array($json)) {
+                foreach ($this->resumeFields as $field) {
+                    if (array_key_exists($field, $json)) {
+                        $data[$field] = $json[$field];
+                    }
+                }
+            }
+        }
+
+        return $data;
     }
 
     /**

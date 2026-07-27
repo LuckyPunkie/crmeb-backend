@@ -131,17 +131,16 @@ class CommunityCategoryRepository extends BaseRepository
      */
     public function getApiList()
     {
-        $res = $this->dao->getSearch(['is_show' => 1])->order('sort DESC')
-            ->setOption('filed',[])->field('category_id,cate_name')->with(['children'])->order('sort DESC,category_id DESC')->select();
-        $list = [];
-        if ($res) $list = $res->toArray();
-//        $hot = app()->make(CommunityTopicRepository::class)->getHotList();
-//        $data[] = [
-//            'category_id' => 0,
-//            "cate_name" => "推荐",
-//            "children"  => $hot['list']
-//        ];
-//        return array_merge($data,$list);
+        $res = $this->dao->getSearch(['is_show' => 1])
+            ->order('sort DESC,category_id DESC')
+            ->with(['children'])
+            ->select();
+        $list = $res ? $res->toArray() : [];
+        $keys = \think\facade\Db::name('community_category')->column('tab_key', 'category_id');
+        foreach ($list as &$item) {
+            $item['tab_key'] = $keys[$item['category_id']] ?? ($item['tab_key'] ?? '');
+        }
+        unset($item);
         return $list;
     }
 

@@ -20,7 +20,7 @@ class NearbyBillValidate extends Validate
     protected $rule = [
         'mer_id|商户ID' => 'require|integer|>:0',
         'pay_price|支付金额' => 'require|float|>=:1|<=:50000',
-        'pay_type|支付方式' => 'require|in:weixin,alipay',
+        'pay_type|支付方式' => 'require|in:weixin,alipay,routine,mock',
         'coupon_id|优惠券ID' => 'integer',
     ];
 

@@ -3,6 +3,8 @@
 namespace app\controller\api\taoke;
 
 use app\common\repositories\taoke\CommissionRepository;
+use app\common\repositories\taoke\ServiceBrandTabRepository;
+use app\common\repositories\taoke\ServiceGoodsRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JuTuiKeService;
@@ -29,16 +31,30 @@ class Goods extends BaseController
      */
     protected $commissionRepository;
 
+    /**
+     * @var ServiceGoodsRepository
+     */
+    protected $serviceGoodsRepository;
+
+    /**
+     * @var ServiceBrandTabRepository
+     */
+    protected $serviceBrandTabRepository;
+
     public function __construct(
         App $app,
         JuTuiKeService $jutuikeService,
         DingDanXiaService $dingdanxiaService,
-        CommissionRepository $commissionRepository
+        CommissionRepository $commissionRepository,
+        ServiceGoodsRepository $serviceGoodsRepository,
+        ServiceBrandTabRepository $serviceBrandTabRepository
     ) {
         parent::__construct($app);
         $this->jutuikeService = $jutuikeService;
         $this->dingdanxiaService = $dingdanxiaService;
         $this->commissionRepository = $commissionRepository;
+        $this->serviceGoodsRepository = $serviceGoodsRepository;
+        $this->serviceBrandTabRepository = $serviceBrandTabRepository;
     }
     
     /*
@@ -50,10 +66,10 @@ class Goods extends BaseController
         $data = [];
         if ($type == 'taobao' || $type == 'wph') {
             $data = [
-                ['id' => 1, 'text' => '9.9元包邮'],
-                ['id' => 2, 'text' => '19.9元包邮'],
-                ['id' => 3, 'text' => '29.9元包邮'],
-                ['id' => 4, 'text' => '39.9元包邮'],
+                ['id' => 1, 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+                ['id' => 2, 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+                ['id' => 3, 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+                ['id' => 4, 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
             ];
         } elseif ($type == 'pdd') {
             $data = [
@@ -73,10 +89,125 @@ class Goods extends BaseController
                 ['id' => 25, 'text' => '数码家电'],
                 
             ];
+        } elseif ($type == 'douyin') {
+            $data = [
+                ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
+                ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆'],
+                ['id' => 3, 'text' => '服饰鞋包', 'keyword' => '服饰'],
+                ['id' => 4, 'text' => '居家日用', 'keyword' => '居家'],
+            ];
+        } elseif ($type == 'recommend') {
+            // 与淘宝一致的价格筛选
+            $data = [
+                ['id' => 1, 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+                ['id' => 2, 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+                ['id' => 3, 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+                ['id' => 4, 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
+            ];
+        } elseif ($type == 'brand') {
+            $config = $this->serviceBrandTabRepository->getPublicConfig();
+            foreach ($config['brands'] as $idx => $brand) {
+                $data[] = [
+                    'id' => $idx + 1,
+                    'text' => $brand,
+                    'keyword' => $brand,
+                ];
+            }
         }
 
         return app('json')->success($data);
         
+    }
+
+    /**
+     * 服务页平台 Tab 配置（含后台品牌类）
+     * GET /api/taoke/goods/service_tabs
+     */
+    public function serviceTabs()
+    {
+        $brand = $this->serviceBrandTabRepository->getPublicConfig();
+        return app('json')->success([
+            'platforms' => [
+                ['type' => 'recommend', 'name' => '推荐'],
+                ['type' => 'taobao', 'name' => '淘宝'],
+                ['type' => 'jd', 'name' => '京东'],
+                ['type' => 'pdd', 'name' => '拼多多'],
+                ['type' => 'douyin', 'name' => '抖音'],
+            ],
+            'brand_tab' => $brand,
+        ]);
+    }
+
+    /**
+     * 推荐：全平台商品汇总
+     * POST /api/taoke/goods/aggregate_recommend
+     */
+    public function aggregateRecommend()
+    {
+        $page = (int)$this->request->param('page', $this->request->param('page_no', 1));
+        $limit = (int)$this->request->param('limit', $this->request->param('page_size', 20));
+        $platform = (string)$this->request->param('platform', '');
+        $keyword = (string)$this->request->param('keyword', '');
+        // 兼容旧调用：platform 传了非平台名时当作关键词（如价格筛选）
+        $knownPlatforms = ['taobao', 'jd', 'pdd', 'douyin'];
+        if ($keyword === '' && $platform !== '' && !in_array(strtolower($platform), $knownPlatforms, true)) {
+            $keyword = $platform;
+            $platform = '';
+        }
+        try {
+            if ($keyword !== '') {
+                $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+            } else {
+                $list = $this->serviceGoodsRepository->aggregateRecommend($page, $limit, $platform);
+            }
+            return app('json')->success(['list' => $list]);
+        } catch (\Exception $e) {
+            Log::error('服务页推荐汇总失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('获取推荐商品失败');
+        }
+    }
+
+    /**
+     * 品牌类：按品牌名检索全平台商品
+     * POST /api/taoke/goods/brand_goods
+     */
+    public function brandGoods()
+    {
+        $page = (int)$this->request->param('page', $this->request->param('page_no', 1));
+        $limit = (int)$this->request->param('limit', $this->request->param('page_size', 20));
+        $keyword = (string)$this->request->param('keyword', '');
+        if ($keyword === '') {
+            $config = $this->serviceBrandTabRepository->getPublicConfig();
+            $keyword = $config['brands'][0] ?? '';
+        }
+        if ($keyword === '') {
+            return app('json')->success(['list' => []]);
+        }
+        try {
+            $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+            return app('json')->success(['list' => $list]);
+        } catch (\Exception $e) {
+            Log::error('服务页品牌商品失败', ['keyword' => $keyword, 'error' => $e->getMessage()]);
+            return app('json')->fail('获取品牌商品失败');
+        }
+    }
+
+    /**
+     * 抖音商品
+     * POST /api/taoke/goods/douyin_goods
+     */
+    public function douyinGoods()
+    {
+        $page = (int)$this->request->param('page', $this->request->param('page_no', 1));
+        $limit = (int)$this->request->param('limit', $this->request->param('page_size', 20));
+        $keyword = (string)$this->request->param('keyword', '');
+        try {
+            $list = $this->serviceGoodsRepository->searchPlatform('douyin', $keyword, $page, $limit);
+            return app('json')->success(['list' => $list]);
+        } catch (\Exception $e) {
+            Log::error('抖音商品列表获取失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('搜索失败，请稍后重试');
+        }
     }
 
     /**
@@ -403,8 +534,8 @@ class Goods extends BaseController
      */
     public function pddGoods()
     {
-        $page = $this->request->post('page_no', 1);
-        $limit = $this->request->post('page_size', 20);
+        $page = $this->request->post('page_no', $this->request->post('page', 1));
+        $limit = $this->request->post('page_size', $this->request->post('limit', 20));
         $cate = $this->request->post('cate', 0);
         try {
             $result = $this->dingdanxiaService->pddGoods($page, $limit,$cate);
@@ -596,24 +727,41 @@ class Goods extends BaseController
      */
     public function jdGoods()
     {
-        $page = $this->request->post('page_no', 1);
-        $limit = $this->request->post('page_size', 20);
+        $page = $this->request->post('page_no', $this->request->post('page', 1));
+        $limit = $this->request->post('page_size', $this->request->post('limit', 20));
         $cate = $this->request->post('cate', 0);
         try {
             $result = $this->dingdanxiaService->jdGoods($page, $limit,$cate);
             $data = [];
             foreach ($result as $k => $val) {
-                // var_dump($val);die;
-                $priceInfo = $val['priceInfo'];
-                 $data[] = [
+                $priceInfo = $val['priceInfo'] ?? [];
+                $shopInfo = $val['shopInfo'] ?? [];
+                $promotionInfo = $val['promotionInfo'] ?? [];
+                $imageList = $val['imageInfo']['imageList'] ?? [];
+                $images = [];
+                foreach ($imageList as $img) {
+                    if (!empty($img['url'])) {
+                        $images[] = $img['url'];
+                    }
+                }
+                $materialUrl = (string)($val['materialUrl'] ?? '');
+                $clickURL = (string)($promotionInfo['clickURL'] ?? ($promotionInfo['clickUrl'] ?? ''));
+                $data[] = [
                     'goods_id' => $val['itemId'] ?? '0',
                     'title' => $val['skuName'] ?? '',
-                    'image' => $val['imageInfo']['imageList'][0]['url'] ?? '',
+                    'store_name' => $val['skuName'] ?? '',
+                    'image' => $images[0] ?? '',
+                    'images' => $images,
                     'sales' => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
                     'price' => $priceInfo['lowestCouponPrice'] ?? '0.00',
                     'ot_price' => $priceInfo['price'] ?? '0.00',
                     'is_hot' => $val['isHot'] ?? '0',
-                    'materialUrl' => $val['materialUrl']
+                    'materialUrl' => $materialUrl,
+                    'clickURL' => $clickURL,
+                    'clickUrl' => $clickURL,
+                    'shopName' => $shopInfo['shopName'] ?? '',
+                    'shopId' => $shopInfo['shopId'] ?? '',
+                    'shopLevel' => $shopInfo['shopLevel'] ?? '',
                 ];
             }
 
@@ -705,7 +853,21 @@ class Goods extends BaseController
             $result = $this->dingdanxiaService->jdHighCommission($materialUrl,$pid);
             
             if (empty($result)) {
-                return app('json')->fail('生成推广链接失败');
+                // 订单侠转链接口不可用时（如服务到期），回退物料/联盟链接，保证仍可跳转购买
+                $fallbackUrl = $this->normalizeJdMaterialUrl($materialUrl);
+                if ($fallbackUrl === '') {
+                    return app('json')->fail('生成推广链接失败，请稍后重试');
+                }
+                Log::warning('京东转链为空，使用物料链接兜底', [
+                    'materialUrl' => $materialUrl,
+                    'fallbackUrl' => $fallbackUrl,
+                ]);
+                return app('json')->success([
+                    'clickURL' => $fallbackUrl,
+                    'clickUrl' => $fallbackUrl,
+                    'shortURL' => $fallbackUrl,
+                    'fallback' => true,
+                ]);
             }
 
 
@@ -717,9 +879,27 @@ class Goods extends BaseController
                 'materialUrl' => $materialUrl,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->fail('生成推广链接失败'.$e->getMessage());
+            return app('json')->fail('生成推广链接失败');
         }
         
+    }
+
+    /**
+     * 规范化京东物料链接（列表常返回无协议的 jingfen.jd.com/...）
+     */
+    protected function normalizeJdMaterialUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (stripos($url, 'http://') === 0 || stripos($url, 'https://') === 0) {
+            return $url;
+        }
+        if (stripos($url, '//') === 0) {
+            return 'https:' . $url;
+        }
+        return 'https://' . ltrim($url, '/');
     }
     
     

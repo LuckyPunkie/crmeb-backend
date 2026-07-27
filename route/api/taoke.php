@@ -48,6 +48,11 @@ Route::group('taoke', function () {
         Route::post('wph_goods', 'api.taoke.Goods/wphGoods');
         Route::post('vip_goods_detail', 'api.taoke.Goods/vipGoodsDetail');
         Route::post('create_vip_link', 'api.taoke.Goods/createVipLink');
+
+        Route::post('douyin_goods', 'api.taoke.Goods/douyinGoods');
+        Route::get('service_tabs', 'api.taoke.Goods/serviceTabs');
+        Route::post('aggregate_recommend', 'api.taoke.Goods/aggregateRecommend');
+        Route::post('brand_goods', 'api.taoke.Goods/brandGoods');
         
         Route::post('category', 'api.taoke.Goods/category');
     })->middleware(UserTokenMiddleware::class, false);

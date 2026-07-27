@@ -33,6 +33,8 @@ class RelevanceRepository extends BaseRepository
     const TYPE_COMMUNITY_START  =  'community_start';
     //社区评论点赞
     const TYPE_COMMUNITY_REPLY_START  =  'community_reply_start';
+    //社区笔记收藏
+    const TYPE_COMMUNITY_COLLECT = 'community_collect';
     //商户权限
     const TYPE_MERCHANT_AUTH = 'mer_auth';
 

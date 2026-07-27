@@ -186,6 +186,7 @@ class CommunityRepository extends BaseRepository
                 ] : null;
             }
         }
+        $list = $this->appendTopics($list);
         return compact('count', 'list');
     }
 
@@ -322,7 +323,7 @@ class CommunityRepository extends BaseRepository
         $data = $this->dao->getSearch($where)
             ->with([
                 'author' => function ($query) {
-                    $query->field('uid,real_name,status,avatar,nickname,count_start,member_level');
+                    $query->field('uid,real_name,status,avatar,nickname,count_start,member_level,sex');
                     if (systemConfig('member_status')) $query->with(['member' => function ($query) {
                         $query->field('brokerage_icon,brokerage_level');
                     }]);
@@ -345,6 +346,10 @@ class CommunityRepository extends BaseRepository
             ->find();
 
         if (!$data) throw new ValidateException('内容不存在，可能已被删除了哦～');
+        $data = $data->toArray();
+        $data = $this->appendTopics($data);
+        $data['is_collect'] = $user ? ($this->isCollected($id, (int)$user->uid) ? 1 : 0) : 0;
+        $data['count_collect'] = $this->collectCount($id);
 
         // 根据community_type附加类型数据
         $data['type_data'] = null;
@@ -352,7 +357,8 @@ class CommunityRepository extends BaseRepository
             $redpacketDao = app()->make(\app\common\dao\community\CommunityRedpacketDao::class);
             $rp = $redpacketDao->search(['community_id' => $id])->find();
             if ($rp) {
-                $data['type_data'] = [
+                $rp = $rp->toArray();
+                $typeData = [
                     'amount_per_person' => $rp['amount_per_person'],
                     'total_count' => $rp['total_count'],
                     'taken_count' => $rp['taken_count'],
@@ -363,14 +369,16 @@ class CommunityRepository extends BaseRepository
                 ];
                 if ($user) {
                     $taskDao = app()->make(\app\common\dao\community\CommunityRedpacketTaskDao::class);
-                    $myTask = $taskDao->search(['redpacket_id' => $rp['id'], 'uid' => $user->uid])->find();
-                    $data['type_data']['my_task'] = $myTask;
+                    $task = $taskDao->search(['redpacket_id' => $rp['id'], 'uid' => $user->uid])->find();
+                    $typeData['my_task'] = $task ? $task->toArray() : null;
                 }
+                $data['type_data'] = $typeData;
             }
         } elseif ($data['community_type'] == 2) {
             $paidDao = app()->make(\app\common\dao\community\CommunityPaidDao::class);
             $paid = $paidDao->search(['community_id' => $id])->find();
             if ($paid) {
+                $paid = $paid->toArray();
                 $isUnlocked = false;
                 if ($user && ($paid['uid'] == $user->uid)) {
                     $isUnlocked = true;
@@ -380,7 +388,7 @@ class CommunityRepository extends BaseRepository
                         'community_id' => $id, 'buyer_uid' => $user->uid, 'pay_status' => 1
                     ])->count() > 0;
                 }
-                $data['type_data'] = [
+                $typeData = [
                     'price' => $paid['price'],
                     'buy_count' => $paid['buy_count'],
                     'trial_ratio' => $paid['trial_ratio'],
@@ -388,14 +396,16 @@ class CommunityRepository extends BaseRepository
                     'is_unlocked' => $isUnlocked,
                 ];
                 if ($isUnlocked) {
-                    $data['type_data']['paid_content'] = $paid['paid_content'];
+                    $typeData['paid_content'] = $paid['paid_content'];
                 }
+                $data['type_data'] = $typeData;
             }
         } elseif ($data['community_type'] == 3) {
             $recruitDao = app()->make(\app\common\dao\community\CommunityRecruitDao::class);
             $recruit = $recruitDao->search(['community_id' => $id])->find();
             if ($recruit) {
-                $data['type_data'] = [
+                $recruit = $recruit->toArray();
+                $typeData = [
                     'recruit_id' => $recruit['id'],
                     'job_title' => $recruit['job_title'],
                     'work_city' => $recruit['work_city'],
@@ -410,9 +420,10 @@ class CommunityRepository extends BaseRepository
                 ];
                 if ($user) {
                     $applyDao = app()->make(\app\common\dao\community\CommunityRecruitApplyDao::class);
-                    $myApply = $applyDao->search(['recruit_id' => $recruit['id'], 'uid' => $user->uid])->find();
-                    $data['type_data']['my_apply'] = $myApply;
+                    $apply = $applyDao->search(['recruit_id' => $recruit['id'], 'uid' => $user->uid])->find();
+                    $typeData['my_apply'] = $apply ? $apply->toArray() : null;
                 }
+                $data['type_data'] = $typeData;
             }
         }
         $relevance  = [];
@@ -433,6 +444,16 @@ class CommunityRepository extends BaseRepository
                 'type' => RelevanceRepository::TYPE_COMMUNITY_FANS,
             ]);
         $data['is_fans'] = $is_fans;
+
+        // 发帖人昵称后资料简要：出身年份·学历·身高
+        if (!empty($data['author']) && !empty($data['author']['uid'])) {
+            $brief = app()->make(\app\common\repositories\user\UserProfileRepository::class)
+                ->getBriefByUid((int)$data['author']['uid']);
+            $data['author']['profile_brief'] = $brief;
+            // 兼容前端 gender 字段
+            $data['author']['gender'] = (int)($data['author']['sex'] ?? 0);
+        }
+
         //增加浏览量
         if($data['status'] == 1) {
             $this->dao->incField($id, 'pv');
@@ -478,27 +499,36 @@ class CommunityRepository extends BaseRepository
         return $data;
     }
 
-    /**
-     *  创建
-     * @param array $data
-     * @author Qinii
-     * @day 10/29/21
-     */
     public function create(array $data)
     {
         event('community.create.before', compact('data'));
-        if ($data['topic_id']) {
-            $getTopic = app()->make(CommunityTopicRepository::class)->get($data['topic_id']);
+        $topicRepo = app()->make(CommunityTopicRepository::class);
+        $topics = $topicRepo->resolveTopicsFromPayload($data);
+        unset($data['topic_names'], $data['free_content']);
+        if ($topics) {
+            $first = $topics[0];
+            $data['topic_id'] = (int)$first['topic_id'];
+            $data['category_id'] = (int)($first['category_id'] ?? 0);
+        } elseif (!empty($data['topic_id'] ?? null)) {
+            $getTopic = $topicRepo->get($data['topic_id']);
             if (!$getTopic || !$getTopic->status) throw new ValidateException('话题不存在或已关闭');
             $data['category_id'] = $getTopic->category_id;
+            $topics = [$getTopic];
+        } else {
+            $data['topic_id'] = $data['topic_id'] ?? 0;
         }
-        return Db::transaction(function () use ($data) {
+        return Db::transaction(function () use ($data, $topics, $topicRepo) {
             $community = $this->dao->create($data);
-            if ($data['spu_id']) $this->joinProduct($community->community_id, $data['spu_id']);
+            if (!empty($data['spu_id'] ?? null)) $this->joinProduct($community->community_id, $data['spu_id']);
+            $topicIds = [];
+            foreach ($topics as $topic) {
+                $topicIds[] = (int)$topic['topic_id'];
+            }
+            $topicRepo->syncCommunityTopics((int)$community->community_id, $topicIds);
             event('community.create', compact('community'));
             // 内容数统计
             app()->make(UserRepository::class)->incField((int)$data['uid'], 'count_content');
-            if ($data['status'] == 1) {  // 免审核 增加经验值
+            if ($data['status'] == 1) {  // 免除审核 增加经验值
                 $make = app()->make(UserBrokerageRepository::class);
                 $make->incMemberValue($data['uid'], 'member_community_num', $community->community_id);
                 $this->giveIntegral($community);
@@ -517,20 +547,105 @@ class CommunityRepository extends BaseRepository
     public function edit(int $id, array $data)
     {
         event('community.update.before', compact('id', 'data'));
-        if ($data['topic_id']) {
-            $getTopic = app()->make(CommunityTopicRepository::class)->get($data['topic_id']);
-
+        $topicRepo = app()->make(CommunityTopicRepository::class);
+        $topics = $topicRepo->resolveTopicsFromPayload($data);
+        unset($data['topic_names'], $data['free_content']);
+        if ($topics) {
+            $first = $topics[0];
+            $data['topic_id'] = (int)$first['topic_id'];
+            $data['category_id'] = (int)($first['category_id'] ?? 0);
+        } elseif (!empty($data['topic_id'] ?? null)) {
+            $getTopic = $topicRepo->get($data['topic_id']);
             if (!$getTopic || !$getTopic->status) throw new ValidateException('话题不存在或已关闭');
             $data['category_id'] = $getTopic->category_id;
+            $topics = [$getTopic];
+        } else {
+            $data['topic_id'] = 0;
+            $topics = [];
         }
 
-        Db::transaction(function () use ($id, $data) {
-            $spuId = $data['spu_id'];
+        Db::transaction(function () use ($id, $data, $topics, $topicRepo) {
+            $spuId = $data['spu_id'] ?? [];
             unset($data['spu_id']);
             $community = $this->dao->update($id, $data);
-            if ($spuId) $this->joinProduct($id, $spuId);
+            if (!empty($spuId)) $this->joinProduct($id, $spuId);
+            $topicIds = [];
+            foreach ($topics as $topic) {
+                $topicIds[] = (int)$topic['topic_id'];
+            }
+            $topicRepo->syncCommunityTopics($id, $topicIds);
             event('community.update', compact('id', 'community'));
         });
+    }
+
+    /**
+     * 附加多话题字段 topics / tags（兼容旧 topic）
+     */
+    public function appendTopics($data)
+    {
+        $isList = false;
+        if ($data instanceof \think\Collection) {
+            $items = $data;
+            $isList = true;
+        } elseif (is_array($data) && isset($data[0]) && is_array($data[0])) {
+            $items = $data;
+            $isList = true;
+        } else {
+            $items = [$data];
+        }
+
+        $ids = [];
+        foreach ($items as $item) {
+            $id = is_array($item) ? ($item['community_id'] ?? 0) : ($item['community_id'] ?? 0);
+            if ($id) $ids[] = (int)$id;
+        }
+        $ids = array_values(array_unique(array_filter($ids)));
+        $map = [];
+        if ($ids) {
+            $rows = \think\facade\Db::name('community_topic_rel')->alias('r')
+                ->leftJoin('community_topic t', 't.topic_id = r.topic_id')
+                ->whereIn('r.community_id', $ids)
+                ->where('t.is_del', 0)
+                ->field('r.community_id,t.topic_id,t.topic_name,t.pic,t.category_id,r.sort')
+                ->order('r.sort ASC,r.id ASC')
+                ->select()
+                ->toArray();
+            foreach ($rows as $row) {
+                $map[(int)$row['community_id']][] = [
+                    'topic_id' => (int)$row['topic_id'],
+                    'topic_name' => $row['topic_name'],
+                    'pic' => $row['pic'] ?? '',
+                    'category_id' => (int)($row['category_id'] ?? 0),
+                ];
+            }
+        }
+
+        $out = [];
+        foreach ($items as $item) {
+            $arr = is_array($item) ? $item : (method_exists($item, 'toArray') ? $item->toArray() : (array)$item);
+            $cid = (int)($arr['community_id'] ?? 0);
+            $topics = $map[$cid] ?? [];
+            if (!$topics && !empty($arr['topic']) && is_array($arr['topic'])) {
+                $topics = [[
+                    'topic_id' => (int)($arr['topic']['topic_id'] ?? 0),
+                    'topic_name' => $arr['topic']['topic_name'] ?? '',
+                    'pic' => $arr['topic']['pic'] ?? '',
+                    'category_id' => (int)($arr['topic']['category_id'] ?? 0),
+                ]];
+                $topics = array_values(array_filter($topics, function ($t) {
+                    return !empty($t['topic_id']) || !empty($t['topic_name']);
+                }));
+            }
+            $arr['topics'] = $topics;
+            $arr['tags'] = array_values(array_filter(array_map(function ($t) {
+                return $t['topic_name'] ?? '';
+            }, $topics)));
+            if (empty($arr['topic']) && $topics) {
+                $arr['topic'] = $topics[0];
+            }
+            $out[] = $arr;
+        }
+        return $isList ? $out : $out[0];
     }
 
     /**
@@ -571,25 +686,115 @@ class CommunityRepository extends BaseRepository
         $relevanceRepository = app()->make(RelevanceRepository::class);
         $data['focus'] = $relevanceRepository->getFieldCount('left_id', $uid, RelevanceRepository::TYPE_COMMUNITY_FANS);
 
-
         $is_start = $is_self = false;
         if ($self && $self->uid == $uid) {
             $user = $self;
             $is_self = true;
         } else {
             $user = app()->make(UserRepository::class)->get($uid);
-            $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
+            if (!$user) return app('json')->fail('用户不存在');
+            // $self 为 null 时（未登录）跳过关注状态查询
+            if ($self) {
+                $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
+            }
         }
-        $data['start'] = $user->count_start;
-        $data['uid'] = $user->uid;
-        $data['avatar'] = $user->avatar;
-        $data['nickname'] = $user->nickname;
-        $data['is_start'] = $is_start;
-        $data['member_icon'] = systemConfig('member_status') ? ($user->member->brokerage_icon ?? '') : '';
-        $data['is_self'] = $is_self;
-        $data['fans'] = $user->count_fans;
+        $data['start']          = $user->count_start;
+        $data['uid']            = $user->uid;
+        $data['avatar']         = $user->avatar;
+        $data['nickname']       = $user->nickname;
+        $data['is_start']       = $is_start;
+        $data['member_icon']    = systemConfig('member_status') ? ($user->member->brokerage_icon ?? '') : '';
+        $data['is_self']        = $is_self;
+        $data['fans']           = $user->count_fans;
+        $data['phone']          = $is_self ? ($user->phone ?: '') : '';
+        $data['user_label_name'] = $user->label_id ? app()->make(\app\common\repositories\user\UserLabelRepository::class)->labels($user->label_id) : [];
+        $data['profile_items']  = $this->buildProfileItems($user, $uid);
 
         return $data;
+    }
+
+    private function buildProfileItems($user, int $uid): array
+    {
+        $profile = app()->make(\app\common\repositories\user\UserProfileRepository::class)->getByUid($uid);
+        if (empty($profile)) return [];
+
+        $items = [];
+
+        // 出生年份·星座
+        if ($user->birthday) {
+            $year    = (int) date('Y', strtotime($user->birthday));
+            $items[] = ['icon' => 'icon-ic_clock',         'text' => ($year % 100) . '年·' . $this->getZodiac($user->birthday)];
+        }
+
+        // 身高·体重
+        if ($profile['height'] && $profile['weight']) {
+            $items[] = ['icon' => 'icon-ic_user',          'text' => $profile['height'] . 'cm·' . $profile['weight'] . 'kg'];
+        } elseif ($profile['height']) {
+            $items[] = ['icon' => 'icon-ic_user',          'text' => $profile['height'] . 'cm'];
+        }
+
+        // 学历·类型
+        $eduMap     = [1 => '高中', 2 => '大专', 3 => '本科', 4 => '硕士', 5 => '博士'];
+        $eduTypeMap = [1 => '全日制', 2 => '非全日制'];
+        if (!empty($profile['education'])) {
+            $edu     = $eduMap[$profile['education']] ?? '';
+            $eduType = !empty($profile['education_type']) ? ($eduTypeMap[$profile['education_type']] ?? '') : '';
+            $items[] = ['icon' => 'icon-ic_learn1',        'text' => $edu . ($eduType ? '·' . $eduType : '')];
+        }
+
+        // 职位
+        if (!empty($profile['job_title'])) {
+            $items[] = ['icon' => 'icon-ic_badge1',        'text' => $profile['job_title']];
+        }
+
+        // 籍贯·现居
+        if (!empty($profile['hometown_city']) && !empty($profile['current_city'])) {
+            $items[] = ['icon' => 'icon-icon_Location',    'text' => $profile['hometown_city'] . '人在' . $profile['current_city']];
+        } elseif (!empty($profile['current_city'])) {
+            $items[] = ['icon' => 'icon-icon_Location',    'text' => $profile['current_city']];
+        }
+
+        // 年收入
+        $incomeMap = [1 => '年入10万以下', 2 => '年入10-20万', 3 => '年入20-50万', 4 => '年入50万以上'];
+        if (!empty($profile['annual_income'])) {
+            $items[] = ['icon' => 'icon-ic_money',         'text' => $incomeMap[$profile['annual_income']] ?? ''];
+        }
+
+        // 感情状态·交友目的
+        $relMap    = [1 => '单身', 2 => '已婚', 3 => '离异', 4 => '丧偶'];
+        $datingMap = [1 => '找对象', 2 => '普通交友', 3 => '不确定'];
+        if (!empty($profile['relationship_status'])) {
+            $rel    = $relMap[$profile['relationship_status']] ?? '';
+            $dating = !empty($profile['dating_purpose']) ? ($datingMap[$profile['dating_purpose']] ?? '') : '';
+            $items[] = ['icon' => 'icon-ic_love',          'text' => $rel . ($dating ? '·' . $dating : '')];
+        }
+
+        // 车辆·房产
+        $carHouse = [];
+        if (!empty($profile['car_count']))   $carHouse[] = $profile['car_count'] . '辆车';
+        if (!empty($profile['house_count'])) $carHouse[] = $profile['house_count'] . '套房';
+        if ($carHouse) {
+            $items[] = ['icon' => 'icon-ic_home',          'text' => implode('·', $carHouse)];
+        }
+
+        // 总资产
+        $assetsMap = [1 => '100万以下', 2 => '100-300万', 3 => '300万以上'];
+        if (!empty($profile['total_assets'])) {
+            $items[] = ['icon' => 'icon-ic_gold',          'text' => $assetsMap[$profile['total_assets']] ?? ''];
+        }
+
+        return array_values(array_filter($items));
+    }
+
+    private function getZodiac(string $birthday): string
+    {
+        $m = (int) date('n', strtotime($birthday));
+        $d = (int) date('j', strtotime($birthday));
+        // 每月星座切换日（当月 >= 该日则为下一个星座）
+        $cutoff  = [20, 19, 21, 20, 21, 22, 23, 23, 23, 24, 23, 22];
+        $zodiacs = ['摩羯座', '水瓶座', '双鱼座', '白羊座', '金牛座', '双子座',
+                    '巨蟹座', '狮子座', '处女座', '天秤座', '天蝎座', '射手座', '摩羯座'];
+        return $d >= $cutoff[$m - 1] ? $zodiacs[$m] : $zodiacs[$m - 1];
     }
 
     /**
@@ -616,7 +821,45 @@ class CommunityRepository extends BaseRepository
             }
         });
 
+        $this->refreshDialogRelation($uid, $id);
+
+        if ($status) {
+            $brief = \app\common\repositories\user\UserNotificationRepository::latestNoteBrief($uid);
+            $content = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                'community_id' => $brief['community_id'],
+                'title' => $brief['title'],
+                'image' => $brief['image'],
+            ]);
+            try {
+                app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                    ->createAndPush($id, $uid, 'follow', '新关注', $content, 'user', $uid);
+            } catch (\Throwable $e) {
+            }
+        }
+
         return;
+    }
+
+    /**
+     * 关注变更后刷新双方会话 relation_type
+     */
+    protected function refreshDialogRelation(int $uid1, int $uid2): void
+    {
+        try {
+            $uidA = min($uid1, $uid2);
+            $uidB = max($uid1, $uid2);
+            $dialog = Db::name('user_dialog')->where('uid_a', $uidA)->where('uid_b', $uidB)->find();
+            if (!$dialog) {
+                return;
+            }
+            $relationType = app()->make(\app\common\dao\user\UserDialogDao::class)
+                ->calcRelationType($uidA, $uidB);
+            if ((int)$dialog['relation_type'] !== $relationType) {
+                Db::name('user_dialog')->where('dialog_id', $dialog['dialog_id'])
+                    ->update(['relation_type' => $relationType]);
+            }
+        } catch (\Throwable $e) {
+        }
     }
 
     /**
@@ -677,6 +920,18 @@ class CommunityRepository extends BaseRepository
             $user = $userRepository->get($ret['uid']);
             $this->dao->incField($id, 'count_start', 1);
             if ($user) $userRepository->incField((int)$user->uid, 'count_start', 1);
+
+            $brief = \app\common\repositories\user\UserNotificationRepository::noteBriefById($id);
+            $content = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                'community_id' => $id,
+                'title' => $brief['title'],
+                'image' => $brief['image'],
+            ]);
+            try {
+                app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                    ->createAndPush((int)$ret['uid'], (int)$userInfo->uid, 'star', '笔记被点赞', $content, 'community', $id);
+            } catch (\Throwable $e) {
+            }
         }
         if (!$status) {
             if (!$make->checkHas($userInfo->uid, $id, RelevanceRepository::TYPE_COMMUNITY_START))
@@ -688,6 +943,60 @@ class CommunityRepository extends BaseRepository
             $this->dao->decField($id, 'count_start', 1);
             if ($user) $userRepository->decField((int)$user->uid, 'count_start', 1);
         }
+    }
+
+    /**
+     * 笔记收藏 / 取消收藏
+     */
+    public function setCommunityCollect(int $id, int $uid, int $status): void
+    {
+        if (!$this->isApprove($id) && !$this->dao->uidExists($id, $uid)) {
+            throw new ValidateException('内容不存在或未审核通过');
+        }
+        $make = app()->make(RelevanceRepository::class);
+        $check = $make->checkHas($uid, $id, RelevanceRepository::TYPE_COMMUNITY_COLLECT);
+        $ret = $this->dao->get($id);
+        if (!$ret) {
+            throw new ValidateException('内容不存在');
+        }
+
+        if ($status) {
+            if ($check) {
+                throw new ValidateException('您已经收藏过了');
+            }
+            $make->create($uid, $id, RelevanceRepository::TYPE_COMMUNITY_COLLECT, true);
+            $brief = \app\common\repositories\user\UserNotificationRepository::noteBriefById($id);
+            $content = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+                'community_id' => $id,
+                'title' => $brief['title'],
+                'image' => $brief['image'],
+            ]);
+            try {
+                app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                    ->createAndPush((int)$ret['uid'], $uid, 'bookmark', '笔记被收藏', $content, 'community', $id);
+            } catch (\Throwable $e) {
+            }
+        } else {
+            if (!$check) {
+                throw new ValidateException('您还未收藏');
+            }
+            $make->destory($uid, $id, RelevanceRepository::TYPE_COMMUNITY_COLLECT);
+        }
+    }
+
+    public function isCollected(int $communityId, int $uid): bool
+    {
+        if ($uid <= 0) {
+            return false;
+        }
+        return app()->make(RelevanceRepository::class)
+            ->checkHas($uid, $communityId, RelevanceRepository::TYPE_COMMUNITY_COLLECT) > 0;
+    }
+
+    public function collectCount(int $communityId): int
+    {
+        return (int)app()->make(RelevanceRepository::class)
+            ->getFieldCount('right_id', $communityId, RelevanceRepository::TYPE_COMMUNITY_COLLECT);
     }
 
     /**

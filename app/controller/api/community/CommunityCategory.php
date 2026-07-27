@@ -13,9 +13,7 @@
 namespace app\controller\api\community;
 
 use crmeb\basic\BaseController;
-use crmeb\traits\CategoresRepository;
 use think\App;
-use app\validate\admin\StoreCategoryValidate;
 use app\common\repositories\community\CommunityCategoryRepository as repository;
 use think\exception\ValidateException;
 

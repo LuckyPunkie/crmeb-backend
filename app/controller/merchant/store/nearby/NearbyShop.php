@@ -124,7 +124,7 @@ class NearbyShop extends BaseController
             'wechat' => $merchant['nearby_wechat'] ?? '',
             'fan_group_img' => $merchant['nearby_fan_group_img'] ?? '',
             'hero_images' => !empty($merchant['hero_images']) ? json_decode($merchant['hero_images'], true) : [],
-            'nearby_is_show' => $merchant['nearby_is_show'] ?? 1,
+            'nearby_is_show' => $merchant['nearby_is_show'] ?? 0,
             'nearby_category_id' => $merchant['nearby_category_id'] ?? 0,
             'nearby_latitude' => $merchant['nearby_latitude'] ?? null,
             'nearby_longitude' => $merchant['nearby_longitude'] ?? null,

@@ -240,6 +240,7 @@ class MerchantIntentionRepository extends BaseRepository
                 'is_margin' => $margin['is_margin'] ?? -1,
                 'margin' => $margin['margin'] ?? 0,
                 'mark' => $margin['margin'] ?? 0,
+                'bind_uid' => (int)($intention['uid'] ?? 0),
             ];
             // 设置失败原因为空
             $data['fail_msg'] = '';

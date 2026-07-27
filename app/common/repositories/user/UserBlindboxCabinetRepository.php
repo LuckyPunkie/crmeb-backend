@@ -117,13 +117,16 @@ class UserBlindboxCabinetRepository extends BaseRepository
                     $query->field('product_id,mer_id,store_name,image,price,ot_price');
                 },
                 'attrValue' => function ($query) {
-                    $query->field('value_id,product_id,suk,image,price,probability_weight');
+                    // 本项目规格名字段为 sku（非旧版 suk）
+                    $query->field('value_id,product_id,sku,image,price,probability_weight,unique');
                 }
             ])
             ->select();
 
         $weightCache = [];
         foreach ($list as $item) {
+            // 盒柜发货流程未接，统一视为未发货，避免前端把 status=1 当成已发货
+            $item->shipping_status = 'pending';
             if ($item->attrValue && $item->attrValue->probability_weight > 0) {
                 $pid = $item->product_id;
                 if (!isset($weightCache[$pid])) {
@@ -132,6 +135,8 @@ class UserBlindboxCabinetRepository extends BaseRepository
                 $totalWeight = $weightCache[$pid];
                 $pct = round($item->attrValue->probability_weight / $totalWeight * 100, 1);
                 $item->rarity = $this->calcRarity($pct);
+            } else {
+                $item->rarity = ['code' => 'C', 'name' => '普通'];
             }
         }
 
@@ -176,7 +181,26 @@ class UserBlindboxCabinetRepository extends BaseRepository
 
         $rate = $totalCount > 0 ? round($collectedCount / $totalCount * 100, 1) : 0;
 
-        return compact('totalDraws', 'collectedCount', 'totalCount', 'duplicateCount', 'rate');
+        // 开盒次数：已支付盲盒订单数
+        $openCount = (int)\think\facade\Db::name('store_order')
+            ->where('uid', $uid)
+            ->where('is_blindbox_order', 1)
+            ->where('paid', 1)
+            ->count();
+
+        return [
+            'totalDraws' => $totalDraws,
+            'total_draws' => $totalDraws,
+            'collectedCount' => $collectedCount,
+            'collected_count' => $collectedCount,
+            'totalCount' => $totalCount,
+            'total_count' => $totalCount,
+            'duplicateCount' => $duplicateCount,
+            'duplicate_count' => $duplicateCount,
+            'cabinet_items' => $totalDraws,
+            'open_count' => $openCount,
+            'rate' => $rate,
+        ];
     }
 
     /**

@@ -2521,10 +2521,142 @@ class UserRepository extends BaseRepository
      */
     public function getCommunityUserList(array $where = [], int $page = 1, int $limit = 10)
     {
-        $query = $this->dao->search($where)->field('uid,nickname,real_name,phone,count_start,count_fans,count_content');
+        $query = $this->dao->search($where)
+            ->field('uid,nickname,real_name,avatar,sex,birthday,phone,label_id,count_start,count_fans,count_content');
+
+        if (!empty($where['age_min']) || !empty($where['age_max'])) {
+            $ageMin = max(0, intval($where['age_min'] ?? 0));
+            $ageMax = max(0, intval($where['age_max'] ?? 0));
+            $birthdayStart = $ageMax > 0 ? date('Y-m-d', strtotime('-' . $ageMax . ' years')) : null;
+            $birthdayEnd = $ageMin > 0 ? date('Y-m-d', strtotime('-' . $ageMin . ' years')) : null;
+
+            // 兼容 user_profile.birth_month（YYYY-MM），并允许无生日用户不被年龄条件直接剔除
+            $profileUids = [];
+            if ($birthdayStart || $birthdayEnd) {
+                $profileQuery = \think\facade\Db::name('user_profile')->where('birth_month', '<>', '');
+                if ($birthdayStart) {
+                    $profileQuery->where('birth_month', '>=', substr($birthdayStart, 0, 7));
+                }
+                if ($birthdayEnd) {
+                    $profileQuery->where('birth_month', '<=', substr($birthdayEnd, 0, 7));
+                }
+                $profileUids = $profileQuery->column('uid');
+            }
+
+            $query->where(function ($q) use ($birthdayStart, $birthdayEnd, $profileUids) {
+                // 1) 无生日：先放行（资料未完善）
+                $q->where(function ($q2) {
+                    $q2->whereNull('birthday')
+                        ->whereOr('birthday', '')
+                        ->whereOr('birthday', '0000-00-00');
+                });
+                // 2) 有 birthday 且落在区间
+                $q->whereOr(function ($q2) use ($birthdayStart, $birthdayEnd) {
+                    $q2->whereNotNull('birthday')->where('birthday', '<>', '')->where('birthday', '<>', '0000-00-00');
+                    if ($birthdayStart) {
+                        $q2->where('birthday', '>=', $birthdayStart);
+                    }
+                    if ($birthdayEnd) {
+                        $q2->where('birthday', '<=', $birthdayEnd);
+                    }
+                });
+                // 3) 资料表 birth_month 命中
+                if ($profileUids) {
+                    $q->whereOr('uid', 'in', $profileUids);
+                }
+            });
+        }
+
+        if (isset($where['education']) && $where['education'] !== '') {
+            $educations = is_array($where['education'])
+                ? $where['education']
+                : array_filter(explode(',', (string)$where['education']));
+            if ($educations) {
+                $uids = \think\facade\Db::name('user_profile')
+                    ->whereIn('education', $educations)
+                    ->column('uid');
+                $query->whereIn('uid', $uids ?: [0]);
+            }
+        }
 
         $count = $query->count();
         $list = $query->page($page, $limit)->select()->toArray();
+
+        if ($list) {
+            $uids = array_column($list, 'uid');
+            $profiles = \think\facade\Db::name('user_profile')
+                ->whereIn('uid', $uids)
+                ->field('uid,education,height,birth_month,job_title,current_city,hometown_city,relationship_status,dating_purpose')
+                ->select()
+                ->toArray();
+            $profileMap = [];
+            foreach ($profiles as $profile) {
+                $profileMap[$profile['uid']] = $profile;
+            }
+            $eduLabelMap = [
+                1 => '高中', 2 => '大专', 3 => '本科', 4 => '硕士',
+                5 => '博士', 6 => '中专', 7 => '小学', 8 => '初中',
+            ];
+            // 与用户资料表单对齐
+            $relMap = [1 => '单身', 2 => '恋爱中', 3 => '已婚', 4 => '已育', 5 => '离异', 6 => '丧偶'];
+            $datingMap = [1 => '找对象', 2 => '普通交友', 3 => '不确定'];
+
+            $allLabelIds = [];
+            foreach ($list as $row) {
+                if (empty($row['label_id'])) continue;
+                $ids = is_array($row['label_id']) ? $row['label_id'] : explode(',', (string)$row['label_id']);
+                foreach ($ids as $id) {
+                    $id = intval($id);
+                    if ($id > 0) $allLabelIds[$id] = $id;
+                }
+            }
+            $labelNameMap = [];
+            if ($allLabelIds) {
+                $labelNameMap = \think\facade\Db::name('user_label')
+                    ->whereIn('label_id', array_values($allLabelIds))
+                    ->column('label_name', 'label_id');
+            }
+
+            foreach ($list as &$item) {
+                $profile = $profileMap[$item['uid']] ?? [];
+                $item['education'] = isset($profile['education']) ? intval($profile['education']) : 0;
+                $item['height'] = isset($profile['height']) ? intval($profile['height']) : 0;
+                $item['job_title'] = $profile['job_title'] ?? '';
+                $item['current_city'] = $profile['current_city'] ?? '';
+                $item['education_label'] = $eduLabelMap[$item['education']] ?? '';
+                if (
+                    (empty($item['birthday']) || $item['birthday'] === '0000-00-00')
+                    && !empty($profile['birth_month'])
+                ) {
+                    $item['birthday'] = $profile['birth_month'] . '-01';
+                }
+
+                $tags = [];
+                if (!empty($item['label_id'])) {
+                    $ids = is_array($item['label_id']) ? $item['label_id'] : explode(',', (string)$item['label_id']);
+                    foreach ($ids as $id) {
+                        $id = intval($id);
+                        if ($id && !empty($labelNameMap[$id])) {
+                            $tags[] = $labelNameMap[$id];
+                        }
+                    }
+                }
+                if (!empty($profile['job_title'])) {
+                    $tags[] = $profile['job_title'];
+                }
+                if (!empty($profile['dating_purpose']) && !empty($datingMap[$profile['dating_purpose']])) {
+                    $tags[] = $datingMap[$profile['dating_purpose']];
+                }
+                if (!empty($profile['relationship_status']) && !empty($relMap[$profile['relationship_status']])) {
+                    $tags[] = $relMap[$profile['relationship_status']];
+                }
+                if (!empty($profile['current_city'])) {
+                    $tags[] = $profile['current_city'];
+                }
+                $item['tags'] = array_values(array_unique(array_filter($tags)));
+            }
+            unset($item);
+        }
 
         return compact('count', 'list');
     }

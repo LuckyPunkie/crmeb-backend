@@ -21,7 +21,8 @@ return [
         'LogWrite' => [],
         'swoole.task' => [\crmeb\listens\SwooleTaskListen::class],
         'swoole.init' => [
-            \crmeb\listens\InitSwooleLockListen::class
+            \crmeb\listens\InitSwooleLockListen::class,
+            \crmeb\listens\ClearSchemaCacheListen::class,
         ],
         'swoole.workerStart' => [
             \app\webscoket\SwooleWorkerStart::class,
@@ -109,6 +110,10 @@ return [
         'pay_success_order' => [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
+            \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
+        ],
+        // 本地/模拟支付走 paySuccess 后抛出，盲盒入柜依赖此事件
+        'order.paySuccess' => [
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
         ],
         //数据大屏

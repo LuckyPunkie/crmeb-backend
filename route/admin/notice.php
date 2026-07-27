@@ -42,6 +42,16 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // C 端用户系统通知推送
+    Route::group('notice/user', function () {
+        Route::post('push', '/push')->name('systemUserNoticePush')->option([
+            '_alias' => '用户系统通知推送',
+        ]);
+    })->prefix('admin.system.notice.UserSystemNotice')->option([
+        '_path' => '/station/notice',
+        '_auth' => true,
+    ]);
+
     Route::group('notice/config', function () {
         Route::get('lst', '/lst')->name('systemNoticeConfigLst')->option([
             '_alias' => '消息配置列表',
