@@ -90,6 +90,8 @@ class UserDao extends BaseDao
             return $query->where('User.uid|User.real_name|User.nickname|User.phone', 'like', '%' . $where['keyword'] . '%');
         })->when(isset($where['user_type']) && $where['user_type'] !== '', function (BaseQuery $query) use ($where) {
             return $query->where('User.user_type', $where['user_type']);
+        })->when(isset($where['bot_type']) && $where['bot_type'] !== '', function (BaseQuery $query) use ($where) {
+            return $query->where('User.bot_type', (int)$where['bot_type']);
         })->when(isset($where['uid']) && $where['uid'] !== '', function (BaseQuery $query) use ($where) {
             return $query->where('User.uid', $where['uid']);
         })->when(isset($where['status']) && $where['status'] !== '', function (BaseQuery $query) use ($where) {

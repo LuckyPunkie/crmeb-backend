@@ -83,6 +83,18 @@ class Login extends BaseController
             }
         }
         $adminInfo = $this->repository->login($data['account'], $data['password']);
+        // 商户管理员入驻后常未绑区域，且后台无“设置区域”入口：登录时按名下商圈自动补齐
+        if ((int)($adminInfo['is_agent'] ?? 0) > 0) {
+            app()->make(\app\common\repositories\circle\CircleAgentProvisionRepository::class)
+                ->ensureAdminRegionsOnLogin($adminInfo);
+            $fresh = \app\common\model\system\admin\Admin::getDB()
+                ->where('admin_id', (int)$adminInfo['admin_id'])
+                ->find();
+            if ($fresh) {
+                $fresh->append(['region_name']);
+                $adminInfo = $fresh;
+            }
+        }
         $tokenInfo = $this->repository->createToken($adminInfo);
         $admin = $adminInfo->toArray();
         unset($admin['pwd']);

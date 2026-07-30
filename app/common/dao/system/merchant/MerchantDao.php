@@ -131,6 +131,9 @@ class MerchantDao extends BaseDao
             })
             ->when(isset($where['is_blindbox']) && $where['is_blindbox'] !== '', function ($query) use ($where) {
                 $query->where('is_blindbox', $where['is_blindbox']);
+            })
+            ->when(isset($where['create_source']) && $where['create_source'] !== '', function ($query) use ($where) {
+                $query->where('create_source', (int)$where['create_source']);
             });
 
 

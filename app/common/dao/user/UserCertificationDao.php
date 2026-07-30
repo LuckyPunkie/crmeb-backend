@@ -59,8 +59,14 @@ class UserCertificationDao extends BaseDao
         if (isset($where['status']) && $where['status'] !== '') {
             $query = $query->where('status', $where['status']);
         }
-        $count = $query->count();
-        $list  = $query->page($page, $limit)->order('create_time', 'desc')->select()->toArray();
+        $count = (clone $query)->count();
+        $list  = $query->page($page, $limit)
+            ->order('create_time', 'desc')
+            ->with(['user' => function ($q) {
+                $q->field('uid,nickname,avatar,phone');
+            }])
+            ->select()
+            ->toArray();
         return compact('count', 'list');
     }
 }

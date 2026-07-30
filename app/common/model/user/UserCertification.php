@@ -15,4 +15,9 @@ class UserCertification extends BaseModel
     {
         return 'user_certification';
     }
+
+    public function user()
+    {
+        return $this->hasOne(User::class, 'uid', 'uid');
+    }
 }

@@ -66,6 +66,15 @@ class UserMerchant extends BaseController
         if ($where['user_time'] && $where['user_time_type'] == '') {
             $where['user_time_type'] = 'visit';
         }
+        // 添加客服/店员：按完整手机号搜索时，若本店客户表无结果，回落全平台用户并自动建立本店关联
+        $keyword = trim((string)($where['keyword'] ?? ''));
+        if ($keyword !== '' && preg_match('/^1\d{10}$/', $keyword)) {
+            $data = $this->repository->getList($where, $page, $limit);
+            if ((int)($data['count'] ?? 0) === 0) {
+                $data = $this->repository->searchPlatformUserByPhoneForStaff((int)$where['mer_id'], $keyword, $page, $limit);
+            }
+            return app('json')->success($data);
+        }
         return app('json')->success($this->repository->getList($where, $page, $limit));
     }
 

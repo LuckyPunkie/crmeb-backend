@@ -159,9 +159,12 @@ class MiniProgram extends BaseApplication
      */
     public static function appCodeUnlimit(string $scene, string $path = '', int $width = 0)
     {
+        // 优先走 EasyWeChat；失败时用原生 HTTP 兜底（当前 CustomHttpClient 会报 http://:/）
         $optional = [
             'page' => $path,
-            'width' => $width
+            'width' => $width,
+            'check_path' => false,
+            'env_version' => 'develop',
         ];
         if (!$optional['page']) {
             unset($optional['page']);
@@ -176,29 +179,160 @@ class MiniProgram extends BaseApplication
                 self::instance()->application()->getAccessToken()->refresh();
                 $response = self::instance()->auth()->getUnlimit($scene, $optional)->getContent();
             }
+            if (is_string($response) && $response !== '') {
+                $json = json_decode($response, true);
+                if (!is_array($json) || empty($json['errcode'])) {
+                    return $response;
+                }
+                Log::error('获取小程序码微信返回错误:' . $response);
+            }
         } catch (\Throwable $e) {
             Log::error('获取小程序码错误:' . $e->getMessage());
-            $response = [];
         }
-        return $response;
+
+        try {
+            return self::appCodeUnlimitByHttp($scene, $optional);
+        } catch (\Throwable $e) {
+            Log::error('获取小程序码HTTP兜底错误:' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * 原生 HTTP 获取无限小程序码（绕过 EasyWeChat/CustomHttpClient）
+     */
+    protected static function appCodeUnlimitByHttp(string $scene, array $optional = [])
+    {
+        $config = app()->make(\crmeb\services\wechat\config\MiniProgramConfig::class);
+        $appId = $config->appId;
+        $secret = $config->secret;
+        if (!$appId || !$secret) {
+            throw new ValidateException('小程序AppId或AppSecret未配置');
+        }
+
+        $tokenUrl = 'https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid='
+            . urlencode($appId) . '&secret=' . urlencode($secret);
+        $tokenResp = self::httpGet($tokenUrl);
+        $tokenJson = json_decode($tokenResp, true);
+        if (empty($tokenJson['access_token'])) {
+            throw new ValidateException('获取小程序access_token失败:' . ($tokenJson['errmsg'] ?? $tokenResp));
+        }
+
+        $payload = array_merge([
+            'scene' => $scene,
+            'check_path' => false,
+            'env_version' => 'develop',
+        ], $optional);
+        $codeUrl = 'https://api.weixin.qq.com/wxa/getwxacodeunlimit?access_token=' . $tokenJson['access_token'];
+        $codeResp = self::httpPostJson($codeUrl, $payload);
+        $maybeJson = json_decode($codeResp, true);
+        if (is_array($maybeJson) && isset($maybeJson['errcode']) && $maybeJson['errcode'] != 0) {
+            throw new ValidateException('小程序码生成失败:' . ($maybeJson['errmsg'] ?? json_encode($maybeJson, JSON_UNESCAPED_UNICODE)));
+        }
+        return $codeResp;
+    }
+
+    protected static function httpGet(string $url): string
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+        ]);
+        $body = curl_exec($ch);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false) {
+            throw new ValidateException('HTTP请求失败:' . $err);
+        }
+        return (string)$body;
+    }
+
+    protected static function httpPostJson(string $url, array $data): string
+    {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 30,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+            CURLOPT_POSTFIELDS => json_encode($data, JSON_UNESCAPED_UNICODE),
+        ]);
+        $body = curl_exec($ch);
+        $err = curl_error($ch);
+        curl_close($ch);
+        if ($body === false) {
+            throw new ValidateException('HTTP请求失败:' . $err);
+        }
+        return (string)$body;
     }
 
     /**
      * 获取短链
      * @param string $page
      * @param string $query
-     * @return Response|string|ResponseInterface
-     * User: liusl
-     * DateTime: 2024/11/23 下午2:54
+     * @return array|string
      */
     public static function generateUrlLink(string $page, string $query)
     {
         try {
-            return self::instance()->auth()->generateUrlLink($page, $query);
+            $res = self::instance()->auth()->generateUrlLink($page, $query);
+            if (is_array($res) && !empty($res['url_link'])) {
+                return $res;
+            }
+            if (is_object($res) && method_exists($res, 'toArray')) {
+                $arr = $res->toArray();
+                if (!empty($arr['url_link'])) {
+                    return $arr;
+                }
+            }
         } catch (\Throwable $e) {
-            Log::error('获取小程序码错误:' . $e->getMessage());
-            return '';
+            Log::error('获取小程序 URL Link 失败(SDK):' . $e->getMessage());
         }
+        try {
+            return self::generateUrlLinkByHttp($page, $query);
+        } catch (\Throwable $e) {
+            Log::error('获取小程序 URL Link 失败(HTTP):' . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * 原生 HTTP 生成小程序 URL Link
+     */
+    protected static function generateUrlLinkByHttp(string $page, string $query): array
+    {
+        $config = app()->make(\crmeb\services\wechat\config\MiniProgramConfig::class);
+        $appId = $config->appId;
+        $secret = $config->secret;
+        if (!$appId || !$secret) {
+            throw new ValidateException('小程序AppId或AppSecret未配置');
+        }
+        $tokenUrl = 'https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid='
+            . urlencode($appId) . '&secret=' . urlencode($secret);
+        $tokenResp = self::httpGet($tokenUrl);
+        $tokenJson = json_decode($tokenResp, true);
+        if (empty($tokenJson['access_token'])) {
+            throw new ValidateException('获取小程序access_token失败:' . ($tokenJson['errmsg'] ?? $tokenResp));
+        }
+        $payload = [
+            'path' => $page,
+            'query' => $query,
+            'expire_type' => 1,
+            'expire_interval' => 30,
+            'env_version' => 'develop',
+        ];
+        $url = 'https://api.weixin.qq.com/wxa/generate_urllink?access_token=' . $tokenJson['access_token'];
+        $resp = self::httpPostJson($url, $payload);
+        $json = json_decode($resp, true);
+        if (!is_array($json) || empty($json['url_link'])) {
+            throw new ValidateException('URL Link 生成失败:' . ($json['errmsg'] ?? $resp));
+        }
+        return $json;
     }
 
     /**

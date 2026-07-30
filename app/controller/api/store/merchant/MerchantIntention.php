@@ -249,6 +249,12 @@ class MerchantIntention extends BaseController
     {
         // 通过依赖注入的方式获取MerchantTypeRepository实例，并调用其getSelect方法获取商家类型列表
         $lst = app()->make(MerchantTypeRepository::class)->getSelect();
+        // v2.1：入驻注册不展示「救助站」
+        $lst = array_values(array_filter($lst, function ($item) {
+            $name = $item['type_name'] ?? ($item['label'] ?? '');
+            $mark = $item['mark'] ?? '';
+            return $name !== '救助站' && $mark !== 'shelter';
+        }));
 
         // 使用app容器中定义的json助手函数，将获取到的商家类型列表封装到一个成功响应中并返回
         return app('json')->success($lst);

@@ -168,4 +168,38 @@ class Community extends BaseController
         return app('json')->success('修改成功');
     }
 
+    /**
+     * 下载图文帖子批量导入模版
+     * GET /sys/community/import/template
+     */
+    public function importTemplate()
+    {
+        try {
+            $path = app()->make(\app\common\repositories\community\CommunityImportRepository::class)->buildTemplateFile();
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return \think\swoole\helper\download($path, 'community_import_template.xlsx')
+            ->header(['Cache-Control' => 'no-store, no-cache, must-revalidate', 'Pragma' => 'no-cache']);
+    }
+
+    /**
+     * 批量导入图文帖子
+     * POST /sys/community/import
+     */
+    public function import()
+    {
+        $file = $this->request->file('file');
+        if (!$file) {
+            return app('json')->fail('请上传 Excel 文件');
+        }
+        $path = $file->getRealPath() ?: $file->getPathname();
+        try {
+            $result = app()->make(\app\common\repositories\community\CommunityImportRepository::class)->import($path);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($result);
+    }
+
 }

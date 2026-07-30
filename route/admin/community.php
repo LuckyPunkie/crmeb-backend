@@ -50,6 +50,12 @@ Route::group(function () {
         Route::get('title', '/title')->name('systemCommunityTitle')->option([
             '_alias' => '统计',
         ]);
+        Route::get('import/template', '/importTemplate')->name('systemCommunityImportTemplate')->option([
+            '_alias' => '下载图文导入模版',
+        ]);
+        Route::post('import', '/import')->name('systemCommunityImport')->option([
+            '_alias' => '批量导入图文帖子',
+        ]);
     })->prefix('admin.community.Community')->option([
         '_path' => '/community/list',
         '_auth' => true,

@@ -196,4 +196,43 @@ class NearbyShop extends BaseController
     {
         return app('json')->success($repository->getTree());
     }
+
+    /**
+     * 扫码买单收款码（全平台一个 HTTPS 链接码）
+     * GET /mer/nearby/shop/scan_pay_qrcode
+     */
+    public function scanPayQrcode()
+    {
+        $merId = (int)$this->request->merId();
+        $merchant = $this->repository->get($merId);
+        if (!$merchant || $merchant['is_del']) {
+            return app('json')->fail('商家不存在');
+        }
+
+        $force = (int)$this->request->param('refresh', 0) === 1;
+        try {
+            $qrcode = $this->repository->scanPayQrcode($merId, $force);
+        } catch (\Throwable $e) {
+            $qrcode = '';
+        }
+
+        $siteUrl = rtrim((string)systemConfig('site_url'), '/');
+        $payUrl = $siteUrl . '/payjump/' . $merId;
+        $payPath = '/pages/nearby/detail?mer_id=' . $merId . '&action=pay';
+
+        return app('json')->success([
+            'mer_id' => $merId,
+            'mer_name' => $merchant['mer_name'] ?? '',
+            'qrcode' => $qrcode,
+            'routine_qrcode' => '',
+            'app_qrcode' => $qrcode,
+            'pay_path' => $payPath,
+            'pay_url' => $payUrl,
+            'tips' => [
+                '全平台共用一个收款码（HTTPS 短链）',
+                'APP 扫码可直接买单',
+                '微信需配置「扫普通链接二维码打开小程序」后直进小程序',
+            ],
+        ]);
+    }
 }

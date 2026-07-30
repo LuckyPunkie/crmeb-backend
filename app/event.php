@@ -111,6 +111,7 @@ return [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
+            \crmeb\listens\pay\AnimalRescuePaySuccessListen::class,
         ],
         // 本地/模拟支付走 paySuccess 后抛出，盲盒入柜依赖此事件
         'order.paySuccess' => [

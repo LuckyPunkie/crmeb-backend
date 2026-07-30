@@ -128,10 +128,17 @@ class CommunityPaidContentRepository extends BaseRepository
             return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$data['price']];
         }
 
-        // TEMP_MOCK_PAY: 非余额支付开发期模拟成功，正式接入 SDK 后替换此处
-        $this->paySuccess($orderNo);
-        $this->notifySellerUnlock($data, $buyerUid, (float)$data['price']);
-        return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$data['price']];
+        // 模拟支付：后台开启且选择 mock
+        if ($payType === 'mock') {
+            if (!systemConfig('pay_mock_open')) {
+                throw new ValidateException('未开启模拟支付');
+            }
+            $this->paySuccess($orderNo);
+            $this->notifySellerUnlock($data, $buyerUid, (float)$data['price']);
+            return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$data['price'], 'mock' => true];
+        }
+
+        throw new ValidateException('请选择正确的支付方式');
     }
 
     /**

@@ -98,11 +98,48 @@ class User extends BaseController
        */
         $filter_conditions = $this->request->param('filter_conditions/a',[]);
         $where = $this->request->params([
-            'nickname', 'phone','uid','user_type',
+            'nickname', 'phone','uid','user_type', 'bot_type',
             'label_id','user_type','sex','is_promoter','country','pay_count','user_time_type','user_time','province','city','group_id','is_svip','fields_type','fields_value','member_level','keyword','birthday'
         ]);
         [$page, $limit] = $this->getPage();
         return app('json')->success($this->repository->getList($where, $page, $limit,$filter_conditions));
+    }
+
+    /**
+     * 下载机器人用户导入模版（两类机器人共用）
+     * GET /sys/user/bot/template
+     */
+    public function botImportTemplate()
+    {
+        try {
+            $path = app()->make(\app\common\repositories\user\UserBotImportRepository::class)->buildTemplateFile();
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        // Swoole 下框架 download() 走 write(8192) 分块，第二块常失败导致 xlsx 截断损坏
+        return \think\swoole\helper\download($path, 'bot_user_import_template.xlsx')
+            ->header(['Cache-Control' => 'no-store, no-cache, must-revalidate', 'Pragma' => 'no-cache']);
+    }
+
+    /**
+     * 批量导入机器人用户（类型由按钮 bot_type 决定：1用户机器人 2创作机器人）
+     * POST /sys/user/bot/import  bot_type=1|2  file
+     */
+    public function botImport()
+    {
+        $file = $this->request->file('file');
+        if (!$file) {
+            return app('json')->fail('请上传 Excel 文件');
+        }
+        $path = $file->getRealPath() ?: $file->getPathname();
+        $botType = (int)$this->request->param('bot_type', 0);
+        try {
+            $result = app()->make(\app\common\repositories\user\UserBotImportRepository::class)
+                ->import($path, $botType);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($result);
     }
 
     /**

@@ -109,6 +109,32 @@ class StoreService extends BaseController
         $data['pwd'] = password_hash($data['pwd'], PASSWORD_BCRYPT);
         // 创建客服账号
         $this->repository->create($data);
+        // 自动写入本店客户关联，后续按手机号选人/发帖权限不依赖手工挂客户
+        $uid = (int)($data['uid'] ?? 0);
+        $merId = (int)($data['mer_id'] ?? 0);
+        if ($uid > 0 && $merId > 0) {
+            app()->make(\app\common\repositories\circle\CircleAgentProvisionRepository::class)
+                ->ensureUserMerchantLink($uid, $merId);
+        }
+        // 同步客服头像/昵称到 C 端用户，避免小程序「我的」仍是空头像
+        if ($uid > 0) {
+            $sync = [];
+            $avatar = trim((string)($data['avatar'] ?? ''));
+            $nickname = trim((string)($data['nickname'] ?? ''));
+            if ($avatar !== '') {
+                $sync['avatar'] = $avatar;
+            }
+            if ($nickname !== '') {
+                $userNickname = (string)\think\facade\Db::name('user')->where('uid', $uid)->value('nickname');
+                // 仅当用户还是默认手机号掩码昵称时，用店员昵称覆盖
+                if ($userNickname === '' || preg_match('/^\d{3}\*{4}\d{4}$/', $userNickname) || preg_match('/^1\d{10}$/', $userNickname)) {
+                    $sync['nickname'] = $nickname;
+                }
+            }
+            if ($sync) {
+                \think\facade\Db::name('user')->where('uid', $uid)->update($sync);
+            }
+        }
         // 返回操作成功的提示信息
         return app('json')->success('添加成功');
     }
@@ -195,6 +221,14 @@ class StoreService extends BaseController
         }
         // 更新客服信息
         $this->repository->update($id, $data);
+        // 同步客服头像到 C 端用户
+        $uid = (int)($data['uid'] ?? 0);
+        if ($uid > 0) {
+            $avatar = trim((string)($data['avatar'] ?? ''));
+            if ($avatar !== '') {
+                \think\facade\Db::name('user')->where('uid', $uid)->update(['avatar' => $avatar]);
+            }
+        }
         // 返回操作结果
         return app('json')->success('修改成功');
     }

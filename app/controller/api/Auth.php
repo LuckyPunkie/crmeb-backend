@@ -95,6 +95,9 @@ class Auth extends BaseController
         //            return app('json')->fail('用户已存在');
         //        }
         if (!$user) $this->loginFailure($account);
+        if (($user['user_type'] ?? '') === 'import') {
+            return app('json')->fail('该账号为系统导入账号，不可登录');
+        }
         if (!password_verify($pwd = (string)$this->request->param('password/s'), $user['pwd'])) $this->loginFailure($account);
         $auth = $this->parseAuthToken($auth_token);
         if ($auth && !$user['wechat_user_id']) {
@@ -152,6 +155,99 @@ class Auth extends BaseController
         $data = $user->toArray();
         // 显式带回 mer_id，避免字段缓存/隐藏导致前端误判非商家
         $data['mer_id'] = (int)($user['mer_id'] ?? 0);
+        // 店主/店员未设头像时兜底并回写，避免「我的」空白或默认灰头像
+        if (trim((string)($data['avatar'] ?? '')) === '') {
+            $uid = (int)$user['uid'];
+            $fallbackAvatar = '';
+            if ($data['mer_id'] > 0) {
+                $fallbackAvatar = (string)\think\facade\Db::name('merchant')
+                    ->where('mer_id', $data['mer_id'])
+                    ->value('mer_avatar');
+            }
+            if ($fallbackAvatar === '') {
+                $fallbackAvatar = (string)\think\facade\Db::name('store_service')
+                    ->where('uid', $uid)
+                    ->where('is_del', 0)
+                    ->where('avatar', '<>', '')
+                    ->order('service_id', 'desc')
+                    ->value('avatar');
+            }
+            if ($fallbackAvatar === '') {
+                $staffMerId = (int)\think\facade\Db::name('store_service')
+                    ->where('uid', $uid)
+                    ->where('is_del', 0)
+                    ->order('service_id', 'desc')
+                    ->value('mer_id');
+                if ($staffMerId > 0) {
+                    $fallbackAvatar = (string)\think\facade\Db::name('merchant')
+                        ->where('mer_id', $staffMerId)
+                        ->value('mer_avatar');
+                }
+            }
+            if ($fallbackAvatar !== '') {
+                $data['avatar'] = $fallbackAvatar;
+                \think\facade\Db::name('user')->where('uid', $uid)->update(['avatar' => $fallbackAvatar]);
+            }
+        }
+        // 救助站店员：mer_id 通常为 0，「我的」仍需展示认证标签与员工昵称
+        $uid = (int)$user['uid'];
+        $data['is_shelter_staff'] = false;
+        $data['staff_nickname'] = '';
+        $data['shelter_mer_id'] = 0;
+        $data['shelter_mer_name'] = '';
+        $data['is_certified_shelter'] = false;
+        $data['cert_label'] = '';
+        $fundRepo = app()->make(\app\common\repositories\animal_rescue\FundAuditRepository::class);
+        $staffMerId = 0;
+        $staffNickname = '';
+        $service = $data['service'] ?? null;
+        if (is_array($service) && (int)($service['mer_id'] ?? 0) > 0) {
+            $staffMerId = (int)$service['mer_id'];
+            $staffNickname = trim((string)($service['nickname'] ?? ''));
+        } else {
+            $staffRow = \think\facade\Db::name('store_service')
+                ->where('uid', $uid)
+                ->where('is_del', 0)
+                ->where('mer_id', '>', 0)
+                ->order('service_id', 'desc')
+                ->field('mer_id,nickname,avatar')
+                ->find();
+            if ($staffRow) {
+                $staffMerId = (int)$staffRow['mer_id'];
+                $staffNickname = trim((string)($staffRow['nickname'] ?? ''));
+            }
+        }
+        $ownerMerId = (int)($data['mer_id'] ?? 0);
+        $shelterMerId = $ownerMerId > 0 ? $ownerMerId : $staffMerId;
+        if ($staffMerId > 0 && $ownerMerId === 0) {
+            $data['is_shelter_staff'] = true;
+            $data['staff_nickname'] = $staffNickname;
+            $data['shelter_mer_id'] = $staffMerId;
+        }
+        if ($shelterMerId > 0) {
+            $mer = \think\facade\Db::name('merchant')
+                ->where('mer_id', $shelterMerId)
+                ->field('mer_id,mer_name,mer_avatar,shelter_status,type_id')
+                ->find();
+            if ($mer) {
+                $isShelter = $fundRepo->isShelterMerchant($shelterMerId);
+                $data['shelter_mer_id'] = $shelterMerId;
+                $data['shelter_mer_name'] = (string)($mer['mer_name'] ?? '');
+                $data['is_certified_shelter'] = $isShelter;
+                $data['cert_label'] = $isShelter ? '已认证救助站' : '已认证店铺';
+                if (trim((string)($data['avatar'] ?? '')) === '' && !empty($mer['mer_avatar'])) {
+                    $data['avatar'] = (string)$mer['mer_avatar'];
+                }
+            }
+        }
+        // 店员昵称回写：用户仍是手机号掩码时，用客服昵称展示（如「小丽」）
+        if ($staffNickname !== '') {
+            $nick = trim((string)($data['nickname'] ?? ''));
+            if ($nick === '' || preg_match('/^\d{3}\*{4}\d{4}$/', $nick) || preg_match('/^1\d{10}$/', $nick)) {
+                $data['nickname'] = $staffNickname;
+                \think\facade\Db::name('user')->where('uid', $uid)->update(['nickname' => $staffNickname]);
+            }
+        }
         /** @var RelevanceRepository $relevanceRepository */
         $relevanceRepository = app()->make(RelevanceRepository::class);
         $data['focus_count'] = $relevanceRepository->getFieldCount('left_id', (int)$user['uid'], RelevanceRepository::TYPE_COMMUNITY_FANS);

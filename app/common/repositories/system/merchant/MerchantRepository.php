@@ -240,7 +240,7 @@ class MerchantRepository extends BaseRepository
                           'merchantRegion', // 加载商户区域信息
                           'merchantBusiness' // 加载商户业务信息
                       ])
-                      ->field('sort,mer_id,mer_name,real_name,mer_phone,mer_address,mark,status,create_time,is_best,is_trader,type_id,category_id,copy_product_num,export_dump_num,is_margin,margin,ot_margin,mer_avatar,margin_remind_time,mer_banner,region_id,business_id') // 指定查询的字段
+                      ->field('sort,mer_id,mer_name,real_name,mer_phone,mer_address,mark,status,create_time,is_best,is_trader,type_id,category_id,copy_product_num,export_dump_num,is_margin,margin,ot_margin,mer_avatar,margin_remind_time,mer_banner,region_id,business_id,create_source') // 指定查询的字段
                       ->select(); // 执行查询
 
         // 返回商户总数和商户列表的数组
@@ -511,6 +511,11 @@ class MerchantRepository extends BaseRepository
                     ],
                 ]);
             }
+            // v2.1：新建商户若选救助站类型，同步认证字段
+            if (!empty($data['type_id'])) {
+                app()->make(\app\common\repositories\animal_rescue\FundAuditRepository::class)
+                    ->syncMerchantShelterFlag((int)$merchant->mer_id, (int)$data['type_id']);
+            }
             // 返回创建的商家对象
             return $merchant;
             });
@@ -722,6 +727,11 @@ class MerchantRepository extends BaseRepository
         $merchant['care'] = false; // 默认用户未关注商家
         $merchant['type_name'] = $merchant['mer_type_name']; // 将商家类型名称赋值给type_name字段
         $merchant['care_count'] = (int)$merchant['care_ficti'] + (int)$merchant['care_count'];
+        // v2.1 认证标识（C 端「我的」页标签等）
+        $isShelter = ((int)($merchant['shelter_status'] ?? 0) === 1)
+            || (($merchant['mer_type_name'] ?? '') === '救助站');
+        $merchant['is_certified_shelter'] = $isShelter;
+        $merchant['cert_label'] = $isShelter ? '已认证救助站' : '已认证店铺';
         // 如果提供了用户信息，则检查用户是否关注了该商家
         if ($userInfo)
             $merchant['care'] = $this->getCareByUser($id, $userInfo->uid);
@@ -852,6 +862,80 @@ class MerchantRepository extends BaseRepository
 
         // 调用QrcodeService类的方法获取二维码的URL，并对返回的URL进行整理，确保没有多余的斜杠
         return tidy_url(app()->make(QrcodeService::class)->getRoutineQrcodePath($name, 'pages/store/home/index', 'id=' . $merId,'routine/store'), 0);
+    }
+
+    /**
+     * 全平台统一收款码（普通方形 HTTPS 链接二维码）
+     * 内容：/payjump/{merId} → 中转页按 UA 分流（微信/支付宝/App）
+     */
+    public function scanPayQrcode($merId, bool $forceRefresh = false)
+    {
+        $siteUrl = rtrim((string)systemConfig('site_url'), '/');
+        $merId = intval($merId);
+        $name = md5('scan_pay_jump_v1_' . $merId) . '.jpg';
+        $codeUrl = $siteUrl . '/payjump/' . $merId;
+
+        $attachmentRepository = app()->make(AttachmentRepository::class);
+        $imageInfo = $attachmentRepository->getWhere(['attachment_name' => $name]);
+        if ($forceRefresh && $imageInfo) {
+            $imageInfo->delete();
+            $imageInfo = null;
+        }
+        if (isset($imageInfo['attachment_src']) && strstr($imageInfo['attachment_src'], 'http') !== false && curl_file_exist($imageInfo['attachment_src']) === false) {
+            $imageInfo->delete();
+            $imageInfo = null;
+        }
+        if (!$imageInfo) {
+            $imageInfo = app()->make(QrcodeService::class)->getQRCodePath($codeUrl, $name);
+            if (is_string($imageInfo)) {
+                throw new ValidateException('收款码生成失败');
+            }
+            $imageInfo['dir'] = tidy_url($imageInfo['dir'], null, $siteUrl);
+            $attachmentRepository->create(systemConfig('upload_type') ?: 1, -2, $merId, [
+                'attachment_category_id' => 0,
+                'attachment_name' => $imageInfo['name'],
+                'attachment_src' => $imageInfo['dir']
+            ]);
+            return $imageInfo['dir'];
+        }
+        return $imageInfo['attachment_src'];
+    }
+
+    /**
+     * 扫码买单用的微信小程序码（H5 内嵌，长按识别）
+     * 直接落到 nearby/detail 并带 sp=商家ID，避免中转页不存在/解析失败
+     */
+    public function scanPayRoutineQrcode($merId, bool $forceRefresh = false)
+    {
+        $merId = intval($merId);
+        $name = md5('scan_pay_rt_v5_' . $merId) . '.jpg';
+        $scene = 'sp=' . $merId;
+
+        $attachmentRepository = app()->make(AttachmentRepository::class);
+        $imageInfo = $attachmentRepository->getWhere(['attachment_name' => $name]);
+        if ($forceRefresh && $imageInfo) {
+            $imageInfo->delete();
+            $imageInfo = null;
+        }
+        if ($imageInfo && !empty($imageInfo['attachment_src'])) {
+            return tidy_url($imageInfo['attachment_src'], 0);
+        }
+
+        return tidy_url(
+            app()->make(QrcodeService::class)->getRoutineQrcodePath(
+                $name,
+                'pages/nearby/detail',
+                $scene,
+                'routine/scan_pay'
+            ),
+            0
+        );
+    }
+
+    /** @deprecated 兼容旧调用 */
+    public function scanPayAppQrcode($merId)
+    {
+        return $this->scanPayQrcode($merId);
     }
 
     /**

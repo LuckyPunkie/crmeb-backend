@@ -153,7 +153,8 @@ class PayService
         return compact('config');
     }
 
-    public function payWeixinApp(User $user)
+    /** APP 微信支付不依赖 openid，允许游客买单 */
+    public function payWeixinApp(?User $user = null)
     {
         $services = Payment::instance()->setAccessEnd(Payment::APP);
         if ($services->isV3Pay()) {
@@ -175,7 +176,7 @@ class PayService
         return compact('config');
     }
 
-    public function payAlipay(User $user)
+    public function payAlipay(?User $user = null)
     {
         return (new Pay('alipay'))->pay('alipay', $this->getAlipayOrder(), '');
     }
@@ -185,7 +186,8 @@ class PayService
         return (new Pay('alipay'))->pay('alipayQr', $this->getAlipayOrder(), '');
     }
 
-    public function payAlipayApp(User $user)
+    /** APP 支付宝支付允许游客买单 */
+    public function payAlipayApp(?User $user = null)
     {
         return (new Pay('alipay'))->pay('alipayApp', $this->getAlipayOrder(), '');
     }

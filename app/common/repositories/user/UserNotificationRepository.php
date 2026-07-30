@@ -74,6 +74,11 @@ class UserNotificationRepository extends BaseRepository
             $row['apply_id'] = (int)($parsed['apply_id'] ?? (
                 (($row['target_type'] ?? '') === 'recruit_apply') ? ($row['target_id'] ?? 0) : 0
             ));
+            $row['jump_url'] = (string)($parsed['jump'] ?? '');
+            $row['post_id'] = (int)($parsed['post_id'] ?? (
+                (($row['target_type'] ?? '') === 'animal_rescue') ? ($row['target_id'] ?? 0) : 0
+            ));
+            $row['post_type'] = (int)($parsed['post_type'] ?? 1);
 
             $rel = $relationMap[$fromUid] ?? ['key' => '', 'label' => ''];
             $row['relation_key'] = $rel['key'];

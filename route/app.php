@@ -24,4 +24,19 @@ Route::group('install',function(){
    route::get('loader','/swooleCompiler') ;
 })->prefix('Install');
 
+// 收钱吧同款：统一收款中转短链（微信「普通链接二维码」规则建议配此前缀）
+// 微信域名校验文件（须先于商户 ID 路由注册）
+Route::get('payjump/:verify_file', function (string $verify_file) {
+    if (!preg_match('/^[A-Za-z0-9_-]+\.txt$/', $verify_file)) {
+        abort(404);
+    }
+    $path = public_path() . 'payjump' . DIRECTORY_SEPARATOR . $verify_file;
+    if (!is_file($path)) {
+        abort(404);
+    }
+    return response(file_get_contents($path), 200, ['Content-Type' => 'text/plain; charset=utf-8']);
+})->pattern(['verify_file' => '[A-Za-z0-9_-]+\.txt']);
+
+Route::get('payjump/:mer_id', 'api.store.nearby.ScanPay/jump')->pattern(['mer_id' => '\d+']);
+
 

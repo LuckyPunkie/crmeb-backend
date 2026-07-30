@@ -27,7 +27,9 @@ class HttpCommonConfig implements ConfigHandlerInterface
      */
     protected array $config = [
         'verify' => false,
-        'timeout' => 5
+        'timeout' => 5,
+        // EasyWeChat AccessToken 依赖 http.base_uri；缺失会拼出 http://:/ 导致小程序码生成失败
+        'base_uri' => 'https://api.weixin.qq.com/',
     ];
 
     /**

@@ -115,11 +115,22 @@ class CommunityRedpacketRepository extends BaseRepository
         }
         if ((int)$order['pay_status'] !== 0) throw new ValidateException('订单已关闭');
 
-        $orderDao->update($order['id'], ['pay_type' => $payType ?: 'mock']);
+        $orderDao->update($order['id'], ['pay_type' => $payType ?: 'balance']);
 
-        // TEMP_MOCK_PAY: 暂不做预存冻结/真实扣款，模拟支付成功 → 钱记到平台、帖子上架
-        $this->paySuccess($orderNo);
-        return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$order['amount'], 'mock' => true];
+        if ($payType === 'balance') {
+            $this->payBalance($order, $uid);
+            return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$order['amount']];
+        }
+
+        if ($payType === 'mock') {
+            if (!systemConfig('pay_mock_open')) {
+                throw new ValidateException('未开启模拟支付');
+            }
+            $this->paySuccess($orderNo);
+            return ['paid' => true, 'order_no' => $orderNo, 'amount' => (float)$order['amount'], 'mock' => true];
+        }
+
+        throw new ValidateException('请选择正确的支付方式');
     }
 
     /**

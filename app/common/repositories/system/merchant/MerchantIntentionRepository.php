@@ -241,6 +241,7 @@ class MerchantIntentionRepository extends BaseRepository
                 'margin' => $margin['margin'] ?? 0,
                 'mark' => $margin['margin'] ?? 0,
                 'bind_uid' => (int)($intention['uid'] ?? 0),
+                'create_source' => MerchantImportRepository::SOURCE_USER,
             ];
             // 设置失败原因为空
             $data['fail_msg'] = '';

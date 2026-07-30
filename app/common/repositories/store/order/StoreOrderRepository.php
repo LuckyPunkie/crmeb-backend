@@ -74,7 +74,7 @@ class StoreOrderRepository extends BaseRepository
      * 支付类型 0余额 1 微信 2 小程序 3 微信 4 支付宝 5 支付宝 6 微信 7 线下支付 8 微信扫码枪支付 9 支付宝扫码枪支付
      * PAY_TYPE 里的数据位置不可随意变动，否则会影响到支付方式对应关系
      */
-    const PAY_TYPE = ['balance', 'weixin', 'routine', 'h5', 'alipay', 'alipayQr', 'weixinQr', 'offline', 'weixinBarCode', 'alipayBarCode'];
+    const PAY_TYPE = ['balance', 'weixin', 'routine', 'h5', 'alipay', 'alipayQr', 'weixinQr', 'offline', 'weixinBarCode', 'alipayBarCode', 'mock'];
     const PAY_TYPE_FILTEER = [0 => 0, 1 => '1,2,3,6,8', 2 => '4,5,9', 3 => 7];
     const TYPE_SN_ORDER = 'wxo';
     const TYPE_SN_PRESELL = 'wxp';
@@ -109,12 +109,17 @@ class StoreOrderRepository extends BaseRepository
      */
     public function pay(string $type, ?User $user, StoreGroupOrder $groupOrder, $return_url = '', $isApp = false, $combine = null, $authCode = '')
     {
-        // TEMP_MOCK_PAY: 开发期强制模拟支付成功（正式上线前务必删除）
-        $this->paySuccess($groupOrder);
-        return app('json')->status('success', '支付成功', [
-            'order_id' => $groupOrder['group_order_id'],
-            'pay_price' => $groupOrder['pay_price'],
-        ]);
+        // 模拟支付：后台「支付设置-基础配置」开启 pay_mock_open，且前端选择 mock
+        if ($type === 'mock') {
+            if (!systemConfig('pay_mock_open')) {
+                throw new ValidateException('未开启模拟支付');
+            }
+            $this->paySuccess($groupOrder);
+            return app('json')->status('success', '模拟支付成功', [
+                'order_id' => $groupOrder['group_order_id'],
+                'pay_price' => $groupOrder['pay_price'],
+            ]);
+        }
 
         // 如果支付方式为余额支付，则直接调用余额支付方法
         if ($type === 'balance') {
@@ -3671,7 +3676,7 @@ class StoreOrderRepository extends BaseRepository
     public function payConfigPresell($uid, $id = 0)
     {
         $user = app()->make(UserRepository::class)->get($uid);
-        $config = systemConfig(['recharge_switch', 'yue_pay_status', 'pay_weixin_open', 'alipay_open', 'offline_switch', 'auto_close_order_timer', 'balance_func_status']);
+        $config = systemConfig(['recharge_switch', 'yue_pay_status', 'pay_weixin_open', 'alipay_open', 'offline_switch', 'auto_close_order_timer', 'balance_func_status', 'pay_mock_open']);
         $offline_switch = $config['offline_switch'] == 0 ? 0 : 1;
         $presellOrderRepository = app()->make(PresellOrderRepository::class);
         $order = $presellOrderRepository->userOrder($uid, intval($id));
@@ -3685,6 +3690,7 @@ class StoreOrderRepository extends BaseRepository
             'pay_weixin_open' => $config['pay_weixin_open'],
             'alipay_open' => $config['alipay_open'],
             'yue_pay_status' => ($config['yue_pay_status'] && $config['balance_func_status']) ? 1 : 0,
+            'pay_mock_open' => (int)($config['pay_mock_open'] ?? 0),
             'invalid_time' => 0,
             'activity_type' => 2,
         ];
@@ -3695,7 +3701,7 @@ class StoreOrderRepository extends BaseRepository
     {
         $groupOrder =null;
         $user = app()->make(UserRepository::class)->get($uid);
-        $config = systemConfig(['recharge_switch', 'yue_pay_status', 'pay_weixin_open', 'alipay_open', 'offline_switch', 'auto_close_order_timer', 'balance_func_status']);
+        $config = systemConfig(['recharge_switch', 'yue_pay_status', 'pay_weixin_open', 'alipay_open', 'offline_switch', 'auto_close_order_timer', 'balance_func_status', 'pay_mock_open']);
         $timer = (int)($config['auto_close_order_timer'] ?: 15);
         $offline_switch = $config['offline_switch'] == 0 ? 0 : 1;
         if ($id) {
@@ -3721,6 +3727,7 @@ class StoreOrderRepository extends BaseRepository
             'pay_weixin_open' => $config['pay_weixin_open'],
             'alipay_open' => $config['alipay_open'],
             'yue_pay_status' => ($config['yue_pay_status'] && $config['balance_func_status']) ? 1 : 0,
+            'pay_mock_open' => (int)($config['pay_mock_open'] ?? 0),
             'invalid_time' => $groupOrder ? strtotime($groupOrder['create_time'] . "+ $timer minutes") : 0,
             'activity_type' => $groupOrder['activity_type'] ?? 0,
         ];

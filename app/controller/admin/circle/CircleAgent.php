@@ -139,6 +139,15 @@ class CircleAgent extends BaseController
         if (!$res) {
             return app('json')->fail('审核失败', $res);
         }
+        // 审核通过：自动绑区域、创建店铺、绑定 C 端用户（商户管理员后台本身无“设置区域/员工”入口）
+        if ((int)($data['status'] ?? 0) === 1) {
+            try {
+                app()->make(\app\common\repositories\circle\CircleAgentProvisionRepository::class)
+                    ->afterApproved((int)$id);
+            } catch (\Throwable $e) {
+                \think\facade\Log::error('商户入驻审核后开通失败: ' . $e->getMessage());
+            }
+        }
         return app('json')->success('审核成功');
     }
     /**

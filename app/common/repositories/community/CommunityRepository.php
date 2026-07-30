@@ -710,6 +710,13 @@ class CommunityRepository extends BaseRepository
         $data['user_label_name'] = $user->label_id ? app()->make(\app\common\repositories\user\UserLabelRepository::class)->labels($user->label_id) : [];
         $data['profile_items']  = $this->buildProfileItems($user, $uid);
 
+        $review = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
+            ->buildReviewDisplay(is_array($user) ? $user : $user->toArray());
+        $data['review_label'] = $review['review_label'];
+        $data['can_apply_urgent'] = $review['can_apply_urgent'];
+        $data['profile_review_status'] = $review['profile_review_status'];
+        $data['profile_review_urgent'] = $review['profile_review_urgent'];
+
         return $data;
     }
 

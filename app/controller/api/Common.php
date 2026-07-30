@@ -108,7 +108,7 @@ class Common extends BaseController
     public function config()
     {
         $config = Cache::remember('get_api_config',function(){
-            $config = systemConfig(['open_update_info', 'store_street_theme', 'is_phone_login', 'global_theme', 'integral_status', 'mer_location', 'alipay_open', 'hide_mer_status', 'mer_intention_open', 'share_info', 'share_title', 'share_pic', 'store_user_min_recharge', 'recharge_switch', 'balance_func_status', 'yue_pay_status', 'site_logo', 'routine_logo', 'site_name', 'login_logo', 'procudt_increase_status',  'member_status', 'copy_command_status', 'community_status', 'community_reply_status', 'community_app_switch',  'recommend_switch','member_interests_status', 'beian_sn', 'community_reply_auth', 'hot_ranking_switch', 'svip_switch_status', 'margin_ico', 'margin_ico_switch', 'first_avatar_switch', 'wechat_phone_switch', 'community_auth', 'promoter_type', 'register_popup_url','register_popup_pic','offline_switch','pay_weixin_open','integral_clear_time','integral_community_give','integral_community_give_limit','integral_freeze','integral_money','integral_order_rate','integral_status','integral_user_give','agent_application_form','business_application_form', 'business_background_image']);
+            $config = systemConfig(['open_update_info', 'store_street_theme', 'is_phone_login', 'global_theme', 'integral_status', 'mer_location', 'alipay_open', 'hide_mer_status', 'mer_intention_open', 'share_info', 'share_title', 'share_pic', 'store_user_min_recharge', 'recharge_switch', 'balance_func_status', 'yue_pay_status', 'site_logo', 'routine_logo', 'site_name', 'login_logo', 'procudt_increase_status',  'member_status', 'copy_command_status', 'community_status', 'community_reply_status', 'community_app_switch',  'recommend_switch','member_interests_status', 'beian_sn', 'community_reply_auth', 'hot_ranking_switch', 'svip_switch_status', 'margin_ico', 'margin_ico_switch', 'first_avatar_switch', 'wechat_phone_switch', 'community_auth', 'promoter_type', 'register_popup_url','register_popup_pic','offline_switch','pay_weixin_open','pay_mock_open','integral_clear_time','integral_community_give','integral_community_give_limit','integral_freeze','integral_money','integral_order_rate','integral_status','integral_user_give','agent_application_form','business_application_form', 'business_background_image']);
             $cache = app()->make(CacheRepository::class)->search(['copyright_status', 'copyright_context', 'copyright_image', 'sys_intention_agree']);
             if (!isset($cache['sys_intention_agree'])) {
                 $cache['sys_intention_agree'] = systemConfig('sys_intention_agree');
@@ -125,6 +125,7 @@ class Common extends BaseController
             $config['service_type'] = systemConfig(['sys_service_switch','customer_url','customer_corpId',
                 'sys_phone','customer_link']);
             $config['yue_pay_status'] = ($config['yue_pay_status'] && $config['balance_func_status']) ? 1: 0;
+            $config['pay_mock_open'] = (int)($config['pay_mock_open'] ?? 0);
             $config['extract_switch'] = systemConfig(['withdraw_type','extract_switch','sys_extension_type']);
             if (empty($config['extract_switch']['withdraw_type'])) $config['extract_switch']['withdraw_type'] = ['4'];
 

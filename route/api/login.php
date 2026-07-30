@@ -206,6 +206,8 @@ Route::group(function () {
         // 资质认证
         Route::get('certification', 'UserCertification/list');
         Route::post('certification/save', 'UserCertification/save');
+        Route::get('review_status', 'UserCertification/reviewStatus');
+        Route::post('review_urgent/:uid', 'UserCertification/applyUrgent');
 
     })->prefix('api.user.');
 
@@ -329,6 +331,9 @@ Route::group(function () {
         Route::get('/show/:id', 'Community/show');
         //用户页
         Route::get('/user/info/:id', 'Community/userInfo');
+        // 申请加急复审 / 查询审核状态（无需登录）
+        Route::post('/user/review_urgent/:uid', 'api.user.UserCertification/applyUrgent');
+        Route::get('/user/review_status/:uid', 'api.user.UserCertification/reviewStatusPublic');
         //用户的文章
         Route::get('/user/community/:id', 'Community/userCommunitylst');
         //用户的视频

@@ -14,17 +14,25 @@ namespace app\controller\api\store\nearby;
 use think\App;
 use crmeb\basic\BaseController;
 use crmeb\services\PayService;
+use app\common\model\user\User;
 use app\common\repositories\store\nearby\NearbyShopBillOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\validate\api\nearby\NearbyBillValidate;
 
 /**
  * 附近好店买单 - C端API控制器
+ * 支持游客扫码买单（uid=0）；余额 / 小程序 JSAPI 等仍需登录
  */
 class NearbyBill extends BaseController
 {
     protected $repository;
     protected $merchantRepository;
+
+    /** 游客可用的支付方式（无需账号） */
+    protected $guestPayTypes = ['mock', 'weixinApp', 'alipayApp'];
+
+    /** 必须登录的支付方式 */
+    protected $loginRequiredPayTypes = ['balance', 'routine', 'weixin', 'alipay'];
 
     public function __construct(App $app, NearbyShopBillOrderRepository $repository, MerchantRepository $merchantRepository)
     {
@@ -48,24 +56,39 @@ class NearbyBill extends BaseController
 
         $validate->check($data);
 
+        $uid = $this->currentUid();
+        $user = $this->currentUser();
+
+        if (in_array($data['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0) {
+            return app('json')->fail('请先登录后再使用该支付方式');
+        }
+
         // 校验商户是否存在且在附近好店展示
         $merchant = $this->merchantRepository->get((int)$data['mer_id']);
         if (!$merchant || $merchant['is_del'] || $merchant['status'] != 1) {
             return app('json')->fail('商家不存在或已下架');
         }
 
-        // 创建订单
-        $data['uid'] = $this->request->uid();
+        // 创建订单（游客 uid=0）
+        $data['uid'] = $uid;
         $order = $this->repository->createBillOrder($data);
 
-        // 模拟支付（开发阶段）：直接标记已支付，正式上线前改回 routine
+        // 模拟支付：需后台开启 pay_mock_open
         if ($data['pay_type'] === 'mock') {
+            if (!systemConfig('pay_mock_open')) {
+                return app('json')->fail('未开启模拟支付');
+            }
             $this->repository->paySuccess($order['order_sn'], 'mock');
             return app('json')->success([
                 'order_sn'  => $order['order_sn'],
                 'pay_price' => $order['pay_price'],
                 'mock_paid' => true,
+                'guest'     => $uid <= 0,
             ]);
+        }
+
+        if ($data['pay_type'] === 'balance') {
+            return app('json')->fail('余额支付暂未开通，请使用微信支付');
         }
 
         // 调起支付
@@ -78,13 +101,13 @@ class NearbyBill extends BaseController
                 'attach'    => 'bill_pay',
             ], 'bill');
 
-            $user = $this->request->userInfo();
             $payResult = $payService->pay($user);
 
             return app('json')->success([
                 'order_sn' => $order['order_sn'],
                 'pay_price' => $order['pay_price'],
                 'config' => $payResult['config'] ?? $payResult,
+                'guest' => $uid <= 0,
             ]);
         } catch (\Exception $e) {
             return app('json')->fail('支付配置失败: ' . $e->getMessage());
@@ -106,8 +129,15 @@ class NearbyBill extends BaseController
             return app('json')->fail('订单已支付');
         }
 
-        if ($order['uid'] != $this->request->uid()) {
+        $uid = $this->currentUid();
+        $orderUid = (int)($order['uid'] ?? 0);
+        // 登录用户订单：仅本人可付；游客订单：凭订单号即可（订单号足够难猜）
+        if ($orderUid > 0 && $orderUid !== $uid) {
             return app('json')->fail('无权操作该订单');
+        }
+
+        if (in_array($order['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0) {
+            return app('json')->fail('请先登录后再支付');
         }
 
         try {
@@ -118,7 +148,7 @@ class NearbyBill extends BaseController
                 'attach'    => 'bill_pay',
             ], 'bill');
 
-            $user = $this->request->userInfo();
+            $user = $this->currentUser();
             $payResult = $payService->pay($user);
 
             return app('json')->success([
@@ -129,5 +159,31 @@ class NearbyBill extends BaseController
         } catch (\Exception $e) {
             return app('json')->fail('支付配置失败: ' . $e->getMessage());
         }
+    }
+
+    protected function currentUid(): int
+    {
+        try {
+            if (method_exists($this->request, 'isLogin') && $this->request->isLogin()) {
+                return (int)$this->request->uid();
+            }
+        } catch (\Throwable $e) {
+        }
+        return 0;
+    }
+
+    /**
+     * @return User|null
+     */
+    protected function currentUser(): ?User
+    {
+        try {
+            if (method_exists($this->request, 'isLogin') && $this->request->isLogin()) {
+                $user = $this->request->userInfo();
+                return $user instanceof User ? $user : null;
+            }
+        } catch (\Throwable $e) {
+        }
+        return null;
     }
 }

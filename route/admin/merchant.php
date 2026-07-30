@@ -172,6 +172,12 @@ Route::group(function () {
         Route::post('create', '.Merchant/create')->name('systemMerchantCreate')->option([
             '_alias' => '店铺添加',
             ]);
+        Route::get('import/template', '.Merchant/importTemplate')->name('systemMerchantImportTemplate')->option([
+            '_alias' => '商家导入模版',
+        ]);
+        Route::post('import', '.Merchant/import')->name('systemMerchantImport')->option([
+            '_alias' => '商家批量导入',
+        ]);
         Route::get('update/form/:id', '.Merchant/updateForm')->name('systemMerchantUpdateForm')->option([
             '_alias' => '店铺编辑表单',
             '_auth' => false,

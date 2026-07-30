@@ -75,8 +75,44 @@ class Merchant extends BaseController
     public function lst()
     {
         [$page, $limit] = $this->getPage();
-        $where = $this->request->params(['keyword', 'date', 'status', 'statusTag', 'is_trader', 'category_id', 'type_id', ['order', 'create_time'], 'is_best','offline_switch','region_id', 'business_id','mer_state']);
+        $where = $this->request->params(['keyword', 'date', 'status', 'statusTag', 'is_trader', 'category_id', 'type_id', ['order', 'create_time'], 'is_best','offline_switch','region_id', 'business_id','mer_state', 'create_source']);
         return app('json')->success($this->repository->lst($where, $page, $limit));
+    }
+
+    /**
+     * 下载商家导入模版
+     * GET /sys/system/merchant/import/template
+     */
+    public function importTemplate()
+    {
+        try {
+            $path = app()->make(\app\common\repositories\system\merchant\MerchantImportRepository::class)->buildTemplateFile();
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        // Swoole 下框架 download() 走 write(8192) 分块，第二块常失败导致 xlsx 截断损坏
+        return \think\swoole\helper\download($path, 'merchant_import_template.xlsx')
+            ->header(['Cache-Control' => 'no-store, no-cache, must-revalidate', 'Pragma' => 'no-cache']);
+    }
+
+    /**
+     * 批量导入商家
+     * POST /sys/system/merchant/import
+     */
+    public function import()
+    {
+        $file = $this->request->file('file');
+        if (!$file) {
+            return app('json')->fail('请上传 Excel 文件');
+        }
+        $path = $file->getRealPath() ?: $file->getPathname();
+        try {
+            $result = app()->make(\app\common\repositories\system\merchant\MerchantImportRepository::class)
+                ->import($path, $this->request->adminInfo() ? $this->request->adminInfo()->toArray() : []);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($result);
     }
 
 
@@ -102,6 +138,7 @@ class Merchant extends BaseController
     {
         $data = $this->checkParam($validate);
         $data['admin_info'] = $this->request->adminInfo();
+        $data['create_source'] = \app\common\repositories\system\merchant\MerchantImportRepository::SOURCE_ADMIN;
         $this->repository->createMerchant($data);
         return app('json')->success('添加成功');
     }
@@ -179,6 +216,11 @@ class Merchant extends BaseController
             }
 
             $this->repository->update($id, $data);
+            // v2.1：同步救助站冗余字段
+            if (isset($data['type_id'])) {
+                app()->make(\app\common\repositories\animal_rescue\FundAuditRepository::class)
+                    ->syncMerchantShelterFlag((int)$id, (int)$data['type_id']);
+            }
         });
 
         try{

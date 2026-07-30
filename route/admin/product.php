@@ -262,6 +262,12 @@ Route::group(function () {
         Route::delete('delete/:id', '/delete')->name('systemProductReplyDelete')->option([
             '_alias' => '删除',
             ]);
+        Route::get('import/template', '/importTemplate')->name('systemProductReplyImportTemplate')->option([
+            '_alias' => '下载评价导入模版',
+        ]);
+        Route::post('import', '/import')->name('systemProductReplyImport')->option([
+            '_alias' => '批量导入评价',
+        ]);
     })->prefix('admin.store.StoreProductReply')->option([
         '_path' => '/product/comment',
         '_auth' => true,

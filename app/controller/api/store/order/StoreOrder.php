@@ -27,6 +27,7 @@ use app\common\repositories\store\order\StoreOrderCreateRepository;
 use app\common\repositories\store\order\StoreOrderReceiptRepository;
 use app\common\repositories\delivery\DeliveryConfigRepository;
 use app\common\repositories\delivery\DeliveryStationRepository;
+use think\facade\Log;
 
 /**
  * Class StoreOrder
@@ -266,28 +267,43 @@ class StoreOrder extends BaseController
 
         $this->repository->changePayType($groupOrder, array_search($type, StoreOrderRepository::PAY_TYPE));
 
-        // TEMP_MOCK_PAY: 开发期强制模拟支付成功（正式上线前务必删除）
-        // 注意：本站走 Swoole，改 PHP 后必须重启 swoole 进程才生效
-        try {
-            $this->repository->paySuccess($groupOrder);
-        } catch (\Throwable $e) {
-            // 已支付等场景忽略，仍返回成功方便联调
-        }
-        $isBlindbox = false;
-        try {
-            $orders = $this->repository->search(['group_order_id' => $groupOrder['group_order_id']])->select();
-            foreach ($orders as $order) {
-                if (!empty($order['is_blindbox_order'])) {
-                    $isBlindbox = true;
-                    break;
+        // 模拟支付（后台支付设置 → 基础配置 → 模拟支付开关）
+        // 走完整 paySuccess：订单已付、财务流水、商户冻结款/余额均入账
+        if ($type === 'mock') {
+            if (!systemConfig('pay_mock_open')) {
+                return app('json')->fail('未开启模拟支付');
+            }
+            try {
+                $txId = 'MOCK' . date('YmdHis') . $groupOrder['group_order_id'];
+                $groupOrder->transaction_id = $txId;
+                foreach ($groupOrder->orderList as $order) {
+                    $order->transaction_id = $txId;
+                }
+                $this->repository->paySuccess($groupOrder);
+            } catch (\Throwable $e) {
+                // 已支付等场景忽略；其他异常抛出
+                if (strpos($e->getMessage(), '已支付') === false && strpos($e->getMessage(), '不存在') === false) {
+                    Log::error('mock paySuccess error: ' . $e->getMessage());
+                    return app('json')->fail('模拟支付入账失败：' . $e->getMessage());
                 }
             }
-        } catch (\Throwable $e) {}
-        return app('json')->status('success', '模拟支付成功', [
-            'order_id' => $groupOrder['group_order_id'],
-            'pay_price' => $groupOrder['pay_price'],
-            'is_blindbox' => $isBlindbox ? 1 : 0,
-        ]);
+            $isBlindbox = false;
+            try {
+                $orders = $this->repository->search(['group_order_id' => $groupOrder['group_order_id']])->select();
+                foreach ($orders as $order) {
+                    if (!empty($order['is_blindbox_order'])) {
+                        $isBlindbox = true;
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {}
+            return app('json')->status('success', '模拟支付成功，资金已入账', [
+                'order_id' => $groupOrder['group_order_id'],
+                'pay_price' => $groupOrder['pay_price'],
+                'is_blindbox' => $isBlindbox ? 1 : 0,
+                'entered' => true,
+            ]);
+        }
 
         if ($groupOrder['pay_price'] == 0) {
             $this->repository->paySuccess($groupOrder);

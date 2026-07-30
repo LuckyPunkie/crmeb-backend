@@ -164,6 +164,41 @@ class StoreProductReply extends BaseController
     }
 
     /**
+     * 下载评价批量导入模版
+     * GET /sys/product/reply/import/template
+     */
+    public function importTemplate()
+    {
+        try {
+            $path = app()->make(\app\common\repositories\store\product\ProductReplyImportRepository::class)->buildTemplateFile();
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        // Swoole 下框架 download() 走 write(8192) 分块，第二块常失败导致 xlsx 截断损坏
+        return \think\swoole\helper\download($path, 'product_reply_import_template.xlsx')
+            ->header(['Cache-Control' => 'no-store, no-cache, must-revalidate', 'Pragma' => 'no-cache']);
+    }
+
+    /**
+     * 批量导入商品评价
+     * POST /sys/product/reply/import
+     */
+    public function import()
+    {
+        $file = $this->request->file('file');
+        if (!$file) {
+            return app('json')->fail('请上传 Excel 文件');
+        }
+        $path = $file->getRealPath() ?: $file->getPathname();
+        try {
+            $result = app()->make(\app\common\repositories\store\product\ProductReplyImportRepository::class)->import($path);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($result);
+    }
+
+    /**
      * 排序
      * @param $id
      * @return \think\response\Json

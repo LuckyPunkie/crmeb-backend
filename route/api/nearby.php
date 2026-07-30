@@ -14,6 +14,9 @@
 use think\facade\Route;
 use app\common\middleware\UserTokenMiddleware;
 
+// 统一收款码落地页（无需登录）
+Route::get('scan_pay/:mer_id', 'api.store.nearby.ScanPay/jump');
+
 // 非强制登录（浏览类接口）
 Route::group(function () {
     // 商家列表
@@ -34,8 +37,8 @@ Route::group(function () {
     Route::get('nearby/search/lst', 'api.store.nearby.NearbySearch/lst');
 })->middleware(UserTokenMiddleware::class, false);
 
-// 强制登录（交易类接口）
+// 扫码买单：允许游客（uid=0）；余额支付在控制器内校验登录
 Route::group(function () {
     Route::post('nearby/bill/create', 'api.store.nearby.NearbyBill/create');
     Route::post('nearby/bill/pay/:order_sn', 'api.store.nearby.NearbyBill/pay');
-})->middleware(UserTokenMiddleware::class, true);
+})->middleware(UserTokenMiddleware::class, false);

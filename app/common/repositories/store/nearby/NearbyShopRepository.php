@@ -306,6 +306,18 @@ class NearbyShopRepository extends BaseRepository
             $data['replies'] = [];
         }
 
+        // 企业微信顾客群（一期 branch_id=0 总店；分店上线后按当前门店 ID 查询）
+        try {
+            $branchId = (int)($data['branch_id'] ?? $where['branch_id'] ?? 0);
+            $weworkRepo = app()->make(\app\common\repositories\system\merchant\MerchantWeworkGroupRepository::class);
+            $data['wework'] = $weworkRepo->toApiPayload(
+                $weworkRepo->getByMerBranch((int)$data['mer_id'], $branchId)
+            );
+        } catch (\Throwable $e) {
+            \think\facade\Log::warning('NearbyShop getDetail wework failed: ' . $e->getMessage());
+            $data['wework'] = ['has_group' => false];
+        }
+
         return $data;
     }
 

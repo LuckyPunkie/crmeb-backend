@@ -26,6 +26,9 @@ Route::group(function () {
     Route::post('nearby/shop/config', '/saveConfig')
         ->name('merchantNearbyShopConfigSave')
         ->option(['_alias' => '保存设置']);
+    Route::get('nearby/shop/scan_pay_qrcode', '/scanPayQrcode')
+        ->name('merchantNearbyScanPayQrcode')
+        ->option(['_alias' => '扫码买单收款码', '_auth' => false]);
 
     // 分类树（商户后台表单下拉，走 /mer 同源避免 CORS）
     Route::get('nearby/category/tree', '/categoryTree')

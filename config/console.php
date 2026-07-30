@@ -49,5 +49,11 @@ return [
         'product:import' => 'app\command\ProductImport',
         //导入SQL文件
         'sql:import' => 'app\command\ImportSql',
+        //保证金自动解冻
+        'animal_rescue:deposit_thaw' => 'app\command\AnimalRescueDepositThaw',
+        //筹款到期检查
+        'animal_rescue:expire_check' => 'app\command\AnimalRescueExpireCheck',
+        //救助站月捐结算
+        'animal_rescue:monthly_settlement' => 'app\command\AnimalRescueMonthlySettlement',
     ],
 ];

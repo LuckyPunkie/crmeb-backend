@@ -87,6 +87,24 @@ class UserMerchantRepository extends BaseRepository
     }
 
     /**
+     * 添加客服场景：按手机号查全平台用户，并自动写入本店客户关联后返回
+     */
+    public function searchPlatformUserByPhoneForStaff(int $merId, string $phone, int $page, int $limit): array
+    {
+        $user = Db::name('user')->where('phone', $phone)->where('status', 1)->find();
+        if (!$user) {
+            return ['count' => 0, 'list' => []];
+        }
+        $uid = (int)$user['uid'];
+        $exists = $this->dao->getWhere(['uid' => $uid, 'mer_id' => $merId]);
+        if (!$exists) {
+            $this->create($uid, $merId);
+        }
+        $where = ['mer_id' => $merId, 'keyword' => $phone];
+        return $this->getList($where, $page, $limit);
+    }
+
+    /**
      * 创建一个新的记录。
      *
      * 本函数用于通过提供的用户ID和商家ID创建一个新的数据记录。它不涉及具体的业务逻辑处理，仅负责数据的插入操作。

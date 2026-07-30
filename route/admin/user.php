@@ -254,6 +254,12 @@ Route::group(function () {
         Route::post('excel', '/excel')->name('systemUserExcel')->option([
             '_alias' => '用户信息导出',
         ]);
+        Route::get('bot/template', '/botImportTemplate')->name('systemUserBotImportTemplate')->option([
+            '_alias' => '机器人用户导入模版',
+        ]);
+        Route::post('bot/import', '/botImport')->name('systemUserBotImport')->option([
+            '_alias' => '机器人用户批量导入',
+        ]);
         Route::get('member_select_list', '/getMemberLevelSelectList')->name('getMemberLevelSelectList')->option([
             '_alias' => '获取用户的等级下拉列表',
             '_auth' => false,
@@ -341,6 +347,15 @@ Route::group(function () {
     Route::group('user/certification', function () {
         Route::get('lst', '/lst')->name('adminUserCertificationLst')->option([
             '_alias' => '认证列表',
+        ]);
+        Route::get('user_lst', '/userLst')->name('adminUserCertificationUserLst')->option([
+            '_alias' => '用户级认证列表',
+        ]);
+        Route::get('user_detail/:uid', '/userDetail')->name('adminUserCertificationUserDetail')->option([
+            '_alias' => '用户级认证详情',
+        ]);
+        Route::post('user_review/:uid', '/userReview')->name('adminUserCertificationUserReview')->option([
+            '_alias' => '用户级认证审核',
         ]);
         Route::post('review/:id', '/review')->name('adminUserCertificationReview')->option([
             '_alias' => '认证审核',
