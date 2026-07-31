@@ -59,11 +59,17 @@ class UserCertificationRepository extends BaseRepository
      */
     public function markAiPassed(int $uid): void
     {
-        $user = Db::name('user')->where('uid', $uid)->field('uid')->find();
+        $user = Db::name('user')->where('uid', $uid)
+            ->field('uid,profile_review_status')
+            ->find();
         if (!$user) {
             return;
         }
-        // 提交/重提后视为 AI 通过，重新进入人工队列；加急需重新申请
+        $status = (int)($user['profile_review_status'] ?? 0);
+        // 已人工通过不降级；其余（无/AI通过/驳回重提）进入 AI 通过并重新排队
+        if ($status === self::REVIEW_MANUAL_PASS) {
+            return;
+        }
         Db::name('user')->where('uid', $uid)->update([
             'profile_review_status' => self::REVIEW_AI_PASS,
             'profile_review_time' => time(),
@@ -117,8 +123,9 @@ class UserCertificationRepository extends BaseRepository
                 $label = '人工审核中';
             } else {
                 $label = 'AI审核通过';
-                $canApplyUrgent = true;
             }
+            // 已加急时按钮仍展示，文案由前端改为「已加急」并禁用
+            $canApplyUrgent = !$urgent;
         }
         return [
             'profile_review_status' => $status,
@@ -143,7 +150,14 @@ class UserCertificationRepository extends BaseRepository
         } else {
             $this->removeLabel((int)$record->uid, $record->type);
         }
-        $this->refreshUserReviewStatus((int)$record->uid);
+        $uid = (int)$record->uid;
+        $this->refreshUserReviewStatus($uid);
+        $this->notifyAfterManualReview($uid, [[
+            'id' => $id,
+            'status' => $status,
+            'remark' => $remark,
+            'type' => $record->type,
+        ]]);
     }
 
     /**
@@ -155,6 +169,7 @@ class UserCertificationRepository extends BaseRepository
         if (!$items) {
             throw new \InvalidArgumentException('请提交审核结果');
         }
+        $notifyItems = [];
         foreach ($items as $item) {
             $id = (int)($item['id'] ?? 0);
             $status = (int)($item['status'] ?? 0);
@@ -172,16 +187,93 @@ class UserCertificationRepository extends BaseRepository
             } else {
                 $this->removeLabel($uid, $record->type);
             }
+            $notifyItems[] = [
+                'id' => $id,
+                'status' => $status,
+                'remark' => $remark,
+                'type' => $record->type,
+            ];
         }
         $this->refreshUserReviewStatus($uid);
+        $this->notifyAfterManualReview($uid, $notifyItems);
     }
 
     /**
-     * 根据资质汇总刷新用户级审核状态：任一条驳回=未过；全部通过=人工复审
+     * 人工审核结果通知用户（通过 / 不通过）
+     */
+    private function notifyAfterManualReview(int $uid, array $items): void
+    {
+        if ($uid <= 0 || !$items) {
+            return;
+        }
+        $passed = [];
+        $rejected = [];
+        foreach ($items as $item) {
+            $status = (int)($item['status'] ?? 0);
+            $type = (string)($item['type'] ?? '');
+            $remark = trim((string)($item['remark'] ?? ''));
+            $typeName = self::LABEL_MAP[$type] ?? ($type !== '' ? $type : '资质');
+            if ($status === 1) {
+                $passed[] = $typeName;
+            } elseif ($status === 2) {
+                $rejected[] = $remark !== '' ? ($typeName . '（' . mb_substr($remark, 0, 40) . '）') : $typeName;
+            }
+        }
+        if (!$passed && !$rejected) {
+            return;
+        }
+
+        if ($rejected) {
+            // 汇总当前各类最新一条里仍为驳回的项
+            $allRejected = [];
+            foreach ($this->latestCertsByType($uid) as $c) {
+                if ((int)($c['status'] ?? 0) !== 2) {
+                    continue;
+                }
+                $typeName = self::LABEL_MAP[$c['type'] ?? ''] ?? (($c['type'] ?? '') ?: '资质');
+                $rm = trim((string)($c['remark'] ?? ''));
+                $allRejected[] = $rm !== '' ? ($typeName . '（' . mb_substr($rm, 0, 40) . '）') : $typeName;
+            }
+            $title = '资质审核未通过';
+            $text = '您有' . count($allRejected ?: $rejected) . '项资质未通过：'
+                . implode('；', $allRejected ?: $rejected)
+                . '。请查看详情并修改后重新提交。';
+        } else {
+            $certs = $this->latestCertsByType($uid);
+            $allPass = $certs && !array_filter($certs, static function ($c) {
+                return (int)($c['status'] ?? 0) !== 1;
+            });
+            if ($allPass) {
+                $title = '资质审核已通过';
+                $text = '恭喜，您的资质已通过人工复审。';
+            } else {
+                $title = '资质审核通过';
+                $text = '您的' . implode('、', $passed) . '已通过审核。';
+            }
+        }
+
+        try {
+            app()->make(UserNotificationRepository::class)->createSystemMessage(
+                $uid,
+                $title,
+                json_encode([
+                    'text' => $text,
+                    'jump' => '/pages/message/cert_result',
+                ], JSON_UNESCAPED_UNICODE)
+            );
+        } catch (\Throwable $e) {
+            // 通知失败不影响审核主流程
+        }
+    }
+
+    /**
+     * 根据资质汇总刷新用户级审核状态（仅看每类最新一条）：
+     * - 全部通过 → 人工复审通过
+     * - 任一条驳回 → 回到 AI 审核通过（可再次申请加急），驳回项需用户改完重提
      */
     public function refreshUserReviewStatus(int $uid): void
     {
-        $certs = $this->dao->getByUid($uid);
+        $certs = $this->latestCertsByType($uid);
         if (!$certs) {
             return;
         }
@@ -196,17 +288,40 @@ class UserCertificationRepository extends BaseRepository
                 $allPass = false;
             }
         }
-        if ($hasReject) {
-            Db::name('user')->where('uid', $uid)->update([
-                'profile_review_status' => self::REVIEW_MANUAL_REJECT,
-                'profile_review_urgent' => 0,
-            ]);
-        } elseif ($allPass) {
+        if ($allPass) {
             Db::name('user')->where('uid', $uid)->update([
                 'profile_review_status' => self::REVIEW_MANUAL_PASS,
                 'profile_review_urgent' => 0,
+                'profile_review_urgent_time' => 0,
+            ]);
+            return;
+        }
+        if ($hasReject) {
+            // 驳回后回到 AI 通过队列，可再次加急；单条驳回状态仍保留在资质表
+            Db::name('user')->where('uid', $uid)->update([
+                'profile_review_status' => self::REVIEW_AI_PASS,
+                'profile_review_time' => time(),
+                'profile_review_urgent' => 0,
+                'profile_review_urgent_time' => 0,
             ]);
         }
+    }
+
+    /**
+     * 每类资质取最新一条
+     */
+    private function latestCertsByType(int $uid): array
+    {
+        $all = $this->dao->getByUid($uid);
+        $map = [];
+        foreach ($all as $c) {
+            $type = (string)($c['type'] ?? '');
+            if ($type === '' || isset($map[$type])) {
+                continue;
+            }
+            $map[$type] = $c;
+        }
+        return array_values($map);
     }
 
     /**
@@ -277,11 +392,17 @@ class UserCertificationRepository extends BaseRepository
         }
         $profile = Db::name('user_profile')->where('uid', $uid)->find() ?: [];
         $certs = $this->dao->getByUid($uid);
+        $seen = [];
         foreach ($certs as &$c) {
             $images = $c['images'] ?? '';
             if (is_string($images)) {
                 $decoded = json_decode($images, true);
                 $c['images'] = is_array($decoded) ? $decoded : ($images ? [$images] : []);
+            }
+            $type = (string)($c['type'] ?? '');
+            $c['is_latest'] = $type !== '' && !isset($seen[$type]);
+            if ($c['is_latest']) {
+                $seen[$type] = true;
             }
         }
         unset($c);

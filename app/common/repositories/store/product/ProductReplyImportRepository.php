@@ -271,18 +271,18 @@ class ProductReplyImportRepository extends BaseRepository
 
         // 昵称 & 头像：有填用填的，否则从机器人用户随机取
         $nickname = $data['nickname'] ?? '';
-        $avatar   = $data['avatar'] ?? '';
+        $avatar   = strip_image_watermark_url((string)($data['avatar'] ?? ''));
         if (($nickname === '' || $avatar === '') && $botUsers) {
             $bot = $botUsers[array_rand($botUsers)];
             if ($nickname === '') $nickname = $bot['nickname'];
-            if ($avatar === '')   $avatar   = $bot['avatar'];
+            if ($avatar === '')   $avatar   = strip_image_watermark_url((string)($bot['avatar'] ?? ''));
         }
         if ($nickname === '') {
             $nickname = '买家' . mt_rand(1000, 9999);
         }
 
         // 配图：多个 URL 逗号分隔，最多保留 6 张
-        $picsRaw = $data['pics'] ?? '';
+        $picsRaw = strip_image_watermark_url((string)($data['pics'] ?? ''));
         $picsList = [];
         if ($picsRaw !== '') {
             $picsList = array_filter(array_map('trim', explode(',', $picsRaw)));

@@ -14,24 +14,54 @@ class UserCertificationDao extends BaseDao
 
     public function getByUid(int $uid): array
     {
-        return UserCertification::getInstance()->where('uid', $uid)->select()->toArray();
+        return UserCertification::getInstance()
+            ->where('uid', $uid)
+            ->order('create_time', 'desc')
+            ->order('id', 'desc')
+            ->select()
+            ->toArray();
     }
 
+    /**
+     * 取某类型最新一条
+     */
     public function getByUidType(int $uid, string $type): ?UserCertification
     {
-        return UserCertification::getInstance()->where('uid', $uid)->where('type', $type)->find();
+        return UserCertification::getInstance()
+            ->where('uid', $uid)
+            ->where('type', $type)
+            ->order('create_time', 'desc')
+            ->order('id', 'desc')
+            ->find();
     }
 
+    /**
+     * 提交/重提：
+     * - 无记录：新建
+     * - 最新一条为驳回(status=2)：新建（保留驳回历史）
+     * - 其他：覆盖最新一条
+     */
     public function upsert(int $uid, string $type, array $data): void
     {
         $record = $this->getByUidType($uid, $type);
-        if ($record) {
-            UserCertification::getDB()->where('uid', $uid)->where('type', $type)->update($data);
-        } else {
-            $data['uid']  = $uid;
+        $now = time();
+        if (!$record) {
+            $data['uid'] = $uid;
             $data['type'] = $type;
+            $data['create_time'] = $data['create_time'] ?? $now;
             $this->create($data);
+            return;
         }
+        // 驳回后重提：保留旧驳回记录，新开一条
+        if ((int)$record->status === 2) {
+            $data['uid'] = $uid;
+            $data['type'] = $type;
+            $data['create_time'] = $now;
+            $this->create($data);
+            return;
+        }
+        $data['update_time'] = $now;
+        UserCertification::getDB()->where('id', (int)$record->id)->update($data);
     }
 
     public function getById(int $id): ?UserCertification

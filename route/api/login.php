@@ -331,9 +331,6 @@ Route::group(function () {
         Route::get('/show/:id', 'Community/show');
         //用户页
         Route::get('/user/info/:id', 'Community/userInfo');
-        // 申请加急复审 / 查询审核状态（无需登录）
-        Route::post('/user/review_urgent/:uid', 'api.user.UserCertification/applyUrgent');
-        Route::get('/user/review_status/:uid', 'api.user.UserCertification/reviewStatusPublic');
         //用户的文章
         Route::get('/user/community/:id', 'Community/userCommunitylst');
         //用户的视频
@@ -345,6 +342,9 @@ Route::group(function () {
         Route::get('/focuslst', 'Community/focuslst');
         Route::get('qrcode/:id', 'Community/qrcode');
     })->prefix('api.community.');
+    // 申请加急复审 / 查询审核状态（无需登录；勿挂在 community 前缀下，否则控制器路径会被拼错）
+    Route::post('community/user/review_urgent/:uid', 'api.user.UserCertification/applyUrgent');
+    Route::get('community/user/review_status/:uid', 'api.user.UserCertification/reviewStatusPublic');
     //专题
     Route::group('activity', function () {
         Route::get('lst/:id', 'api.Common/activityLst');

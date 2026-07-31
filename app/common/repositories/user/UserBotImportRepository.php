@@ -262,7 +262,7 @@ class UserBotImportRepository extends BaseRepository
     {
         $account = trim((string)($data['account'] ?? ''));
         $nickname = trim((string)($data['nickname'] ?? ''));
-        $avatar = trim((string)($data['avatar'] ?? ''));
+        $avatar = strip_image_watermark_url(trim((string)($data['avatar'] ?? '')));
 
         $exist = null;
         if ($account !== '') {

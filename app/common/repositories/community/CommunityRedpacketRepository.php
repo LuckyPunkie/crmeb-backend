@@ -101,7 +101,7 @@ class CommunityRedpacketRepository extends BaseRepository
     }
 
     /**
-     * 支付（开发期：全部走模拟支付，支付成功即到账平台并上架；正式接入后恢复真实扣款）
+     * 支付（支持余额 / 后台模拟支付；微信等真实支付待接入）
      */
     public function pay(int $uid, string $orderNo, string $payType = 'balance')
     {

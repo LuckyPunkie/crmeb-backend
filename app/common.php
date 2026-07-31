@@ -1872,3 +1872,28 @@ if (!function_exists('msectime')) {
         return (float)sprintf('%.0f', (floatval($mSec) + floatval($sec)) * 1000);
     }
 }
+
+if (!function_exists('strip_image_watermark_url')) {
+    /**
+     * 去掉爬虫图片 URL 水印后缀（如 xxx.jpg-commwater → xxx.jpg）
+     * 支持单个 URL，或英文逗号分隔的多图 URL
+     */
+    function strip_image_watermark_url(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (strpos($url, ',') !== false) {
+            $parts = [];
+            foreach (explode(',', $url) as $part) {
+                $part = strip_image_watermark_url(trim($part));
+                if ($part !== '') {
+                    $parts[] = $part;
+                }
+            }
+            return implode(',', $parts);
+        }
+        return (string)preg_replace('/-commwater$/i', '', $url);
+    }
+}

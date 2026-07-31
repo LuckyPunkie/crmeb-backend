@@ -26,6 +26,7 @@ class UserCertification extends BaseController
         $uid  = $this->request->uid();
         $list = $this->repository->getByUid($uid);
 
+        $seen = [];
         foreach ($list as &$item) {
             $item['images'] = $item['images'] ? json_decode($item['images'], true) : [];
             // 单条展示：已通过统一称 AI审核通过（人工总状态另取）
@@ -35,6 +36,11 @@ class UserCertification extends BaseController
                 $item['status_label'] = '认证失败';
             } else {
                 $item['status_label'] = '未认证';
+            }
+            $type = (string)($item['type'] ?? '');
+            $item['is_latest'] = $type !== '' && !isset($seen[$type]);
+            if ($item['is_latest']) {
+                $seen[$type] = true;
             }
         }
         unset($item);

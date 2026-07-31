@@ -21,7 +21,7 @@ class CommunityValidate extends Validate
 
     protected $rule = [
         'image|图片' => 'require|array',
-        'content|内容' => 'require',
+        'content|内容' => '',
         'spu_id|关联商品' => 'array',
     ];
 

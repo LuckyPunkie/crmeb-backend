@@ -244,7 +244,7 @@ class CommunityImportRepository extends BaseRepository
     private function insertPost(array $data, array $bots): array
     {
         $content = $this->sanitize($data['content'] ?? '');
-        $imageRaw = $this->sanitize($data['image'] ?? '');
+        $imageRaw = strip_image_watermark_url($this->sanitize($data['image'] ?? ''));
         if ($content === '') {
             throw new ValidateException('正文内容不能为空');
         }
@@ -259,6 +259,10 @@ class CommunityImportRepository extends BaseRepository
         }
         $imageStr = '';
         foreach ($images as $img) {
+            $img = strip_image_watermark_url($img);
+            if ($img === '') {
+                continue;
+            }
             $next = $imageStr === '' ? $img : ($imageStr . ',' . $img);
             if (mb_strlen($next) > 1000) {
                 break;

@@ -259,6 +259,8 @@ class MerchantImportRepository extends BaseRepository
             }
         }
 
+        $merAvatar = strip_image_watermark_url((string)($data['mer_avatar'] ?? ''));
+
         $exist = Db::name('merchant')->where('mer_name', $data['mer_name'])->where('is_del', 0)->find();
         if ($exist) {
             // 覆盖更新基础信息（不重置管理员密码账号冲突时跳过密码）
@@ -268,7 +270,7 @@ class MerchantImportRepository extends BaseRepository
                 'mer_address' => (string)($data['mer_address'] ?? ''),
                 'category_id' => (int)$data['category_id'],
                 'type_id' => (int)$data['type_id'],
-                'mer_avatar' => (string)($data['mer_avatar'] ?? ''),
+                'mer_avatar' => $merAvatar,
                 'mer_info' => (string)($data['mer_info'] ?? ''),
                 'service_phone' => (string)($data['service_phone'] ?? ''),
                 'mer_keyword' => (string)($data['mer_keyword'] ?? ''),
@@ -290,7 +292,7 @@ class MerchantImportRepository extends BaseRepository
             'type_id' => (int)$data['type_id'],
             'mer_account' => $data['mer_account'],
             'mer_password' => $data['mer_password'],
-            'mer_avatar' => (string)($data['mer_avatar'] ?? ''),
+            'mer_avatar' => $merAvatar,
             'mer_info' => (string)($data['mer_info'] ?? ''),
             'service_phone' => (string)($data['service_phone'] ?? $data['mer_phone']),
             'mer_keyword' => (string)($data['mer_keyword'] ?? ''),
