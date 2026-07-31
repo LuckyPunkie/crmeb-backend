@@ -16,9 +16,12 @@ use app\common\model\store\nearby\NearbyShopBillOrder;
 use app\common\model\store\order\StoreGroupOrder;
 use app\common\model\store\order\StoreOrder;
 use app\common\model\store\order\StoreOrderProduct;
+use app\common\model\store\service\StoreService;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use crmeb\services\SwooleTaskService;
+use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
 
@@ -95,7 +98,108 @@ class NearbyShopBillOrderRepository extends BaseRepository
             Log::error('NearbyBill syncStoreOrder failed: ' . $e->getMessage());
         }
 
+        // 商家语音播报通知（幂等：仅 paid=0→1 成功时走到这里）
+        try {
+            $this->notifyScanPayVoice($order);
+        } catch (\Exception $e) {
+            Log::error('NearbyBill notifyScanPayVoice failed: ' . $e->getMessage());
+        }
+
         return $order;
+    }
+
+    /**
+     * 扫码收款成功：推送商家 PC + APP 店员，触发「瓜几收款XX.XX元」语音播报
+     */
+    protected function notifyScanPayVoice($order)
+    {
+        $merId = (int)($order['mer_id'] ?? 0);
+        if ($merId <= 0) {
+            return;
+        }
+
+        $amount = number_format((float)($order['pay_price'] ?? 0), 2, '.', '');
+        $siteName = (string)(systemConfig('site_name') ?: '瓜几');
+        $voiceText = $siteName . '收款' . $amount . '元';
+        $payload = [
+            'title' => '收款到账',
+            'message' => $voiceText,
+            'amount' => $amount,
+            'order_sn' => (string)($order['order_sn'] ?? ''),
+            'id' => (int)($order['id'] ?? 0),
+            'mer_id' => $merId,
+            'voice_text' => $voiceText,
+        ];
+
+        // 商家 PC 后台 WebSocket
+        try {
+            SwooleTaskService::merchant('notice', [
+                'type' => 'scan_pay',
+                'data' => $payload,
+            ], $merId);
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill merchant notice failed: ' . $e->getMessage());
+        }
+
+        // APP 店员：Redis 队列（轮询兜底）+ 用户 WebSocket 实时推送
+        try {
+            $uids = StoreService::getDB()
+                ->where('mer_id', $merId)
+                ->where('is_del', 0)
+                ->where('is_open', 1)
+                ->column('uid');
+            $uids = array_values(array_unique(array_filter(array_map('intval', (array)$uids))));
+            if (!$uids) {
+                return;
+            }
+
+            $item = json_encode($payload, JSON_UNESCAPED_UNICODE);
+            $redis = Cache::store('redis')->handler();
+            foreach ($uids as $uid) {
+                $key = 'scan_pay_voice:' . $uid;
+                $redis->lPush($key, $item);
+                $redis->lTrim($key, 0, 49);
+                $redis->expire($key, 3600);
+                try {
+                    SwooleTaskService::user($uid, [
+                        'type' => 'scan_pay',
+                        'data' => $payload,
+                    ]);
+                } catch (\Throwable $e) {
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill app voice queue failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * 拉取并清空当前用户待播报的收款语音（APP 轮询）
+     */
+    public function popVoicePending(int $uid, int $limit = 10): array
+    {
+        if ($uid <= 0) {
+            return [];
+        }
+        $limit = max(1, min(20, $limit));
+        $list = [];
+        try {
+            $redis = Cache::store('redis')->handler();
+            $key = 'scan_pay_voice:' . $uid;
+            for ($i = 0; $i < $limit; $i++) {
+                $item = $redis->rPop($key);
+                if ($item === false || $item === null) {
+                    break;
+                }
+                $decoded = is_string($item) ? json_decode($item, true) : null;
+                if (is_array($decoded)) {
+                    $list[] = $decoded;
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill popVoicePending failed: ' . $e->getMessage());
+        }
+        return $list;
     }
 
     /**

@@ -42,3 +42,8 @@ Route::group(function () {
     Route::post('nearby/bill/create', 'api.store.nearby.NearbyBill/create');
     Route::post('nearby/bill/pay/:order_sn', 'api.store.nearby.NearbyBill/pay');
 })->middleware(UserTokenMiddleware::class, false);
+
+// 商家 APP 收款语音待播队列（需登录店员账号）
+Route::group(function () {
+    Route::get('nearby/bill/voice_pending', 'api.store.nearby.NearbyBill/voicePending');
+})->middleware(UserTokenMiddleware::class, true);

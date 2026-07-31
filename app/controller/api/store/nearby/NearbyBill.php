@@ -115,6 +115,20 @@ class NearbyBill extends BaseController
     }
 
     /**
+     * 商家 APP 拉取待播报收款语音
+     * GET /api/nearby/bill/voice_pending
+     */
+    public function voicePending()
+    {
+        $uid = $this->currentUid();
+        if ($uid <= 0) {
+            return app('json')->fail('请先登录');
+        }
+        $list = $this->repository->popVoicePending($uid);
+        return app('json')->success($list);
+    }
+
+    /**
      * 重新调起支付
      * POST /api/nearby/bill/pay/:order_sn
      */
