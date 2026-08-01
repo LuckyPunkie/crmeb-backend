@@ -35,6 +35,7 @@ Route::get('common/hot_keyword', 'api.Common/hotKeyword')->append(['type' => 0])
 Route::get('common/commuunity/hot_keyword', 'api.Common/hotKeyword')->append(['type' => 1]);
 //推荐页 banner
 Route::get('common/hot_banner/:type', 'api.Common/hotBanner');
+Route::get('common/pay_success_banner', 'api.Common/paySuccessBanner');
 //退款原因
 Route::get('common/refund_message', 'api.Common/refundMessage');
 //充值赠送

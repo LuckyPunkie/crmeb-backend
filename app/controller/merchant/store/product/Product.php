@@ -323,6 +323,8 @@ class Product extends BaseController
         $data['extension_one_rate'] = $data['extension_one_rate'] ? $data['extension_one_rate'] * 100 : 0;
         // 设置分销二比例
         $data['extension_two_rate'] = $data['extension_two_rate'] ? $data['extension_two_rate'] * 100 : 0;
+        // 是否公益店铺（只读，供商品表单展示命中/分销金额）
+        $data['is_welfare_shop'] = (int)($this->request->merchant()->is_welfare_shop ?? 0);
         // 返回配置信息
         return app('json')->success($data);
     }

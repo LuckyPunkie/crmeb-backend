@@ -29,6 +29,10 @@ Route::group(function () {
     Route::get('nearby/shop/scan_pay_qrcode', '/scanPayQrcode')
         ->name('merchantNearbyScanPayQrcode')
         ->option(['_alias' => '扫码买单收款码', '_auth' => false]);
+    // 收款语音待播队列（网页轮询兜底，WebSocket 漏推时仍能播）
+    Route::get('nearby/shop/voice_pending', '/voicePending')
+        ->name('merchantNearbyVoicePending')
+        ->option(['_alias' => '收款语音待播', '_auth' => false]);
 
     // 分类树（商户后台表单下拉，走 /mer 同源避免 CORS）
     Route::get('nearby/category/tree', '/categoryTree')

@@ -706,4 +706,21 @@ class User extends BaseController
         return app('json')->success('修改成功');
     }
 
+    /**
+     * 绑定 APP 推送 client_id（uni-push）
+     * POST /api/user/push_client
+     */
+    public function bindPushClient()
+    {
+        $clientId = trim((string)$this->request->param('client_id', ''));
+        $platform = trim((string)$this->request->param('platform', ''));
+        if ($clientId === '') {
+            return app('json')->fail('client_id 不能为空');
+        }
+        $uid = (int)$this->request->uid();
+        app()->make(\app\common\repositories\user\UserPushClientRepository::class)
+            ->bind($uid, $clientId, $platform);
+        return app('json')->success('ok');
+    }
+
 }

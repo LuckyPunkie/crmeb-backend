@@ -1431,6 +1431,17 @@ class StoreRefundOrderRepository extends BaseRepository
         //已退款金额
         $_refund_price = $this->checkRefundPrice($id);
 
+        // 公益免单：退用户金额 = max(0, 实付 - 买单金额)
+        try {
+            $orderRow = $refund->order ?? null;
+            if ($orderRow && !empty($orderRow['is_welfare_order'])) {
+                $paid = (float)($orderRow['pay_price'] ?? 0);
+                $billAmount = (float)($orderRow['welfare_bill_amount'] ?? 0);
+                $_refund_price = max(0, round($paid - $billAmount, 2));
+            }
+        } catch (\Throwable $e) {
+        }
+
         //退款订单记录
         $storeOrderStatusRepository = app()->make(StoreOrderStatusRepository::class);
         $orderStatus                = [
@@ -1737,6 +1748,17 @@ class StoreRefundOrderRepository extends BaseRepository
         }
         Queue::push(SendSmsJob::class, ['tempId' => 'REFUND_CONFORM_CODE', 'id' => $refundOrder->refund_order_id]);
         $this->descBrokerage($refundOrder);
+
+        // 公益免单商品退款：扣扫码商户分销锁定金额（不扣买单金额）
+        try {
+            $order = $refundOrder->order;
+            if ($order && !empty($order['is_welfare_order'])) {
+                app()->make(\app\common\repositories\store\nearby\WelfareFreeOrderRepository::class)
+                    ->handleRefund($order, (float)$refundOrder->refund_price);
+            }
+        } catch (\Throwable $e) {
+            \think\facade\Log::error('Welfare refund handle failed: ' . $e->getMessage());
+        }
 
         if ($refundOrder->platform_refund_price > 0) {
             if ($refundOrder->order->firstProfitsharing) {

@@ -1203,11 +1203,34 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                         ->getBound((int)$uid);
                 }
             }
+            // 公益网购享免单上下文
+            $_welfareCtx = app()->make(\app\common\repositories\store\nearby\WelfareFreeOrderRepository::class)->getContext((int)$uid);
+            $_isWelfare = 0;
+            $_welfareBillAmount = 0;
+            $_welfareScanMerId = 0;
+            $_welfareCommission = 0;
+            if ($_welfareCtx) {
+                foreach ($merchantCart['list'] as $_wCart) {
+                    if ((int)($_wCart['product_id'] ?? 0) === (int)$_welfareCtx['product_id']) {
+                        $_isWelfare = 1;
+                        $_welfareBillAmount = (float)$_welfareCtx['bill_amount'];
+                        $_welfareScanMerId = (int)$_welfareCtx['scan_mer_id'];
+                        $_welfareCommission = (float)$_welfareCtx['welfare_commission'];
+                        break;
+                    }
+                }
+            }
+
             //整理订单数据
             $_order = [
                 'cartInfo' => $merchantCart,
                 'activity_type' => $orderInfo['order_type'],
                 'is_blindbox_order' => (int)$_isBlindbox,
+                'is_welfare_order' => $_isWelfare,
+                'welfare_bill_amount' => $_welfareBillAmount,
+                'welfare_scan_mer_id' => $_welfareScanMerId,
+                'welfare_commission' => $_welfareCommission,
+                'welfare_bill_sn' => '',
                 'share_mer_id' => $_shareMerId,
                 'commission_rate' => (float)$rate,
                 'order_type' => $merchantCart['order']['isTake'] ? 1 : ($merchantCart['order']['isCityTake'] ? 2 : 0),

@@ -418,6 +418,15 @@ class Common extends BaseController
         return app('json')->success($data);
     }
 
+    /**
+     * 支付完成页 Banner（组合数据 pay_success_banner）
+     */
+    public function paySuccessBanner()
+    {
+        $data = systemGroupData('pay_success_banner', 1, 3) ?: [];
+        return app('json')->success(['list' => $data]);
+    }
+
     public function pay_key($key)
     {
         $cache = Cache::store();

@@ -49,9 +49,20 @@ class FinancialRecord extends BaseController
         $merId = $this->request->merId();
         if ($merId) {
             $where['mer_id'] = $merId;
-            $where['financial_type'] = ['order', 'mer_accoubts', 'brokerage_one', 'brokerage_two', 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order', 'order_platform_coupon', 'order_svip_coupon', 'svip'];
+            $where['financial_type'] = [
+                'order', 'mer_accoubts', 'brokerage_one', 'brokerage_two',
+                'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
+                'order_platform_coupon', 'order_svip_coupon', 'svip',
+                // 扫码买单 / 网购享免单入账
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+            ];
         } else {
-            $where['financial_type'] = ['order', 'sys_accoubts', 'brokerage_one', 'brokerage_two', 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order', 'order_platform_coupon', 'order_svip_coupon', 'svip'];
+            $where['financial_type'] = [
+                'order', 'sys_accoubts', 'brokerage_one', 'brokerage_two',
+                'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
+                'order_platform_coupon', 'order_svip_coupon', 'svip',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+            ];
         }
         return app('json')->success($this->repository->getList($where, $page, $limit));
     }
@@ -68,9 +79,19 @@ class FinancialRecord extends BaseController
         $merId = $this->request->merId();
         if ($merId) {
             $where['mer_id'] = $merId;
-            $where['financial_type'] = ['order', 'mer_accoubts', 'brokerage_one', 'brokerage_two', 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order', 'order_platform_coupon', 'order_svip_coupon', 'svip'];
+            $where['financial_type'] = [
+                'order', 'mer_accoubts', 'brokerage_one', 'brokerage_two',
+                'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
+                'order_platform_coupon', 'order_svip_coupon', 'svip',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+            ];
         } else {
-            $where['financial_type'] = ['order', 'sys_accoubts', 'brokerage_one', 'brokerage_two', 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order', 'order_platform_coupon', 'order_svip_coupon', 'svip'];
+            $where['financial_type'] = [
+                'order', 'sys_accoubts', 'brokerage_one', 'brokerage_two',
+                'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
+                'order_platform_coupon', 'order_svip_coupon', 'svip',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+            ];
         }
 
         [$page, $limit] = $this->getPage();

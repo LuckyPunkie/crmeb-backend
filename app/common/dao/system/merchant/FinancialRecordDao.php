@@ -66,6 +66,9 @@ class FinancialRecordDao extends BaseDao
         $data['financial_pm'] = 1;
         // 生成序列号，并将其添加到数据数组中，用于唯一标识该记录。
         $data['financial_record_sn'] = $this->getSn();
+        if (empty($data['create_time'])) {
+            $data['create_time'] = date('Y-m-d H:i:s');
+        }
         // 调用create方法，使用加工后的数据数组创建新的记录，并返回创建结果。
         return $this->create($data);
     }
@@ -92,6 +95,9 @@ class FinancialRecordDao extends BaseDao
 
         // 生成记录序列号，并赋值给数据数组
         $data['financial_record_sn'] = $this->getSn();
+        if (empty($data['create_time'])) {
+            $data['create_time'] = date('Y-m-d H:i:s');
+        }
 
         // 调用创建方法，传入处理后的数据数组，返回创建结果
         return $this->create($data);

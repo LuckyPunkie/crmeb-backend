@@ -157,11 +157,12 @@ class FinancialRepository extends BaseRepository
      */
     public function applyForm(int $merId)
     {
-        $merchant = app()->make(MerchantRepository::class)->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,financial_bank,financial_wechat,financial_alipay,financial_type')->find();
+        $merchant = app()->make(MerchantRepository::class)->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay,financial_type')->find();
         $extract_minimum_line = systemConfig('extract_minimum_line') ?: 0;
         $extract_minimum_num = systemConfig('extract_minimum_num');
         $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
         $_extract = ($_line < 0) ? 0 : $_line;
+        $welfareMoney = (float)($merchant->mer_welfare_money ?? 0);
         $form = Elm::createForm(Route::buildUrl('merchantFinancialCreateSave')->build());
         $form->setRule([
             [
@@ -185,20 +186,30 @@ class FinancialRepository extends BaseRepository
                 'type' => 'span',
                 'title' => '提示：',
                 'native' => false,
-                'children' => ['商户余额押金:' . $extract_minimum_line . '元;最低提现金额：' . $extract_minimum_num . '元']
+                'children' => ['商户余额押金:' . $extract_minimum_line . '元;最低提现金额：' . $extract_minimum_num . '元；公益分销余额入账30天后可提']
             ],
             [
                 'type' => 'span',
-                'title' => '商户余额：',
+                'title' => '可用余额：',
                 'native' => false,
                 'children' => ["$merchant->mer_money"]
             ],
             [
                 'type' => 'span',
                 'native' => false,
-                'title' => '商户可提现金额：',
+                'title' => '可用余额可提现：',
                 'children' => ["$_extract"]
             ],
+            [
+                'type' => 'span',
+                'title' => '公益分销余额：',
+                'native' => false,
+                'children' => ["$welfareMoney"]
+            ],
+            Elm::radio('money_type', '提现账户：', 'balance')->setOptions([
+                ['value' => 'balance', 'label' => '可用余额'],
+                ['value' => 'welfare', 'label' => '公益分销余额'],
+            ]),
 
             Elm::radio('financial_type', '转账类型：', $merchant->financial_type)
                 ->setOptions([
@@ -294,9 +305,8 @@ class FinancialRepository extends BaseRepository
     public function saveApply(int $merId, array $data)
     {
         $make = app()->make(MerchantRepository::class);
-        $merchant = $make->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,financial_bank,financial_wechat,financial_alipay')->find();
-
-        if ($merchant['mer_money'] <= 0) throw new ValidateException('余额不足');
+        $merchant = $make->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay')->find();
+        $moneyType = ($data['money_type'] ?? 'balance') === 'welfare' ? 'welfare' : 'balance';
 
         if ($data['financial_type'] == 1) {
             $financial_account = $merchant->financial_bank;
@@ -309,27 +319,24 @@ class FinancialRepository extends BaseRepository
 
         $extract_maxmum_num = systemConfig('extract_maxmum_num');
         if ($extract_maxmum_num > 0 && $data['extract_money'] > $extract_maxmum_num) throw new ValidateException('单次申请金额不得大于' . $extract_maxmum_num . '元');
-        //最低提现额度
-        $extract_minimum_line = systemConfig('extract_minimum_line') ? systemConfig('extract_minimum_line') : 0;
-        $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
-        if ($_line < $extract_minimum_line) throw new ValidateException('余额大于' . $extract_minimum_line . '才可提现');
-        if ($data['extract_money'] > $_line) throw new ValidateException('提现金额大于可提现金额');
-
-        //最低提现金额
         $extract_minimum_num = systemConfig('extract_minimum_num');
         if ($data['extract_money'] < $extract_minimum_num) throw new ValidateException('最低提现金额' . $extract_minimum_num);
 
-        //可提现金额
-        $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
-        if ($_line < 0) throw new ValidateException('余额大于' . $extract_minimum_line . '才可提现');
-
-        //最低提现金额
-        if ($data['extract_money'] < $extract_minimum_num) throw new ValidateException('最低提现金额' . $extract_minimum_num);
-
-        //不足提现最低金额
-        if ($_line < $extract_minimum_num) throw new ValidateException('提现金额不足');
-
-        $_money = bcsub($merchant['mer_money'], $data['extract_money'], 2);
+        if ($moneyType === 'welfare') {
+            $avail = (float)($merchant['mer_welfare_money'] ?? 0);
+            if ($avail <= 0) throw new ValidateException('公益分销余额不足');
+            if ($data['extract_money'] > $avail) throw new ValidateException('提现金额大于公益分销可提现金额');
+            $_money = bcsub($avail, $data['extract_money'], 2);
+        } else {
+            if ($merchant['mer_money'] <= 0) throw new ValidateException('余额不足');
+            //最低提现额度
+            $extract_minimum_line = systemConfig('extract_minimum_line') ? systemConfig('extract_minimum_line') : 0;
+            $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
+            if ($_line < 0) throw new ValidateException('余额大于' . $extract_minimum_line . '才可提现');
+            if ($data['extract_money'] > $_line) throw new ValidateException('提现金额大于可提现金额');
+            if ($_line < $extract_minimum_num) throw new ValidateException('提现金额不足');
+            $_money = bcsub($merchant['mer_money'], $data['extract_money'], 2);
+        }
 
         $sn = date('YmdHis' . $merId);
         $ret = [
@@ -342,12 +349,16 @@ class FinancialRepository extends BaseRepository
             'financial_account' => json_encode($financial_account, JSON_UNESCAPED_UNICODE),
             'financial_status' => 0,
             'mer_admin_id' => $data['mer_admin_id'],
-            'mark' => $datap['mark'] ?? '',
+            'mark' => ($data['mark'] ?? '') . ($moneyType === 'welfare' ? '[公益分销]' : ''),
             'refusal' => '',
         ];
-        Db::transaction(function () use ($merId, $ret, $data, $make) {
+        Db::transaction(function () use ($merId, $ret, $data, $make, $moneyType) {
             $this->dao->create($ret);
-            $make->subMoney($merId, (float)$data['extract_money']);
+            if ($moneyType === 'welfare') {
+                \think\facade\Db::name('merchant')->where('mer_id', $merId)->dec('mer_welfare_money', (float)$data['extract_money'])->update([]);
+            } else {
+                $make->subMoney($merId, (float)$data['extract_money']);
+            }
         });
     }
 

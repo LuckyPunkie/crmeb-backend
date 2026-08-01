@@ -7,6 +7,7 @@ use think\App;
 use think\facade\Db;
 use crmeb\basic\BaseController;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\repositories\store\nearby\NearbyShopBillOrderRepository;
 use app\common\repositories\store\nearby\NearbyShopCategoryRepository;
 use app\validate\merchant\nearby\NearbyShopConfigValidate;
 
@@ -234,5 +235,19 @@ class NearbyShop extends BaseController
                 '微信需配置「扫普通链接二维码打开小程序」后直进小程序',
             ],
         ]);
+    }
+
+    /**
+     * 收款语音待播（商户网页轮询兜底）
+     * GET /mer/nearby/shop/voice_pending
+     */
+    public function voicePending(NearbyShopBillOrderRepository $billRepo)
+    {
+        $merId = (int)$this->request->merId();
+        if ($merId <= 0) {
+            return app('json')->fail('商户信息缺失');
+        }
+        $list = $billRepo->popVoicePendingByMerId($merId, 10);
+        return app('json')->success(['list' => $list]);
     }
 }

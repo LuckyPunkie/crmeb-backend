@@ -94,7 +94,9 @@ class ProductRepository extends BaseRepository
         'cancel_reservation_time',
         'reservation_form_type',
         'labels',
-        'activity_label_ids'
+        'activity_label_ids',
+        ['hit_amount', 0],
+        ['welfare_commission', 0],
     ];
     protected $admin_filed = 'Product.product_id,Product.mer_id,brand_id,spec_type,unit_name,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,U.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,Product.cost,Product.ot_price,Product.stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,star,ficti,integral_total,integral_price_total,sys_labels,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.type';
     protected $filed = 'Product.product_id,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,spu_id,video_link,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way';
@@ -650,7 +652,9 @@ class ProductRepository extends BaseRepository
             'bar_code_number' => $data['bar_code_number'] ?? '',
             'auto_off_time' => isset($data['auto_off_time']) ? strtotime($data['auto_off_time']) : 0,
             'labels' => $data['mer_labels'] ? json_encode($data['mer_labels']) : '',
-            'activity_label_ids' => isset($data['activity_label_ids']) ? $data['activity_label_ids'] : ''
+            'activity_label_ids' => isset($data['activity_label_ids']) ? $data['activity_label_ids'] : '',
+            'hit_amount' => isset($data['hit_amount']) ? (float)$data['hit_amount'] : 0,
+            'welfare_commission' => isset($data['welfare_commission']) ? (float)$data['welfare_commission'] : 0,
         ];
         if (isset($data['extend']))
             $result['extend'] = $data['extend'] ? json_encode($data['extend'], JSON_UNESCAPED_UNICODE) : '';
@@ -3373,6 +3377,31 @@ class ProductRepository extends BaseRepository
         $validate = app()->make(StoreProductValidate::class);
         if (!$validate->sceneCreate($data)){
             throw new ValidateException($validate->getError());
+        }
+        // 公益商品：命中金额/分销金额校验（仅公益店铺）
+        $merchant = app()->make(\app\common\repositories\system\merchant\MerchantRepository::class)->get($merId);
+        $isWelfareShop = $merchant && (int)($merchant['is_welfare_shop'] ?? 0) === 1;
+        if ($isWelfareShop) {
+            $hitAmount = isset($data['hit_amount']) ? (float)$data['hit_amount'] : 0;
+            $welfareCommission = isset($data['welfare_commission']) ? (float)$data['welfare_commission'] : 0;
+            if ($hitAmount < 0 || $welfareCommission < 0) {
+                throw new ValidateException('命中金额/分销金额不能为负数');
+            }
+            $minPrice = 0;
+            if (!empty($data['attrValue']) && is_array($data['attrValue'])) {
+                foreach ($data['attrValue'] as $sku) {
+                    $p = (float)($sku['price'] ?? 0);
+                    if ($minPrice <= 0 || ($p > 0 && $p < $minPrice)) {
+                        $minPrice = $p;
+                    }
+                }
+            }
+            if ($minPrice > 0 && $hitAmount > $minPrice) {
+                throw new ValidateException('命中金额不能大于商品售价');
+            }
+        } else {
+            $data['hit_amount'] = 0;
+            $data['welfare_commission'] = 0;
         }
         // 保存推荐商品
         if (!empty($data['good_ids'])) {

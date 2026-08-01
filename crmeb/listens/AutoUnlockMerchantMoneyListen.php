@@ -37,6 +37,11 @@ class AutoUnlockMerchantMoneyListen extends TimerService implements ListenerInte
                     $bill->save();
                 });
             }
+            // 公益分销余额 30 天解冻
+            try {
+                app()->make(\app\common\repositories\store\nearby\WelfareFreeOrderRepository::class)->unlockTimeoutWelfareMoney();
+            } catch (\Throwable $e) {
+            }
         });
     }
 }

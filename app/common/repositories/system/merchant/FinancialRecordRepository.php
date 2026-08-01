@@ -73,8 +73,8 @@ class FinancialRecordRepository extends BaseRepository
          */
         $where['is_mer'] = $merId;
         if ($merId) {
-            //商户收入
-            $income = $this->dao->search($where)->where('financial_type', 'in', ['order', 'mer_presell'])->sum('number');
+            //商户收入（含扫码买单 / 网购免单）
+            $income = $this->dao->search($where)->where('financial_type', 'in', ['order', 'mer_presell', 'nearby_bill', 'nearby_bill_welfare', 'welfare_commission'])->sum('number');
             //商户支出
             $expend_ = $this->dao->search($where)->where('financial_type', 'in', ['refund_order', 'brokerage_one', 'brokerage_two', 'order_charge', 'presell_charge'])->sum('number');
             $_expend = $this->dao->search($where)->where('financial_type', 'in', ['refund_charge', 'refund_brokerage_two', 'refund_brokerage_one'])->sum('number');
@@ -209,8 +209,8 @@ class FinancialRecordRepository extends BaseRepository
      */
     public function getMerchantTitle($where)
     {
-        //商户收入
-        $count = $this->dao->search($where)->where('financial_type', 'in', ['order', 'mer_presell'])->sum('number');
+        //商户收入（含扫码买单 / 网购免单）
+        $count = $this->dao->search($where)->where('financial_type', 'in', ['order', 'mer_presell', 'nearby_bill', 'nearby_bill_welfare', 'welfare_commission'])->sum('number');
         //平台优惠券
         $coupon = $this->dao->search($where)->where('financial_type', 'in', ['order_platform_coupon', 'order_svip_coupon'])->sum('number');
         //商户余额
