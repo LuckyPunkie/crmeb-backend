@@ -252,6 +252,8 @@ class Auth extends BaseController
         $relevanceRepository = app()->make(RelevanceRepository::class);
         $data['focus_count'] = $relevanceRepository->getFieldCount('left_id', (int)$user['uid'], RelevanceRepository::TYPE_COMMUNITY_FANS);
         $data['focus'] = $data['focus_count'];
+        $data['like_me_count'] = $relevanceRepository->getFieldCount('right_id', (int)$user['uid'], RelevanceRepository::TYPE_USER_LIKE);
+        $data['i_like_count']  = $relevanceRepository->getFieldCount('left_id', (int)$user['uid'], RelevanceRepository::TYPE_USER_LIKE);
         $labels = $this->request->userInfo()->user_label;
         $data['user_label'] = $labels ? $labels->toArray() : [];
         $data['user_label_name'] = $data['user_label'] ? array_column($data['user_label'], 'label_name') : [];

@@ -112,10 +112,12 @@ return [
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
             \crmeb\listens\pay\AnimalRescuePaySuccessListen::class,
+            \crmeb\listens\pay\WelfareFreePaySuccessListen::class,
         ],
-        // 本地/模拟支付走 paySuccess 后抛出，盲盒入柜依赖此事件
+        // 本地/模拟支付走 paySuccess 后抛出，盲盒入柜/公益分账依赖此事件
         'order.paySuccess' => [
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
+            \crmeb\listens\pay\WelfareFreePaySuccessListen::class,
         ],
         //数据大屏
         'data.screen.send' =>[\crmeb\listens\DataScreenListen::class],

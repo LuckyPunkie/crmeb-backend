@@ -686,7 +686,7 @@ class CommunityRepository extends BaseRepository
         $relevanceRepository = app()->make(RelevanceRepository::class);
         $data['focus'] = $relevanceRepository->getFieldCount('left_id', $uid, RelevanceRepository::TYPE_COMMUNITY_FANS);
 
-        $is_start = $is_self = false;
+        $is_start = $is_self = $is_liked = false;
         if ($self && $self->uid == $uid) {
             $user = $self;
             $is_self = true;
@@ -696,6 +696,7 @@ class CommunityRepository extends BaseRepository
             // $self 为 null 时（未登录）跳过关注状态查询
             if ($self) {
                 $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
+                $is_liked = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_USER_LIKE) > 0;
             }
         }
         $data['start']          = $user->count_start;
@@ -703,6 +704,7 @@ class CommunityRepository extends BaseRepository
         $data['avatar']         = $user->avatar;
         $data['nickname']       = $user->nickname;
         $data['is_start']       = $is_start;
+        $data['is_liked']       = $is_liked;
         $data['member_icon']    = systemConfig('member_status') ? ($user->member->brokerage_icon ?? '') : '';
         $data['is_self']        = $is_self;
         $data['fans']           = $user->count_fans;
@@ -845,6 +847,25 @@ class CommunityRepository extends BaseRepository
         }
 
         return;
+    }
+
+    /**
+     * 喜欢/取消喜欢某用户
+     */
+    public function setLike(int $likedUid, int $myUid, int $status)
+    {
+        $make = app()->make(RelevanceRepository::class);
+        if ($status) {
+            if ($make->checkHas($myUid, $likedUid, RelevanceRepository::TYPE_USER_LIKE)) {
+                throw new ValidateException('您已经喜欢过他了～');
+            }
+            $make->create($myUid, $likedUid, RelevanceRepository::TYPE_USER_LIKE, false);
+        } else {
+            if (!$make->checkHas($myUid, $likedUid, RelevanceRepository::TYPE_USER_LIKE)) {
+                throw new ValidateException('您还未喜欢他哦～');
+            }
+            $make->destory($myUid, $likedUid, RelevanceRepository::TYPE_USER_LIKE);
+        }
     }
 
     /**

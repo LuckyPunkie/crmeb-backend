@@ -37,6 +37,8 @@ class RelevanceRepository extends BaseRepository
     const TYPE_COMMUNITY_COLLECT = 'community_collect';
     //商户权限
     const TYPE_MERCHANT_AUTH = 'mer_auth';
+    //用户互喜欢
+    const TYPE_USER_LIKE = 'user_like';
 
     //指定范围类型
     //0全部商品
@@ -219,6 +221,51 @@ class RelevanceRepository extends BaseRepository
         return compact('count','list');
     }
 
+    /**
+     * 喜欢我的人列表
+     */
+    public function getUserLikeMe(int $uid, int $page, int $limit)
+    {
+        $query = $this->dao->getSearch([
+            'right_id' => $uid,
+            'type'     => self::TYPE_USER_LIKE,
+        ])->with([
+            'fans' => function ($query) {
+                $query->field('uid,avatar,nickname,count_fans,count_content');
+            }
+        ]);
+        $count = $query->count();
+        $list  = $query->page($page, $limit)->select()->append(['is_start']);
+        $data  = [];
+        foreach ($list as $item) {
+            if (!$item['fans']) { $item->delete(); $count -= 1; continue; }
+            $data[] = $item;
+        }
+        return ['count' => $count, 'list' => $data];
+    }
+
+    /**
+     * 我喜欢的人列表
+     */
+    public function getUserILike(int $uid, int $page, int $limit)
+    {
+        $query = $this->dao->getSearch([
+            'left_id' => $uid,
+            'type'    => self::TYPE_USER_LIKE,
+        ])->with([
+            'focus' => function ($query) {
+                $query->field('uid,avatar,nickname,count_fans,count_content');
+            }
+        ]);
+        $count = $query->count();
+        $list  = $query->page($page, $limit)->select()->append(['is_fans']);
+        $data  = [];
+        foreach ($list as $item) {
+            if (!$item['focus']) { $item->delete(); $count -= 1; continue; }
+            $data[] = $item;
+        }
+        return ['count' => $count, 'list' => $data];
+    }
 
     /**
      * 我点赞过的文章

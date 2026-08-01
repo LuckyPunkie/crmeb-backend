@@ -21,6 +21,7 @@ use app\common\repositories\BaseRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use crmeb\services\SwooleTaskService;
+use crmeb\services\UniPushService;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
@@ -109,7 +110,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
     }
 
     /**
-     * 扫码收款成功：推送商家 PC + APP 店员，触发「瓜几收款XX.XX元」语音播报
+     * 扫码收款成功：推送商家 PC + APP，触发「瓜几收款XX.XX元」语音播报
      */
     protected function notifyScanPayVoice($order)
     {
@@ -118,9 +119,14 @@ class NearbyShopBillOrderRepository extends BaseRepository
             return;
         }
 
-        $amount = number_format((float)($order['pay_price'] ?? 0), 2, '.', '');
-        $siteName = (string)(systemConfig('site_name') ?: '瓜几');
-        $voiceText = $siteName . '收款' . $amount . '元';
+        $amountNum = (float)($order['pay_price'] ?? 0);
+        $amount = number_format($amountNum, 2, '.', '');
+        // 语音金额去掉多余小数：200.00 → 200，98.50 → 98.5
+        $amountSpeak = rtrim(rtrim($amount, '0'), '.');
+        if ($amountSpeak === '') {
+            $amountSpeak = '0';
+        }
+        $voiceText = '瓜几收款' . $amountSpeak . '元';
         $payload = [
             'title' => '收款到账',
             'message' => $voiceText,
@@ -131,30 +137,33 @@ class NearbyShopBillOrderRepository extends BaseRepository
             'voice_text' => $voiceText,
         ];
 
+        Log::info('NearbyBill notifyScanPayVoice start: sn=' . $payload['order_sn'] . ' mer_id=' . $merId . ' amount=' . $amount);
+
         // 商家 PC 后台 WebSocket
         try {
             SwooleTaskService::merchant('notice', [
                 'type' => 'scan_pay',
                 'data' => $payload,
             ], $merId);
+            Log::info('NearbyBill merchant WS pushed mer_id=' . $merId);
         } catch (\Throwable $e) {
             Log::error('NearbyBill merchant notice failed: ' . $e->getMessage());
         }
 
-        // APP 店员：Redis 队列（轮询兜底）+ 用户 WebSocket 实时推送
+        // APP 接收人：店员 + 商家手机号对应用户 + 商户管理员手机号对应用户
         try {
-            $uids = StoreService::getDB()
-                ->where('mer_id', $merId)
-                ->where('is_del', 0)
-                ->where('is_open', 1)
-                ->column('uid');
-            $uids = array_values(array_unique(array_filter(array_map('intval', (array)$uids))));
-            if (!$uids) {
-                return;
-            }
+            $uids = $this->resolveScanPayNotifyUids($merId);
+            Log::info('NearbyBill app voice uids=' . json_encode($uids) . ' mer_id=' . $merId);
 
             $item = json_encode($payload, JSON_UNESCAPED_UNICODE);
             $redis = Cache::store('redis')->handler();
+
+            // 商户级队列：任意有权限的人轮询时都能拿到
+            $merKey = 'scan_pay_voice_mer:' . $merId;
+            $redis->lPush($merKey, $item);
+            $redis->lTrim($merKey, 0, 49);
+            $redis->expire($merKey, 3600);
+
             foreach ($uids as $uid) {
                 $key = 'scan_pay_voice:' . $uid;
                 $redis->lPush($key, $item);
@@ -168,13 +177,121 @@ class NearbyShopBillOrderRepository extends BaseRepository
                 } catch (\Throwable $e) {
                 }
             }
+
+            // APP 离线推送（退出/杀进程也能出系统通知；需配置 uni-push）
+            try {
+                UniPushService::pushScanPayToUids($uids, $payload);
+            } catch (\Throwable $e) {
+                Log::error('NearbyBill UniPush failed: ' . $e->getMessage());
+            }
         } catch (\Throwable $e) {
             Log::error('NearbyBill app voice queue failed: ' . $e->getMessage());
         }
     }
 
     /**
+     * 解析扫码收款 APP 播报接收人 uid
+     */
+    protected function resolveScanPayNotifyUids(int $merId): array
+    {
+        $uids = [];
+
+        // 1) 店铺客服/店员
+        try {
+            $serviceUids = StoreService::getDB()
+                ->where('mer_id', $merId)
+                ->where('is_del', 0)
+                ->where('is_open', 1)
+                ->column('uid');
+            foreach ((array)$serviceUids as $uid) {
+                $uids[] = (int)$uid;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // 2) 商家联系电话对应 C 端用户
+        $phones = [];
+        try {
+            $merPhone = app()->make(MerchantRepository::class)->get($merId);
+            if ($merPhone && !empty($merPhone['mer_phone'])) {
+                $phones[] = (string)$merPhone['mer_phone'];
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // 3) 商户管理员手机号
+        try {
+            $adminPhones = \app\common\model\system\merchant\MerchantAdmin::getDB()
+                ->where('mer_id', $merId)
+                ->where('is_del', 0)
+                ->where('status', 1)
+                ->column('phone');
+            foreach ((array)$adminPhones as $p) {
+                if ($p) $phones[] = (string)$p;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        $phones = array_values(array_unique(array_filter($phones)));
+        if ($phones) {
+            try {
+                $userUids = \app\common\model\user\User::getDB()
+                    ->whereIn('phone', $phones)
+                    ->column('uid');
+                foreach ((array)$userUids as $uid) {
+                    $uids[] = (int)$uid;
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        return array_values(array_unique(array_filter($uids)));
+    }
+
+    /**
+     * 商户后台轮询：按 mer_id 拉取商户级收款语音队列
+     */
+    public function popVoicePendingByMerId(int $merId, int $limit = 10): array
+    {
+        if ($merId <= 0) {
+            return [];
+        }
+        $limit = max(1, min(20, $limit));
+        $list = [];
+        $seen = [];
+        try {
+            $redis = Cache::store('redis')->handler();
+            $key = 'scan_pay_voice_mer:' . $merId;
+            for ($i = 0; $i < $limit; $i++) {
+                $item = $redis->rPop($key);
+                if ($item === false || $item === null) {
+                    break;
+                }
+                $decoded = is_string($item) ? json_decode($item, true) : null;
+                if (!is_array($decoded)) {
+                    continue;
+                }
+                $sn = (string)($decoded['order_sn'] ?? '');
+                if ($sn !== '' && isset($seen[$sn])) {
+                    continue;
+                }
+                if ($sn !== '') {
+                    $seen[$sn] = 1;
+                }
+                $list[] = $decoded;
+            }
+            if ($list) {
+                Log::info('NearbyBill popVoicePendingByMerId mer_id=' . $merId . ' count=' . count($list));
+            }
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill popVoicePendingByMerId failed: ' . $e->getMessage());
+        }
+        return $list;
+    }
+
+    /**
      * 拉取并清空当前用户待播报的收款语音（APP 轮询）
+     * 同时检查：个人队列 + 其可管理商户的商户队列
      */
     public function popVoicePending(int $uid, int $limit = 10): array
     {
@@ -183,19 +300,72 @@ class NearbyShopBillOrderRepository extends BaseRepository
         }
         $limit = max(1, min(20, $limit));
         $list = [];
+        $seen = [];
         try {
             $redis = Cache::store('redis')->handler();
-            $key = 'scan_pay_voice:' . $uid;
-            for ($i = 0; $i < $limit; $i++) {
-                $item = $redis->rPop($key);
-                if ($item === false || $item === null) {
-                    break;
+            $keys = ['scan_pay_voice:' . $uid];
+
+            // 可管理的商户：店员身份 + 手机号匹配的商户
+            $merIds = [];
+            try {
+                $serviceMerIds = StoreService::getDB()
+                    ->where('uid', $uid)
+                    ->where('is_del', 0)
+                    ->where('is_open', 1)
+                    ->column('mer_id');
+                foreach ((array)$serviceMerIds as $mid) {
+                    $merIds[] = (int)$mid;
                 }
-                $decoded = is_string($item) ? json_decode($item, true) : null;
-                if (is_array($decoded)) {
+            } catch (\Throwable $e) {
+            }
+            try {
+                $phone = (string)\app\common\model\user\User::getDB()->where('uid', $uid)->value('phone');
+                if ($phone !== '') {
+                    $byMerPhone = \app\common\model\system\merchant\Merchant::getDB()
+                        ->where('mer_phone', $phone)
+                        ->where('is_del', 0)
+                        ->column('mer_id');
+                    foreach ((array)$byMerPhone as $mid) {
+                        $merIds[] = (int)$mid;
+                    }
+                    $byAdmin = \app\common\model\system\merchant\MerchantAdmin::getDB()
+                        ->where('phone', $phone)
+                        ->where('is_del', 0)
+                        ->where('status', 1)
+                        ->column('mer_id');
+                    foreach ((array)$byAdmin as $mid) {
+                        $merIds[] = (int)$mid;
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+
+            $merIds = array_values(array_unique(array_filter($merIds)));
+            foreach ($merIds as $mid) {
+                $keys[] = 'scan_pay_voice_mer:' . $mid;
+            }
+
+            foreach ($keys as $key) {
+                if (count($list) >= $limit) break;
+                for ($i = 0; $i < $limit; $i++) {
+                    $item = $redis->rPop($key);
+                    if ($item === false || $item === null) {
+                        break;
+                    }
+                    $decoded = is_string($item) ? json_decode($item, true) : null;
+                    if (!is_array($decoded)) {
+                        continue;
+                    }
+                    $sn = (string)($decoded['order_sn'] ?? '');
+                    if ($sn !== '' && isset($seen[$sn])) {
+                        continue;
+                    }
+                    if ($sn !== '') $seen[$sn] = 1;
                     $list[] = $decoded;
+                    if (count($list) >= $limit) break;
                 }
             }
+            Log::info('NearbyBill popVoicePending uid=' . $uid . ' count=' . count($list) . ' mers=' . json_encode($merIds));
         } catch (\Throwable $e) {
             Log::error('NearbyBill popVoicePending failed: ' . $e->getMessage());
         }
@@ -247,6 +417,23 @@ class NearbyShopBillOrderRepository extends BaseRepository
         ], $merId);
 
         Log::info('NearbyBill financial in: sn=' . $order['order_sn'] . ' mer_id=' . $merId . ' amount=' . $amount . ' pay_type=' . $payType);
+    }
+
+    /**
+     * 网购享免单：买单已标记 paid 后同步用户买单订单 + 语音
+     */
+    public function afterWelfareBillPaid($billOrder, $payType = 'welfare_free')
+    {
+        try {
+            $this->syncStoreOrder($billOrder, $payType);
+        } catch (\Exception $e) {
+            Log::error('NearbyBill welfare syncStoreOrder failed: ' . $e->getMessage());
+        }
+        try {
+            $this->notifyScanPayVoice($billOrder);
+        } catch (\Exception $e) {
+            Log::error('NearbyBill welfare notifyScanPayVoice failed: ' . $e->getMessage());
+        }
     }
 
     /**

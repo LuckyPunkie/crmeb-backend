@@ -15,9 +15,12 @@ use think\App;
 use crmeb\basic\BaseController;
 use crmeb\services\PayService;
 use app\common\model\user\User;
+use app\common\model\store\product\Product;
 use app\common\repositories\store\nearby\NearbyShopBillOrderRepository;
+use app\common\repositories\store\nearby\WelfareFreeOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\validate\api\nearby\NearbyBillValidate;
+use think\facade\Db;
 
 /**
  * 附近好店买单 - C端API控制器
@@ -115,12 +118,104 @@ class NearbyBill extends BaseController
     }
 
     /**
+     * 按消费金额匹配公益商品（售价升序）
+     * GET /api/nearby/bill/welfare_products?pay_price=
+     */
+    public function welfareProducts()
+    {
+        $payPrice = round((float)$this->request->param('pay_price', 0), 2);
+        if ($payPrice <= 0) {
+            return app('json')->success(['list' => []]);
+        }
+
+        $merIds = Db::name('merchant')
+            ->where('is_welfare_shop', 1)
+            ->where('is_del', 0)
+            ->where('status', 1)
+            ->column('mer_id');
+        if (!$merIds) {
+            return app('json')->success(['list' => []]);
+        }
+
+        $list = Product::getDB()->alias('p')
+            ->whereIn('p.mer_id', $merIds)
+            ->where('p.is_del', 0)
+            ->where('p.is_show', 1)
+            ->where('p.status', 1)
+            ->where('p.mer_status', 1)
+            ->where('p.hit_amount', '>=', $payPrice)
+            ->where('p.hit_amount', '>', 0)
+            ->whereRaw('p.hit_amount <= p.price')
+            ->field('p.product_id,p.mer_id,p.store_name,p.store_info,p.image,p.price,p.hit_amount,p.welfare_commission,p.sales')
+            ->order('p.price ASC')
+            ->order('p.product_id ASC')
+            ->limit(50)
+            ->select()
+            ->toArray();
+
+        // 附带默认 sku unique，便于立即购买
+        if ($list) {
+            $productIds = array_column($list, 'product_id');
+            $attrs = Db::name('store_product_attr_value')
+                ->whereIn('product_id', $productIds)
+                ->where('stock', '>', 0)
+                ->field('product_id,unique,price,stock')
+                ->order('price ASC')
+                ->select()
+                ->toArray();
+            $attrMap = [];
+            foreach ($attrs as $attr) {
+                $pid = (int)$attr['product_id'];
+                if (!isset($attrMap[$pid])) {
+                    $attrMap[$pid] = $attr;
+                }
+            }
+            foreach ($list as &$item) {
+                $attr = $attrMap[(int)$item['product_id']] ?? null;
+                $item['product_attr_unique'] = $attr['unique'] ?? '';
+                $item['stock'] = (int)($attr['stock'] ?? 0);
+            }
+            unset($item);
+        }
+
+        return app('json')->success(['list' => $list]);
+    }
+
+    /**
+     * 网购享免单：校验并缓存上下文（需登录）
+     * POST /api/nearby/bill/welfare_prepare
+     */
+    public function welfarePrepare(WelfareFreeOrderRepository $welfareRepo)
+    {
+        $uid = $this->currentUid();
+        if ($uid <= 0) {
+            return app('json')->fail('请先登录');
+        }
+        $scanMerId = (int)$this->request->param('scan_mer_id', 0);
+        $billAmount = round((float)$this->request->param('bill_amount', 0), 2);
+        $productId = (int)$this->request->param('product_id', 0);
+        try {
+            $ctx = $welfareRepo->buildContext($scanMerId, $billAmount, $productId);
+            $welfareRepo->saveContext($uid, $ctx);
+            return app('json')->success($ctx);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    /**
      * 商家 APP 拉取待播报收款语音
      * GET /api/nearby/bill/voice_pending
      */
     public function voicePending()
     {
-        $uid = $this->currentUid();
+        $uid = 0;
+        try {
+            // 路由已强制登录；uid 为 Request macro，不能用 method_exists(isLogin)
+            $uid = (int)$this->request->uid();
+        } catch (\Throwable $e) {
+            return app('json')->fail('请先登录');
+        }
         if ($uid <= 0) {
             return app('json')->fail('请先登录');
         }
@@ -178,7 +273,8 @@ class NearbyBill extends BaseController
     protected function currentUid(): int
     {
         try {
-            if (method_exists($this->request, 'isLogin') && $this->request->isLogin()) {
+            // isLogin/uid 是 Request macro，method_exists 检测不到，不能用 method_exists
+            if ($this->request->isLogin()) {
                 return (int)$this->request->uid();
             }
         } catch (\Throwable $e) {
@@ -192,7 +288,7 @@ class NearbyBill extends BaseController
     protected function currentUser(): ?User
     {
         try {
-            if (method_exists($this->request, 'isLogin') && $this->request->isLogin()) {
+            if ($this->request->isLogin()) {
                 $user = $this->request->userInfo();
                 return $user instanceof User ? $user : null;
             }

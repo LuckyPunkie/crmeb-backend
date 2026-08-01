@@ -191,6 +191,9 @@ Route::group(function () {
         //客服列表
         Route::get('services', 'User/services');
 
+        // APP 推送设备绑定
+        Route::post('push_client', 'User/bindPushClient');
+
         Route::get('member/info', 'User/memberInfo');
         Route::get('member/log', 'Member/getMemberValue');
 
@@ -255,6 +258,10 @@ Route::group(function () {
         Route::post('fans/:id', 'Community/setFocus');
         Route::get('fans/lst', 'Community/getUserFans');
         Route::get('focus/lst', 'Community/getUserFocus');
+
+        Route::post('like/:id', 'Community/toggleLike');
+        Route::get('like_me/lst', 'Community/likeMeList');
+        Route::get('i_like/lst', 'Community/iLikeList');
 
         Route::post('start/:id', 'Community/startCommunity');
         Route::get('start/lst', 'Community/getUserStartCommunity');

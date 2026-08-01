@@ -35,6 +35,8 @@ Route::group(function () {
     Route::get('nearby/search/hot', 'api.store.nearby.NearbySearch/hot');
     // 搜索商家
     Route::get('nearby/search/lst', 'api.store.nearby.NearbySearch/lst');
+    // 公益好物匹配
+    Route::get('nearby/bill/welfare_products', 'api.store.nearby.NearbyBill/welfareProducts');
 })->middleware(UserTokenMiddleware::class, false);
 
 // 扫码买单：允许游客（uid=0）；余额支付在控制器内校验登录
@@ -42,6 +44,11 @@ Route::group(function () {
     Route::post('nearby/bill/create', 'api.store.nearby.NearbyBill/create');
     Route::post('nearby/bill/pay/:order_sn', 'api.store.nearby.NearbyBill/pay');
 })->middleware(UserTokenMiddleware::class, false);
+
+// 网购享免单准备（需登录）
+Route::group(function () {
+    Route::post('nearby/bill/welfare_prepare', 'api.store.nearby.NearbyBill/welfarePrepare');
+})->middleware(UserTokenMiddleware::class, true);
 
 // 商家 APP 收款语音待播队列（需登录店员账号）
 Route::group(function () {

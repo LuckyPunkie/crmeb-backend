@@ -519,4 +519,41 @@ class Community extends BaseController
         if (!$url) return app('json')->fail('二维码生成失败');
         return app('json')->success(compact('url'));
     }
+
+    /**
+     * 喜欢/取消喜欢某用户
+     */
+    public function toggleLike($id)
+    {
+        $id = (int)$id;
+        if (!$id) return app('json')->fail('缺少参数');
+        if ($id == $this->user->uid) return app('json')->fail('请勿喜欢自己');
+        $status = (int)$this->request->param('status', 1);
+        try {
+            $this->repository->setLike($id, $this->user->uid, $status);
+        } catch (\think\exception\ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($status ? '已喜欢' : '已取消喜欢');
+    }
+
+    /**
+     * 喜欢我的人列表
+     */
+    public function likeMeList(RelevanceRepository $relevanceRepository)
+    {
+        [$page, $limit] = $this->getPage();
+        $data = $relevanceRepository->getUserLikeMe($this->user->uid, $page, $limit);
+        return app('json')->success($data);
+    }
+
+    /**
+     * 我喜欢的人列表
+     */
+    public function iLikeList(RelevanceRepository $relevanceRepository)
+    {
+        [$page, $limit] = $this->getPage();
+        $data = $relevanceRepository->getUserILike($this->user->uid, $page, $limit);
+        return app('json')->success($data);
+    }
 }
