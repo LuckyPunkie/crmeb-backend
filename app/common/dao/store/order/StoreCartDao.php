@@ -74,6 +74,8 @@ class StoreCartDao extends BaseDao
     {
         // 构建查询条件，查询用户购物车中符合条件的商品
         $query = ($this->getModel())::where(['uid' => $uid, 'is_del' => 0, 'is_new' => 0, 'is_pay' => 0])
+            // 排除扫码下单本店购物车，避免污染平台统一购物车
+            ->where('cart_scene', 'mall')
             ->with([
                 // 加载商品相关信息，包括商品基础信息和库存价格等
                 'product' => function ($query) {
@@ -266,7 +268,7 @@ class StoreCartDao extends BaseDao
     public function getCartCount(int $uid)
     {
         // 通过模型获取数据库实例，并根据条件查询购物车商品数量，条件包括用户ID、未删除、未标记为新、未支付。
-        $data = ($this->getModel()::getDB())->where(['uid' => $uid, 'is_del' => 0, 'is_new' => 0, 'is_pay' => 0])->field('SUM(cart_num) as count')->select();
+        $data = ($this->getModel()::getDB())->where(['uid' => $uid, 'is_del' => 0, 'is_new' => 0, 'is_pay' => 0, 'cart_scene' => 'mall'])->field('SUM(cart_num) as count')->select();
 
         // 确保返回的数据中count字段不为空，如果为空则默认为0。
         $data[0]['count'] = $data[0]['count'] ? $data[0]['count'] : 0;

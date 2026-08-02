@@ -124,9 +124,6 @@ class NearbyBill extends BaseController
     public function welfareProducts()
     {
         $payPrice = round((float)$this->request->param('pay_price', 0), 2);
-        if ($payPrice <= 0) {
-            return app('json')->success(['list' => []]);
-        }
 
         $merIds = Db::name('merchant')
             ->where('is_welfare_shop', 1)
@@ -137,21 +134,33 @@ class NearbyBill extends BaseController
             return app('json')->success(['list' => []]);
         }
 
-        $list = Product::getDB()->alias('p')
+        $query = Product::getDB()->alias('p')
             ->whereIn('p.mer_id', $merIds)
             ->where('p.is_del', 0)
             ->where('p.is_show', 1)
             ->where('p.status', 1)
             ->where('p.mer_status', 1)
-            ->where('p.hit_amount', '>=', $payPrice)
             ->where('p.hit_amount', '>', 0)
             ->whereRaw('p.hit_amount <= p.price')
-            ->field('p.product_id,p.mer_id,p.store_name,p.store_info,p.image,p.price,p.hit_amount,p.welfare_commission,p.sales')
-            ->order('p.price ASC')
-            ->order('p.product_id ASC')
-            ->limit(50)
-            ->select()
-            ->toArray();
+            ->field('p.product_id,p.mer_id,p.store_name,p.store_info,p.image,p.price,p.hit_amount,p.welfare_commission,p.sales');
+
+        if ($payPrice > 0) {
+            // 已输入金额：按命中金额匹配
+            $list = $query
+                ->where('p.hit_amount', '>=', $payPrice)
+                ->order('p.price ASC')
+                ->order('p.product_id ASC')
+                ->limit(50)
+                ->select()
+                ->toArray();
+        } else {
+            // 未输入金额：随机展示公益商品（预览用，确认免单仍需输入金额）
+            $list = $query
+                ->orderRaw('RAND()')
+                ->limit(20)
+                ->select()
+                ->toArray();
+        }
 
         // 附带默认 sku unique，便于立即购买
         if ($list) {

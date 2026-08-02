@@ -168,9 +168,12 @@ class StoreCartRepository extends BaseRepository
      * @param $uid
      * @author Qinii
      */
-    public function getCartByProductSku($sku,$uid, $touristUniqueKey = '', $excludeId = 0)
+    public function getCartByProductSku($sku,$uid, $touristUniqueKey = '', $excludeId = 0, string $cartScene = 'mall')
     {
         $where = ['is_del'=>0,'is_fail'=>0,'is_new'=>0,'is_pay'=>0,'uid' => $uid,'product_type' => 0,'product_attr_unique' => $sku];
+        if ($cartScene !== '') {
+            $where['cart_scene'] = $cartScene;
+        }
         if($touristUniqueKey != '') {
             $where['tourist_unique_key'] = $touristUniqueKey;
         }
