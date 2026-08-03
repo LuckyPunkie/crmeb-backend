@@ -1,0 +1,8 @@
+# 将下列配置写入服务器项目根目录 .env（勿提交真实密钥到 Git）
+
+doubao.app_id = 你的APP_ID
+doubao.access_token = 你的Access_Token
+
+# 执行 SQL：database/ai_order_20260802.sql
+# 平台费率：system_config ai_order_rate_per_1k / ai_order_min_balance / ai_order_open
+# 商家充值：POST /sys/ai_order/adjust  { mer_id, amount, remark }

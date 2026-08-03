@@ -132,9 +132,27 @@ class ScanOrderOrder extends BaseController
         if (mb_strlen($userRemark) > 200) {
             $userRemark = mb_substr($userRemark, 0, 200);
         }
+        $aiSessionNo = trim((string)$this->request->param('ai_session_no', ''));
+        $aiSummary = trim((string)$this->request->param('ai_order_summary', ''));
+        if ($aiSessionNo !== '' && $aiSummary === '') {
+            try {
+                $aiSession = app()->make(\app\common\repositories\store\aiOrder\AiOrderSessionRepository::class)
+                    ->getByNo($aiSessionNo);
+                if ($aiSession && (int)$aiSession['mer_id'] === $merId) {
+                    $aiSummary = (string)($aiSession['summary'] ?? '');
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+        if (mb_strlen($aiSummary) > 2000) {
+            $aiSummary = mb_substr($aiSummary, 0, 2000);
+        }
         $markText = '扫码下单:' . ($table['table_label'] ?? '') . '(台号ID:' . $tableId . ')';
         if ($userRemark !== '') {
             $markText .= '；备注:' . $userRemark;
+        }
+        if ($aiSummary !== '') {
+            $markText .= '；AI点餐:' . $aiSummary;
         }
         $mark = [
             $merId => $markText,
@@ -170,12 +188,23 @@ class ScanOrderOrder extends BaseController
 
         $orderRemark = $userRemark !== '' ? ('扫码下单；' . $userRemark) : '扫码下单';
         foreach ($orders as $order) {
-            StoreOrder::getDB()->where('order_id', $order['order_id'])->update([
+            $update = [
                 'is_scan_order' => 1,
                 'scan_table_id' => $tableId,
                 'scan_table_label' => (string)$table['table_label'],
                 'remark' => $orderRemark,
-            ]);
+            ];
+            if ($aiSessionNo !== '' || $aiSummary !== '') {
+                $update['ai_session_id'] = $aiSessionNo;
+                $update['ai_order_summary'] = $aiSummary;
+            }
+            try {
+                StoreOrder::getDB()->where('order_id', $order['order_id'])->update($update);
+            } catch (\Throwable $e) {
+                // 未执行迁移时降级：至少写扫码字段
+                unset($update['ai_session_id'], $update['ai_order_summary']);
+                StoreOrder::getDB()->where('order_id', $order['order_id'])->update($update);
+            }
         }
 
         // 免支付：直接置为已支付，进入待服务/待发货

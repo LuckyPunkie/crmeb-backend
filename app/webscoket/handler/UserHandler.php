@@ -15,6 +15,7 @@ namespace app\webscoket\handler;
 
 
 use app\common\middleware\RateLimiter;
+use app\common\repositories\store\aiOrder\AiOrderLiveBridgeRepository;
 use app\common\repositories\store\service\StoreServiceLogRepository;
 use app\common\repositories\store\service\StoreServiceRepository;
 use app\common\repositories\store\service\StoreServiceUserRepository;
@@ -340,12 +341,63 @@ class UserHandler
 
     public function close($result)
     {
+        try {
+            app()->make(AiOrderLiveBridgeRepository::class)->stopFd((int)($result['fd'] ?? 0));
+        } catch (Throwable $e) {
+        }
         if ($result['type'] === 1 || $result['type'] === 'user') {
             app()->make(StoreServiceUserRepository::class)->online($result['uid'], 0);
             $this->closeChat($result['uid'], $result['fd']);
         } else {
             $this->closeServiceChat($result['uid'], $result['fd']);
         }
+    }
+
+    /**
+     * 实时 AI 点餐：建立豆包长连接（服务端 VAD）
+     * WS type = ai_order_live_start
+     */
+    public function ai_order_live_start(array $result)
+    {
+        $fd = (int)($result['fd'] ?? 0);
+        $uid = (int)($result['uid'] ?? 0);
+        $sessionNo = trim((string)($result['data']['session_no'] ?? ''));
+        $info = Cache::get('_ws_f_' . $fd);
+        $sender = is_array($info) ? (string)($info['sender'] ?? '') : '';
+        try {
+            $out = app()->make(AiOrderLiveBridgeRepository::class)->start($fd, $uid, $sender, $sessionNo);
+            return app('json')->message('ai_order', array_merge(['ok' => 1, 'type' => 'live_ready'], $out));
+        } catch (ValidateException $e) {
+            return app('json')->message('err_tip', $e->getMessage());
+        } catch (Throwable $e) {
+            return app('json')->message('err_tip', $e->getMessage() ?: '实时通话启动失败');
+        }
+    }
+
+    /**
+     * 实时 AI 点餐：上送 PCM 帧（base64）
+     * WS type = ai_order_live_pcm
+     */
+    public function ai_order_live_pcm(array $result)
+    {
+        $fd = (int)($result['fd'] ?? 0);
+        $pcm = (string)($result['data']['pcm_base64'] ?? '');
+        if ($pcm !== '') {
+            app()->make(AiOrderLiveBridgeRepository::class)->feedPcm($fd, $pcm);
+        }
+        // 高频帧不回包，减轻压力
+        return null;
+    }
+
+    /**
+     * 实时 AI 点餐：结束豆包长连接（会话结算仍走 HTTP end）
+     * WS type = ai_order_live_stop
+     */
+    public function ai_order_live_stop(array $result)
+    {
+        $fd = (int)($result['fd'] ?? 0);
+        app()->make(AiOrderLiveBridgeRepository::class)->stopFd($fd);
+        return app('json')->message('ai_order', ['ok' => 1, 'type' => 'live_stopped']);
     }
 
 }

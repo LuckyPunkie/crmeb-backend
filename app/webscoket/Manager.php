@@ -59,6 +59,15 @@ class Manager implements HandlerInterface
     {
         $type = (string)$request->param('type', '');
         $token = (string)$request->param('token', '');
+        // 小程序：/api/temp-ws-token 下发的一次性凭证走 query t=
+        $tempKey = (string)$request->param('t', '');
+        if ($tempKey !== '' && $tempKey !== 'undefined') {
+            $cached = Cache::get('ws_temp_token:' . $tempKey);
+            if (is_string($cached) && $cached !== '') {
+                $token = $cached;
+                Cache::delete('ws_temp_token:' . $tempKey);
+            }
+        }
         if ($token === 'undefined' || $token === 'false') {
             $token = '';
         }
@@ -146,7 +155,9 @@ class Manager implements HandlerInterface
 
         try {
             $response = $handler->{$eventType}($result);
-            $this->pushResponse($response);
+            if ($response !== null) {
+                $this->pushResponse($response);
+            }
         } catch (\Throwable $e) {
             Log::warning("WebSocket event {$eventType} failed: " . $e->getMessage());
             $this->pushResponse(app('json')->message('err_tip', $e->getMessage()));
