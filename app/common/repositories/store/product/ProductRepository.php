@@ -98,6 +98,7 @@ class ProductRepository extends BaseRepository
         ['hit_amount', 0],
         ['welfare_commission', 0],
         ['is_scan_order', 1],
+        ['is_blindbox_exclusive', 0],
     ];
     protected $admin_filed = 'Product.product_id,Product.mer_id,brand_id,spec_type,unit_name,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,U.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,Product.cost,Product.ot_price,Product.stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,star,ficti,integral_total,integral_price_total,sys_labels,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.type';
     protected $filed = 'Product.product_id,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,spu_id,video_link,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way';
@@ -657,6 +658,7 @@ class ProductRepository extends BaseRepository
             'hit_amount' => isset($data['hit_amount']) ? (float)$data['hit_amount'] : 0,
             'welfare_commission' => isset($data['welfare_commission']) ? (float)$data['welfare_commission'] : 0,
             'is_scan_order' => isset($data['is_scan_order']) ? ((int)$data['is_scan_order'] ? 1 : 0) : 1,
+            'is_blindbox_exclusive' => isset($data['is_blindbox_exclusive']) ? ((int)$data['is_blindbox_exclusive'] ? 1 : 0) : 0,
         ];
         if (isset($data['extend']))
             $result['extend'] = $data['extend'] ? json_encode($data['extend'], JSON_UNESCAPED_UNICODE) : '';

@@ -356,8 +356,29 @@ class Attachment extends BaseController
 
         $res = $this->repository->create($type, $this->merId, $this->request->merAdminId(), $data);
 
+        // 兼容小程序：HEVC 转 H.264，并截取第一帧封面
+        $cover = null;
+        try {
+            $localVideo = '';
+            $filePath = $info->filePath ?? '';
+            if ($filePath) {
+                $candidate = rtrim(public_path(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $filePath), DIRECTORY_SEPARATOR);
+                if (is_file($candidate)) {
+                    $localVideo = $candidate;
+                }
+            }
+            if (!$localVideo) {
+                $localVideo = $data['attachment_src'];
+            }
+            \crmeb\services\VideoCoverService::ensureH264($localVideo);
+            $cover = \crmeb\services\VideoCoverService::extract($localVideo);
+        } catch (\Throwable $e) {
+            $cover = null;
+        }
+
         return app('json')->success([
             'src' => $data['attachment_src'],
+            'cover' => $cover,
             'attachment_id' => $res->attachment_id
         ]);
     }

@@ -20,8 +20,7 @@ class CommunityValidate extends Validate
     protected $failException = true;
 
     protected $rule = [
-        'image|图片' => 'require|array',
-        'content|内容' => '',
+        'image|图片' => 'array',
         'spu_id|关联商品' => 'array',
     ];
 

@@ -243,6 +243,14 @@ Route::group(function () {
     Route::get('intention/lst', 'api.store.merchant.MerchantIntention/lst');
     Route::get('intention/detail/:id', 'api.store.merchant.MerchantIntention/detail');
     Route::post('intention/update/:id', 'api.store.merchant.MerchantIntention/update');
+
+    // 商家标签（需要是商户）
+    Route::group('mer/label', function () {
+        Route::get('lst', 'api.store.merchant.MerchantLabelApi/lst');
+        Route::post('join/:id', 'api.store.merchant.MerchantLabelApi/join');
+        Route::post('pay/:id', 'api.store.merchant.MerchantLabelApi/pay');
+        Route::post('confirm/:order_sn', 'api.store.merchant.MerchantLabelApi/confirm');
+    });
     Route::post('store/product/group/cancel', 'api.store.product.StoreProductGroup/cancel');
 
     //社区
@@ -348,6 +356,8 @@ Route::group(function () {
 
         Route::get('/focuslst', 'Community/focuslst');
         Route::get('qrcode/:id', 'Community/qrcode');
+        // 机器人帖图片加载失败上报（首页可未登录浏览）
+        Route::post('/image_fail', 'Community/imageFail');
     })->prefix('api.community.');
     // 申请加急复审 / 查询审核状态（无需登录；勿挂在 community 前缀下，否则控制器路径会被拼错）
     Route::post('community/user/review_urgent/:uid', 'api.user.UserCertification/applyUrgent');
@@ -549,6 +559,8 @@ Route::group(function () {
     //上传图片
     Route::post('upload/image/:field', 'api.Common/uploadImage');
     Route::post('scan_upload/image/:field/:token', 'api.Common/scanUploadImage');
+    //附件上传（pdf/doc/image，最大20MB）
+    Route::post('upload/attachment/:field', 'api.Common/uploadAttachment');
     //入住商户上传证件接口
     Route::post('upload/certificate/:field', 'api.Common/uploadCertificate');
     //公共配置

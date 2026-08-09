@@ -165,6 +165,10 @@ class Community extends BaseController
             $where = $this->repository::IS_SHOW_WHERE;
         }
         $where['uid'] = $id;
+        $is_type = $this->request->param('is_type', '');
+        if ($is_type !== '') $where['is_type'] = $is_type;
+        $community_type = $this->request->param('community_type', '');
+        if ($community_type !== '') $where['community_type'] = $community_type;
         [$page, $limit] = $this->getPage();
         return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user));
     }
@@ -330,7 +334,7 @@ class Community extends BaseController
      */
     public function checkParams()
     {
-        $data = $this->request->params(['image','topic_id','topic_names','content','spu_id','order_id',['is_type',1],'video_link']);
+        $data = $this->request->params(['image','topic_id','topic_names','content','spu_id','order_id',['is_type',1],'video_link','title']);
         $config = systemConfig(["community_app_switch",'community_audit','community_video_audit']);
         $data['status'] = 0;
         $data['is_show'] = 0;
@@ -351,23 +355,48 @@ class Community extends BaseController
                 $data['status_time'] = date('Y-m-d H:i:s', time());
             }
             if (!$data['video_link']) throw new ValidateException('请上传视频');
-
+            // 视频未传封面时，自动截取第一帧；同时尽量保证 H.264 可播
+            try {
+                \crmeb\services\VideoCoverService::ensureH264((string)$data['video_link']);
+            } catch (\Throwable $e) {
+                // ignore
+            }
+            $imageEmpty = empty($data['image']) || (is_array($data['image']) && !array_filter($data['image']));
+            if ($imageEmpty) {
+                $cover = \crmeb\services\VideoCoverService::extractFromUrl((string)$data['video_link']);
+                if ($cover) {
+                    $data['image'] = [$cover];
+                }
+            }
         }
 
         $data['content'] = filter_emoji($data['content']);
-        MiniProgram::msgSecCheck(
-            $data['content'],
-            3,
-            $this->request->userInfo()->wechat->routine_openid ?? '',
-            0
-        );
+        if (!empty($data['content'])) {
+            MiniProgram::msgSecCheck(
+                $data['content'],
+                3,
+                $this->request->userInfo()->wechat->routine_openid ?? '',
+                0
+            );
+        }
+        if ($data['is_type'] == 1 && empty($data['image'])) {
+            throw new ValidateException('图片不能为空');
+        }
         app()->make(CommunityValidate::class)->check($data);
-        $arr = explode("\n", $data['content']);
-        $title = rtrim(ltrim($arr[0]));
-        if (mb_strlen($title) > 40 ){
-            $data['title'] = mb_substr($title,0,30,'utf-8');
+        // 优先使用用户填写的标题；未填时再取正文首行
+        $userTitle = trim(filter_emoji((string)($data['title'] ?? '')));
+        if ($userTitle !== '') {
+            $data['title'] = mb_strlen($userTitle) > 60
+                ? mb_substr($userTitle, 0, 60, 'utf-8')
+                : $userTitle;
         } else {
-            $data['title'] = $title;
+            $arr = explode("\n", (string)$data['content']);
+            $title = trim($arr[0] ?? '');
+            if (mb_strlen($title) > 40) {
+                $data['title'] = mb_substr($title, 0, 30, 'utf-8');
+            } else {
+                $data['title'] = $title;
+            }
         }
         if ($data['image']) $data['image'] = implode(',',$data['image']);
         return $data;
@@ -535,6 +564,18 @@ class Community extends BaseController
             return app('json')->fail($e->getMessage());
         }
         return app('json')->success($status ? '已喜欢' : '已取消喜欢');
+    }
+
+    /**
+     * C 端图片加载失败上报：机器人帖删失效图；无图删帖；该机器人全部帖无图则注销
+     */
+    public function imageFail()
+    {
+        $communityId = (int)$this->request->param('community_id', 0);
+        $imageUrl = (string)$this->request->param('image_url', '');
+        $data = app()->make(\app\common\repositories\community\CommunityBotImageCleanRepository::class)
+            ->reportFail($communityId, $imageUrl);
+        return app('json')->success($data);
     }
 
     /**

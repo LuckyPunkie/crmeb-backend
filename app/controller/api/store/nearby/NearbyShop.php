@@ -41,17 +41,30 @@ class NearbyShop extends BaseController
             'order',
             'latitude',
             'longitude',
-            'tags',
+            'label_id',
             'is_open',
-            ['store_type', 'offline'], // offline=实体店/线下店，online=线上店
+            ['store_type', 'offline'],
         ]);
 
-        // 前端传 category_id，仓库统一用 nearby_category_id
         if (!empty($where['category_id'])) {
             $where['nearby_category_id'] = (int)$where['category_id'];
         }
 
         return app('json')->success($this->repository->getList($where, $page, $limit));
+    }
+
+    /**
+     * 商家标签列表
+     * GET /api/nearby/labels
+     */
+    public function labels()
+    {
+        $list = \app\common\model\system\merchant\MerchantLabel::getDB()
+            ->field('id, label_name')
+            ->order('id ASC')
+            ->select()
+            ->toArray();
+        return app('json')->success($list);
     }
 
     /**

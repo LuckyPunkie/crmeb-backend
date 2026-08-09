@@ -11,6 +11,7 @@
 
 namespace app\controller\api\store;
 
+use app\common\repositories\store\BlindBoxFreeOpenRepository;
 use app\common\repositories\store\BlindBoxShareRepository;
 use app\common\repositories\store\product\ProductAttrValueRepository;
 use app\common\repositories\store\product\ProductRepository;
@@ -73,6 +74,88 @@ class BlindBox extends BaseController
         } catch (ValidateException $e) {
             return app('json')->fail($e->getMessage());
         }
+    }
+
+    /**
+     * 商家账号每日免费开盒资格（不消耗）
+     * GET /api/store/blindbox/free_open/check
+     */
+    public function freeOpenCheck(BlindBoxFreeOpenRepository $repo)
+    {
+        $data = $repo->check((int)$this->request->uid());
+        return app('json')->success($data);
+    }
+
+    /**
+     * 商家账号每日免费开盒（每个商家每天一次）
+     * POST /api/store/blindbox/free_open
+     */
+    public function freeOpen(BlindBoxFreeOpenRepository $repo)
+    {
+        try {
+            $data = $repo->tryOpen((int)$this->request->uid());
+            return app('json')->success($data);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    /**
+     * 盲盒广场商品（平台盲盒 + 分享商家专属）
+     * GET /api/store/blindbox/home_list?share_mer_id=
+     */
+    public function homeList(BlindBoxShareRepository $shareRepo)
+    {
+        [$page, $limit] = $this->getPage();
+        // 仅请求显式带 share_mer_id 时展示专属商品；绑定关系只用于分销，不自动展示专属
+        $shareMerId = (int)$this->request->param('share_mer_id', 0);
+        if ($shareMerId > 0) {
+            $this->tryBindShareFromRequest();
+        }
+
+        $platform = $shareRepo->getPlatformBlindboxMerchant();
+        $platformMerId = $platform ? (int)$platform['mer_id'] : 0;
+
+        $query = Db::name('store_product')->alias('p')
+            ->where('p.is_del', 0)
+            ->where('p.is_show', 1)
+            ->where('p.status', 1)
+            ->where('p.is_used', 1);
+
+        if ($shareMerId > 0) {
+            $query->where(function ($q) use ($platformMerId, $shareMerId) {
+                if ($platformMerId > 0) {
+                    $q->where(function ($q2) use ($platformMerId) {
+                        $q2->where('p.mer_id', $platformMerId)
+                            ->where('p.is_blindbox_exclusive', 0);
+                    })->whereOr(function ($q3) use ($shareMerId) {
+                        $q3->where('p.mer_id', $shareMerId)
+                            ->where('p.is_blindbox_exclusive', 1);
+                    });
+                } else {
+                    $q->where('p.mer_id', $shareMerId)->where('p.is_blindbox_exclusive', 1);
+                }
+            });
+        } else {
+            if ($platformMerId <= 0) {
+                return app('json')->success(['list' => [], 'count' => 0, 'share_mer_id' => 0]);
+            }
+            $query->where('p.mer_id', $platformMerId)->where('p.is_blindbox_exclusive', 0);
+        }
+
+        $count = (clone $query)->count();
+        $list = $query->page($page, $limit)
+            ->field('p.product_id,p.mer_id,p.store_name,p.image,p.price,p.ot_price,p.sales,p.stock,p.is_blindbox_exclusive')
+            ->order('p.is_blindbox_exclusive DESC, p.sort DESC, p.product_id DESC')
+            ->select()
+            ->toArray();
+
+        return app('json')->success([
+            'list' => $list,
+            'count' => $count,
+            'share_mer_id' => $shareMerId,
+            'platform_mer_id' => $platformMerId,
+        ]);
     }
 
     /**
@@ -176,8 +259,20 @@ class BlindBox extends BaseController
         }
 
         $merchant = $merchantRepository->get($product['mer_id']);
-        if (!$merchant || !$merchant['is_blindbox']) {
+        $isExclusive = (int)($product['is_blindbox_exclusive'] ?? 0) === 1;
+        $isPlatformBlindbox = $merchant && (int)($merchant['is_blindbox'] ?? 0) === 1;
+        if (!$isPlatformBlindbox && !$isExclusive) {
             return app('json')->fail('该商品不是盲盒商品');
+        }
+        // 专属盲盒仅分享该商家时可见
+        if ($isExclusive) {
+            $shareMerId = (int)$this->request->param('share_mer_id', 0);
+            if ($shareMerId <= 0 && $this->userInfo) {
+                $shareMerId = app()->make(BlindBoxShareRepository::class)->getBound((int)$this->userInfo->uid);
+            }
+            if ($shareMerId !== (int)$product['mer_id']) {
+                return app('json')->fail('专属盲盒仅限该商家分享进入后购买');
+            }
         }
 
         $blindboxConfig = json_decode($product['extension_one'], true) ?: [];
@@ -460,10 +555,6 @@ class BlindBox extends BaseController
 
         if (!$order) {
             return app('json')->fail('订单不存在或状态不符');
-        }
-
-        if (!empty($order->user_address)) {
-            return app('json')->fail('该订单已设置收货地址');
         }
 
         $address = $addressRepo->getWhere(['address_id' => $addressId, 'uid' => $uid]);

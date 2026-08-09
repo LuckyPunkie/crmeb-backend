@@ -225,11 +225,23 @@ class Menu extends BaseController
         } else {
             $menus = $merchant->type_id ? $this->repository->typesByValidMenuList($merchant->type_id) : $this->repository->getValidMenuList($this->merchant);
         }
+        // 商家开盒概率：仅盲盒店铺；专属盲盒：仅普通店铺
+        $isBlindboxShop = (int)($merchant['is_blindbox'] ?? 0) === 1;
+        $menus = array_filter($menus, function ($menu) use ($isBlindboxShop) {
+            $path = (string)($menu['path'] ?? '');
+            if ($path === '/product/blindbox/settings') {
+                return $isBlindboxShop;
+            }
+            if ($path === '/product/blindbox/exclusive') {
+                return !$isBlindboxShop;
+            }
+            return true;
+        });
         foreach ($menus as $k => $menu) {
             $menu['path'] = $pre . $menu['path'];
             $menus[$k] = $menu;
         }
-        return app('json')->success(array_values(array_filter(formatCategory($menus, 'id'), function ($v) {
+        return app('json')->success(array_values(array_filter(formatCategory(array_values($menus), 'id'), function ($v) {
             return 0 == $v['pid'];
         })));
     }

@@ -42,6 +42,7 @@ class UserProfile extends BaseController
     public function save()
     {
         $uid  = $this->request->uid();
+        $sex  = $this->request->param('sex/d', -1);
         $data = $this->request->params([
             ['height', 0],
             ['weight', 0],
@@ -62,16 +63,19 @@ class UserProfile extends BaseController
             ['dating_purpose', 0],
         ]);
 
+        // 同步性别到 eb_user（1=男 2=女 3=保密）
+        if ($sex === 1 || $sex === 2 || $sex === 3) {
+            \app\common\model\user\User::where('uid', $uid)->update(['sex' => $sex]);
+        }
+
         // 过滤掉值为 0 或空字符串的字段，允许部分更新
         $data = array_filter($data, function ($v) {
             return $v !== 0 && $v !== '';
         });
 
-        if (empty($data)) {
-            return app('json')->fail('没有可保存的内容');
+        if (!empty($data)) {
+            $this->repository->save($uid, $data);
         }
-
-        $this->repository->save($uid, $data);
 
         return app('json')->success('保存成功');
     }

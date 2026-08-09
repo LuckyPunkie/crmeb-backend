@@ -631,6 +631,25 @@ class Common extends BaseController
         return app('json')->success($data);
     }
 
+    public function uploadAttachment($field)
+    {
+        $file = $this->request->file($field);
+        if (!$file) return app('json')->fail('请选择上传文件');
+        $file = is_array($file) ? $file[0] : $file;
+        validate(["$field|文件" => [
+            'fileSize' => 20 * 1024 * 1024,
+            'fileExt' => 'jpg,jpeg,png,pdf,doc,docx',
+        ]])->check([$field => $file]);
+        $upload = UploadService::create();
+        $info = $upload->to('attach')->move($field);
+        if ($info === false) {
+            return app('json')->fail($upload->getError());
+        }
+        $res = $upload->getUploadInfo();
+        $res['dir'] = tidy_url($res['dir']);
+        return app('json')->success('上传成功', ['path' => $res['dir']]);
+    }
+
     public function uploadCertificate($field)
     {
         $file = $this->request->file($field);

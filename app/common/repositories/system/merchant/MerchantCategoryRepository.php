@@ -118,14 +118,38 @@ class MerchantCategoryRepository extends BaseRepository
 
     /**
      * 筛选分类
-     * @Author:Qinii
-     * @Date: 2020/9/15
-     * @return array
      */
     public function getSelect()
     {
         $query = $this->search([])->field('merchant_category_id,category_name');
         $list = $query->select()->toArray();
         return $list;
+    }
+
+    /**
+     * 两级分类树（admin 前端展示用）
+     */
+    public function getTree()
+    {
+        $list = $this->dao->search()
+            ->order('sort ASC, merchant_category_id ASC')
+            ->select()->toArray();
+
+        $tree = [];
+        $map  = [];
+        foreach ($list as &$item) {
+            if ((int)$item['pid'] === 0) {
+                $item['children'] = [];
+                $tree[] = &$item;
+                $map[$item['merchant_category_id']] = &$item;
+            }
+        }
+        unset($item);
+        foreach ($list as $item) {
+            if ((int)$item['pid'] > 0 && isset($map[$item['pid']])) {
+                $map[$item['pid']]['children'][] = $item;
+            }
+        }
+        return $tree;
     }
 }

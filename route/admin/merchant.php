@@ -80,29 +80,23 @@ Route::group(function () {
     Route::group('system/merchant', function () {
         Route::get('category/lst', '/lst')->name('systemMerchantCategoryLst')->option([
             '_alias' => '店铺分类列表',
-            ]);
+        ]);
         Route::get('category_lst', '/lst')->option([
             '_alias' => '店铺分类列表',
             '_auth'  => false,
         ]);
+        Route::get('category/tree', '/tree')->name('systemMerchantCategoryTree')->option([
+            '_alias' => '店铺分类树',
+            '_auth'  => false,
+        ]);
         Route::post('category', '/create')->name('systemMerchantCategoryCreate')->option([
             '_alias' => '店铺分类添加',
-            ]);
-        Route::get('category/form', '/createForm')->name('systemMerchantCategoryCreateForm')->option([
-            '_alias' => '店铺分类添加表单',
-            '_auth' => false,
-            '_form' => 'systemMerchantCategoryCreate',
         ]);
         Route::delete('category/:id', '/delete')->name('systemMerchantCategoryDelete')->option([
             '_alias' => '店铺分类删除',
-            ]);
+        ]);
         Route::post('category/:id', '/update')->name('systemMerchantCategoryUpdate')->option([
             '_alias' => '店铺分类编辑',
-            ]);
-        Route::get('category/form/:id', '/updateForm')->name('systemMerchantCategoryUpdateForm')->option([
-            '_alias' => '店铺分类编辑表单',
-            '_auth' => false,
-            '_form' => 'systemMerchantCategoryUpdate',
         ]);
         Route::get('category/options', '/getOptions')->option([
             '_alias' => '店铺分类筛选',

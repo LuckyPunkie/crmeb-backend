@@ -45,7 +45,7 @@ class CommunityPaidContent extends BaseController
     {
         $data = $this->request->params([
             'title', 'free_content', 'paid_content', 'price',
-            'trial_ratio', 'images', 'topic_id', 'topic_names', 'spu_id'
+            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id'
         ]);
         app()->make(CommunityPaidValidate::class)->check($data);
 
@@ -79,6 +79,7 @@ class CommunityPaidContent extends BaseController
         $communityId = $this->communityRepository->create($communityData);
 
         // 创建 paid_content 记录
+        $paidImages = $data['paid_images'] ?? [];
         $paidData = [
             'community_id' => $communityId,
             'uid' => $uid,
@@ -86,6 +87,7 @@ class CommunityPaidContent extends BaseController
             'trial_ratio' => $data['trial_ratio'] ?? 0,
             'free_content' => $data['free_content'],
             'paid_content' => $data['paid_content'],
+            'paid_images' => is_array($paidImages) ? json_encode($paidImages, JSON_UNESCAPED_UNICODE) : ($paidImages ?: '[]'),
         ];
 
         app()->make(\app\common\dao\community\CommunityPaidDao::class)->create($paidData);
@@ -113,7 +115,7 @@ class CommunityPaidContent extends BaseController
 
         $data = $this->request->params([
             'title', 'free_content', 'paid_content', 'price',
-            'trial_ratio', 'images', 'topic_id', 'topic_names', 'spu_id'
+            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id'
         ]);
         app()->make(CommunityPaidValidate::class)->check($data);
 
@@ -159,12 +161,17 @@ class CommunityPaidContent extends BaseController
 
         $this->communityRepository->edit($communityId, $communityData);
 
-        $paidDao->update($paid['id'], [
+        $updatePaid = [
             'price' => $price,
             'trial_ratio' => $data['trial_ratio'] ?? 0,
             'free_content' => $data['free_content'],
             'paid_content' => $data['paid_content'],
-        ]);
+        ];
+        $paidImages = $data['paid_images'] ?? [];
+        $updatePaid['paid_images'] = is_array($paidImages)
+            ? json_encode($paidImages, JSON_UNESCAPED_UNICODE)
+            : ($paidImages ?: '[]');
+        $paidDao->update($paid['id'], $updatePaid);
 
         return app('json')->success(['community_id' => $communityId]);
     }

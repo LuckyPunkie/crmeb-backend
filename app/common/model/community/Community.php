@@ -46,7 +46,8 @@ class Community extends BaseModel
 
     public function getImageAttr($value)
     {
-        return explode(',',$value);
+        if (!$value) return [];
+        return array_values(array_filter(explode(',', $value)));
     }
 
     public function author()

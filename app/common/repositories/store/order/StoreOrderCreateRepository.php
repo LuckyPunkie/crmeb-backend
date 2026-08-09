@@ -731,7 +731,15 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $allow_no_address = true;
 
         foreach ($merchantCartList as &$merchantCart) {
-            $allow_no_address = $allow_no_address && ($merchantCart['order']['isTake'] || !empty($merchantCart['is_blindbox']));
+            $_cartHasBlindbox = !empty($merchantCart['is_blindbox']);
+            if (!$_cartHasBlindbox) {
+                foreach ($merchantCart['list'] as $_c) {
+                    if (!empty($_c['product']['is_blindbox_exclusive'])
+                        || ((int)($_c['product_id'] ?? 0) > 0 && (int)Db::name('store_product')->where('product_id', (int)$_c['product_id'])->value('is_blindbox_exclusive') === 1)
+                    ) { $_cartHasBlindbox = true; break; }
+                }
+            }
+            $allow_no_address = $allow_no_address && ($merchantCart['order']['isTake'] || $_cartHasBlindbox);
             $merIntegralConfig = $merchantCart['take'];
             $merIntegralConfig['mer_integral_rate'] = min(1, $merIntegralConfig['mer_integral_rate'] > 0 ? bcdiv($merIntegralConfig['mer_integral_rate'], 100, 4) : $merIntegralConfig['mer_integral_rate']);
             $total_integral = 0;
@@ -988,6 +996,21 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             app()->make(UserAddressValidate::class)->scene('take')->check($post);
         }
 
+        // 分享者 X / 邀请人 B：先记下原邀请链，再处理商品分享绑定
+        $inviteBUid = (int)($user->spread_uid ?? 0);
+        $cartShareMerId = 0;
+        foreach ($merchantCartList as $_mc) {
+            foreach ($_mc['list'] as $_c) {
+                if (!$cartShareMerId && !empty($_c['share_mer_id'])) {
+                    $cartShareMerId = (int)$_c['share_mer_id'];
+                }
+            }
+        }
+        if (!$cartShareMerId) {
+            $cartShareMerId = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
+                ->getBound((int)$uid);
+        }
+
         if ($cartSpread) {
             app()->make(UserRepository::class)->bindSpread($user, $cartSpread);
         }
@@ -1007,6 +1030,20 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         }
         $spreadUid = $spreadUser->uid ?? 0;
         $topUid = $topUser->uid ?? 0;
+
+        // 全站三级分销：有分享者 X 时，一级=X，二级=B(原邀请人)；无 X 保持原逻辑
+        $shareXUid = (int)$cartSpread;
+        if ($shareXUid <= 0 && $cartShareMerId > 0) {
+            $shareXUid = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
+                ->resolveShareUid($cartShareMerId);
+        }
+        if ($ex && $shareXUid > 0) {
+            $spreadUid = $shareXUid;
+            $topUid = $inviteBUid > 0 && $inviteBUid !== $shareXUid ? $inviteBUid : 0;
+            $userRepositoryTmp = app()->make(UserRepository::class);
+            $spreadUser = $userRepositoryTmp->get($spreadUid) ?: $spreadUser;
+            $topUser = $topUid > 0 ? ($userRepositoryTmp->get($topUid) ?: null) : null;
+        }
         $giveCouponIds = [];
         $address = $orderInfo['address'];
         $allUseCoupon = $orderInfo['usePlatformCouponId'] ? [$orderInfo['usePlatformCouponId']] : [];
@@ -1016,13 +1053,18 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $cartIds = [];
         $orderList = [];
 
-        // ===== 盲盒模块：SKU随机选择逻辑 =====
+        // ===== 盲盒模块：SKU随机选择逻辑（平台盲盒店 + 商家专属盲盒）=====
         $merchantRepository = app()->make(MerchantRepository::class);
         $productAttrValueRepository = app()->make(ProductAttrValueRepository::class);
         foreach ($merchantCartList as &$_merchantCart) {
             $_merchant = $merchantRepository->get($_merchantCart['mer_id']);
-            if ($_merchant && !empty($_merchant['is_blindbox'])) {
-                foreach ($_merchantCart['list'] as &$_cart) {
+            $_isBlindboxShop = $_merchant && !empty($_merchant['is_blindbox']);
+            foreach ($_merchantCart['list'] as &$_cart) {
+                $_isExclusiveProduct = !empty($_cart['product']['is_blindbox_exclusive'])
+                    || (int)Db::name('store_product')->where('product_id', (int)$_cart['product_id'])->value('is_blindbox_exclusive') === 1;
+                if (!$_isBlindboxShop && !$_isExclusiveProduct) {
+                    continue;
+                }
                     $_attrValues = $productAttrValueRepository->search(['product_id' => $_cart['product_id']])
                         ->where('stock', '>', 0)
                         ->select();
@@ -1067,14 +1109,18 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                         throw new ValidateException('盲盒商品「' . ($_cart['product']['store_name'] ?? '') . '」库存不足');
                     }
 
-                    $_cart['productAttr'] = is_object($_selectedSku) ? $_selectedSku->toArray() : $_selectedSku;
-                    $_cart['productAttrUnique'] = $_selectedSku['unique'];
-                    if ($_selectedSku['price'] > 0) {
-                        $_cart['true_price'] = $_selectedSku['price'];
-                    }
+                $_attrArr = is_object($_selectedSku) ? $_selectedSku->toArray() : (array)$_selectedSku;
+                // 随机换 SKU 后 toArray 不含 bc_extension_*，需按商品分销设置补齐，避免下单 Undefined array key
+                $_cartArr = is_array($_cart) ? $_cart : (method_exists($_cart, 'toArray') ? $_cart->toArray() : (array)$_cart);
+                $_attrArr['bc_extension_one'] = $this->calcBlindboxBcExtension($_cartArr, $_attrArr, 1);
+                $_attrArr['bc_extension_two'] = $this->calcBlindboxBcExtension($_cartArr, $_attrArr, 2);
+                $_cart['productAttr'] = $_attrArr;
+                $_cart['productAttrUnique'] = $_selectedSku['unique'];
+                if ($_selectedSku['price'] > 0) {
+                    $_cart['true_price'] = $_selectedSku['price'];
                 }
-                unset($_cart);
             }
+            unset($_cart);
         }
         unset($_merchantCart);
         // ===== 盲盒模块结束 =====
@@ -1153,16 +1199,18 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                             }
                         }
                     }else if (!$orderType) {
-                        if ($spreadUid && $cart['productAttr']['bc_extension_one'] > 0) {
-                            $org_extension = $cart['productAttr']['bc_extension_one'];
-                            if ($spreadUser->brokerage_level > 0 && $spreadUser->brokerage && $spreadUser->brokerage->extension_one_rate > 0) {
+                        $bcOne = (float)($cart['productAttr']['bc_extension_one'] ?? 0);
+                        $bcTwo = (float)($cart['productAttr']['bc_extension_two'] ?? 0);
+                        if ($spreadUid && $bcOne > 0) {
+                            $org_extension = $bcOne;
+                            if ($spreadUser && $spreadUser->brokerage_level > 0 && $spreadUser->brokerage && $spreadUser->brokerage->extension_one_rate > 0) {
                                 $org_extension = bcmul($org_extension, 1 + $spreadUser->brokerage->extension_one_rate, 2);
                             }
                             $extension_one = $cart['true_price'] > 0 ? bcmul(bcdiv($cart['true_price'], $cart['total_price'], 3), $org_extension, 2) : 0;
                         }
-                        if ($topUid && $cart['productAttr']['bc_extension_two'] > 0) {
-                            $org_extension = $cart['productAttr']['bc_extension_two'];
-                            if ($topUser->brokerage_level > 0 && $topUser->brokerage && $topUser->brokerage->extension_two_rate > 0) {
+                        if ($topUid && $bcTwo > 0) {
+                            $org_extension = $bcTwo;
+                            if ($topUser && $topUser->brokerage_level > 0 && $topUser->brokerage && $topUser->brokerage->extension_two_rate > 0) {
                                 $org_extension = bcmul($org_extension, 1 + $topUser->brokerage->extension_two_rate, 2);
                             }
                             $extension_two = $cart['true_price'] > 0 ? bcmul(bcdiv($cart['true_price'], $cart['total_price'], 3), $org_extension, 2) : 0;
@@ -1188,8 +1236,19 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
             $user_address = isset($address) ? ($address['province'] . $address['city'] . $address['district'] . $address['street'] . $address['detail']) : '';
             $_merchantCheck = $merchantRepository->get($merchantCart['mer_id']);
-            $_isBlindbox = $_merchantCheck && !empty($_merchantCheck['is_blindbox']);
-            // 盲盒订单：写入分享来源店铺（普通店入口归因），分销规则后续再算
+            $_isBlindboxShop = $_merchantCheck && !empty($_merchantCheck['is_blindbox']);
+            $_isExclusiveOrder = 0;
+            foreach ($merchantCart['list'] as $_exCart) {
+                $pid = (int)($_exCart['product_id'] ?? 0);
+                $flag = !empty($_exCart['product']['is_blindbox_exclusive'])
+                    || ($pid > 0 && (int)Db::name('store_product')->where('product_id', $pid)->value('is_blindbox_exclusive') === 1);
+                if ($flag) {
+                    $_isExclusiveOrder = 1;
+                    break;
+                }
+            }
+            $_isBlindbox = $_isBlindboxShop || $_isExclusiveOrder;
+            // 盲盒订单：写入分享来源店铺
             $_shareMerId = 0;
             if ($_isBlindbox) {
                 foreach ($merchantCart['list'] as $_shareCart) {
@@ -1199,9 +1258,20 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                     }
                 }
                 if (!$_shareMerId) {
-                    $_shareMerId = app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
+                    $_shareMerId = $cartShareMerId ?: app()->make(\app\common\repositories\store\BlindBoxShareRepository::class)
                         ->getBound((int)$uid);
                 }
+            }
+            // 专属盲盒整单不分销
+            $_orderSpreadUid = $spreadUid;
+            $_orderTopUid = $topUid;
+            $_orderExtOne = $total_extension_one;
+            $_orderExtTwo = $total_extension_two;
+            if ($_isExclusiveOrder) {
+                $_orderSpreadUid = 0;
+                $_orderTopUid = 0;
+                $_orderExtOne = 0;
+                $_orderExtTwo = 0;
             }
             // 公益网购享免单上下文
             $_welfareCtx = app()->make(\app\common\repositories\store\nearby\WelfareFreeOrderRepository::class)->getContext((int)$uid);
@@ -1226,6 +1296,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'cartInfo' => $merchantCart,
                 'activity_type' => $orderInfo['order_type'],
                 'is_blindbox_order' => (int)$_isBlindbox,
+                'is_blindbox_exclusive' => (int)$_isExclusiveOrder,
                 'is_welfare_order' => $_isWelfare,
                 'welfare_bill_amount' => $_welfareBillAmount,
                 'welfare_scan_mer_id' => $_welfareScanMerId,
@@ -1235,12 +1306,12 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'commission_rate' => (float)$rate,
                 'order_type' => $merchantCart['order']['isTake'] ? 1 : ($merchantCart['order']['isCityTake'] ? 2 : 0),
                 'is_virtual' => $order_model,
-                'extension_one' => $total_extension_one,
-                'extension_two' => $total_extension_two,
+                'extension_one' => $_orderExtOne,
+                'extension_two' => $_orderExtTwo,
                 'order_sn' => $this->getNewOrderId(StoreOrderRepository::TYPE_SN_ORDER) . ($k + 1),
                 'uid' => $uid,
-                'spread_uid' => $spreadUid,
-                'top_uid' => $topUid,
+                'spread_uid' => $_orderSpreadUid,
+                'top_uid' => $_orderTopUid,
                 'is_selfbuy' => $isSelfBuy,
                 'real_name' => $merchantCart['order']['isTake'] ? $post['real_name'] : ($address['real_name'] ?? ''),
                 'user_phone' => $merchantCart['order']['isTake'] ? $post['phone'] : ($address['phone'] ?? ''),
@@ -1735,6 +1806,28 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             throw new ValidateException('[超出限购数]' . mb_substr($fail['product']['store_name'], 0, 10) . '...');
         }
         throw new ValidateException('[已失效]' . mb_substr($fail['product']['store_name'], 0, 10) . '...');
+    }
+
+    /**
+     * 盲盒随机 SKU 后补齐佣金字段（对齐 ProductAttrValue::getBcExtension*Attr）
+     * @param array $cart
+     * @param array $attrArr
+     * @param int $level 1|2
+     * @return float
+     */
+    protected function calcBlindboxBcExtension(array $cart, array $attrArr, int $level): float
+    {
+        if (!intval(systemConfig('extension_status'))) {
+            return 0;
+        }
+        $extType = (int)($cart['product']['extension_type'] ?? 0);
+        if ($extType === 1) {
+            $key = $level === 1 ? 'extension_one' : 'extension_two';
+            return floatval($attrArr[$key] ?? 0);
+        }
+        $rateKey = $level === 1 ? 'extension_one_rate' : 'extension_two_rate';
+        $price = $attrArr['org_price'] ?? ($attrArr['price'] ?? 0);
+        return floatval(round(bcmul((string)systemConfig($rateKey), (string)$price, 3), 2));
     }
 
     /**

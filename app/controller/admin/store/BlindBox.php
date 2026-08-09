@@ -186,4 +186,31 @@ class BlindBox extends BaseController
         $action = $status === 1 ? '开启' : '关闭';
         return app('json')->success('已批量' . $action . '盲盒权限', ['affected' => count($merIds)]);
     }
+
+    /**
+     * 商家每日免费开盒中奖率（全站共用）
+     */
+    public function freeWinRate(\app\common\repositories\store\BlindBoxShareRepository $shareRepo)
+    {
+        $platform = $shareRepo->getPlatformBlindboxMerchant();
+        return app('json')->success([
+            'blindbox_mer_free_win_rate' => $shareRepo->getFreeWinRate(),
+            'platform_mer_id' => $platform ? (int)$platform['mer_id'] : 0,
+            'platform_mer_name' => $platform ? (string)($platform['mer_name'] ?? '') : '',
+        ]);
+    }
+
+    /**
+     * 保存商家每日免费开盒中奖率
+     */
+    public function saveFreeWinRate(\app\common\repositories\store\BlindBoxShareRepository $shareRepo)
+    {
+        $rate = (int)$this->request->param('blindbox_mer_free_win_rate', 0);
+        try {
+            $saved = $shareRepo->setFreeWinRate($rate);
+            return app('json')->success(['blindbox_mer_free_win_rate' => $saved], '保存成功');
+        } catch (\think\exception\ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
 }

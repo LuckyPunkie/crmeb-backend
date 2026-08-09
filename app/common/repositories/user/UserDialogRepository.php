@@ -84,6 +84,19 @@ class UserDialogRepository extends BaseRepository
                 });
                 break;
             case 'merchant':
+                $merchantUserUids = Db::name('user')->where('mer_id', '>', 0)->column('uid');
+                if ($merchantUserUids) {
+                    $dialogQuery->where(function ($q) use ($uid, $merchantUserUids) {
+                        $q->where(function ($sq) use ($uid, $merchantUserUids) {
+                            $sq->where('d.uid_a', $uid)->whereIn('d.uid_b', $merchantUserUids);
+                        })->whereOr(function ($sq) use ($uid, $merchantUserUids) {
+                            $sq->where('d.uid_b', $uid)->whereIn('d.uid_a', $merchantUserUids);
+                        });
+                    });
+                } else {
+                    $dialogQuery->where('d.dialog_id', '-1');
+                }
+                break;
             case 'system':
                 $dialogQuery->where('d.dialog_id', '-1');
                 break;

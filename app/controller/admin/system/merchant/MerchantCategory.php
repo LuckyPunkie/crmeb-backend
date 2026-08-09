@@ -72,100 +72,57 @@ class MerchantCategory extends BaseController
     }
 
     /**
-     * 创建
-     * @param MerchantCategoryValidate $validate
-     * @return mixed
-     * @author xaboy
-     * @day 2020-05-06
-     */
-    public function create(MerchantCategoryValidate $validate)
-    {
-        $data = $this->checkParams($validate);
-        $data['commission_rate'] = bcdiv($data['commission_rate'], 100, 4);
-        $this->repository->create($data);
-        return app('json')->success('添加成功');
-    }
-
-    /**
-     * 创建表单
-     * @return mixed
-     * @throws FormBuilderException
-     * @author xaboy
-     * @day 2020-05-06
-     */
-    public function createForm()
-    {
-        return app('json')->success(formToData($this->repository->form()));
-    }
-
-
-    /**
-     * 修改
-     * @param $id
-     * @param MerchantCategoryValidate $validate
-     * @return mixed
-     * @throws DbException
-     * @author xaboy
-     * @day 2020-05-06
-     */
-    public function update($id, MerchantCategoryValidate $validate)
-    {
-        $data = $this->checkParams($validate);
-        if (!$this->repository->exists($id))
-            return app('json')->fail('数据不存在');
-        $data['commission_rate'] = bcdiv($data['commission_rate'], 100, 4);
-        $this->repository->update($id, $data);
-        return app('json')->success('编辑成功');
-    }
-
-    /**
-     * 修改表单
-     * @param $id
-     * @return mixed
-     * @throws DataNotFoundException
-     * @throws DbException
-     * @throws ModelNotFoundException
-     * @throws FormBuilderException
-     * @author xaboy
-     * @day 2020-05-06
-     */
-    public function updateForm($id)
-    {
-        if (!$this->repository->exists($id))
-            return app('json')->fail('数据不存在');
-        return app('json')->success(formToData($this->repository->updateForm($id)));
-    }
-
-    /**
-     * 删除
-     * @param $id
-     * @param MerchantRepository $merchantRepository
-     * @return mixed
-     * @throws DbException
-     * @author xaboy
-     * @day 2020-05-06
-     */
-    public function delete($id, MerchantRepository $merchantRepository)
-    {
-        if (!$this->repository->exists($id))
-            return app('json')->fail('数据不存在');
-        if ($merchantRepository->fieldExists('category_id', $id))
-            return app('json')->fail('存在商户,无法删除');
-        $this->repository->delete($id);
-        return app('json')->success('删除成功');
-    }
-
-    /**
      * 验证参数
      * @param MerchantCategoryValidate $validate
      * @return array
      * @author xaboy
      * @day 2020-05-06
      */
+    /**
+     * 分类树（admin 前端两级展示用）
+     */
+    public function tree()
+    {
+        return app('json')->success($this->repository->getTree());
+    }
+
     public function checkParams(MerchantCategoryValidate $validate)
     {
-        $data = $this->request->params(['category_name', ['commission_rate', 0]]);
+        $data = $this->request->params(['category_name', ['commission_rate', 0], ['pid', 0], ['sort', 0]]);
         $validate->check($data);
+        $data['commission_rate'] = bcdiv($data['commission_rate'], 100, 4);
         return $data;
+    }
+
+    public function create(MerchantCategoryValidate $validate)
+    {
+        $data = $this->checkParams($validate);
+        $this->repository->create($data);
+        app('cache')->delete('nearby_category_tree');
+        return app('json')->success('添加成功');
+    }
+
+    public function update($id, MerchantCategoryValidate $validate)
+    {
+        $data = $this->checkParams($validate);
+        if (!$this->repository->exists($id))
+            return app('json')->fail('数据不存在');
+        $this->repository->update($id, $data);
+        app('cache')->delete('nearby_category_tree');
+        return app('json')->success('编辑成功');
+    }
+
+    public function delete($id, MerchantRepository $merchantRepository)
+    {
+        if (!$this->repository->exists($id))
+            return app('json')->fail('数据不存在');
+        if ($merchantRepository->fieldExists('category_id', $id))
+            return app('json')->fail('存在商户,无法删除');
+        // 同时删除子分类
+        \app\common\model\system\merchant\MerchantCategory::getDB()
+            ->where('pid', $id)->delete();
+        $this->repository->delete($id);
+        app('cache')->delete('nearby_category_tree');
+        return app('json')->success('删除成功');
     }
 }

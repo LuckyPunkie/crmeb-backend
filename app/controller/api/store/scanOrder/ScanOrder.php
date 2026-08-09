@@ -59,19 +59,23 @@ class ScanOrder extends BaseController
     public function context()
     {
         [$merId, $tableId, $sign] = $this->parseAccessParams();
-        $table = $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
         $mer = app()->make(MerchantRepository::class)->get($merId);
         if (!$mer || (int)$mer['is_del'] === 1) {
             return app('json')->fail('商家不存在');
         }
         $config = $this->configRepository->getConfig($merId);
+        $tableLabel = '';
+        if ($tableId > 0) {
+            $table = $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+            $tableLabel = (string)$table['table_label'];
+        }
 
         return app('json')->success([
             'mer_id' => $merId,
             'mer_name' => (string)$mer['mer_name'],
             'mer_avatar' => (string)($mer['mer_avatar'] ?? ''),
             'table_id' => $tableId,
-            'table_label' => (string)$table['table_label'],
+            'table_label' => $tableLabel,
             'sign' => $sign,
             'config' => [
                 'need_pay' => (int)$config['need_pay'],
@@ -88,7 +92,9 @@ class ScanOrder extends BaseController
     public function categories()
     {
         [$merId, $tableId, $sign] = $this->parseAccessParams();
-        $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        if ($tableId > 0) {
+            $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        }
 
         $productIds = Product::getDB()
             ->where('mer_id', $merId)
@@ -132,7 +138,9 @@ class ScanOrder extends BaseController
     public function goods()
     {
         [$merId, $tableId, $sign] = $this->parseAccessParams();
-        $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        if ($tableId > 0) {
+            $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        }
         [$page, $limit] = $this->getPage();
         $limit = min(max($limit, 1), 50);
         $keyword = trim((string)$this->request->param('keyword', ''));
@@ -183,8 +191,8 @@ class ScanOrder extends BaseController
         $merId = (int)$this->request->param('mer_id', 0);
         $tableId = (int)$this->request->param('table_id', 0);
         $sign = (string)$this->request->param('sign', '');
-        if ($merId <= 0 || $tableId <= 0) {
-            throw new ValidateException('缺少商家或台号参数');
+        if ($merId <= 0) {
+            throw new ValidateException('缺少商家参数');
         }
         return [$merId, $tableId, $sign];
     }

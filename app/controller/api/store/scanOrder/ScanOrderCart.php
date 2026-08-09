@@ -95,7 +95,9 @@ class ScanOrderCart extends BaseController
         $unique = (string)$data['product_attr_unique'];
         $cartNum = max(1, (int)$data['cart_num']);
 
-        $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        if ($tableId > 0) {
+            $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        }
         [$uid, $tourist] = $this->resolveOwnerIds((string)$data['tourist_unique_key']);
 
         $product = Product::getDB()

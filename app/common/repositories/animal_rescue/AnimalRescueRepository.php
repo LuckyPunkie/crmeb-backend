@@ -17,6 +17,8 @@ use app\common\dao\animal_rescue\AnimalRescueOrderDao;
 use app\common\dao\animal_rescue\AnimalRescueParticipantDao;
 use app\common\dao\animal_rescue\CloudAdoptionOrderDao;
 use app\common\model\animal_rescue\AnimalRescuePost;
+use app\common\model\animal_rescue\AnimalRescueOrder;
+use app\common\model\animal_rescue\AdoptionDeposit;
 use app\common\repositories\BaseRepository;
 use app\common\dao\animal_rescue\AdoptionApplicationDao;
 use app\common\dao\animal_rescue\AdoptionDepositDao;
@@ -788,19 +790,28 @@ class AnimalRescueRepository extends BaseRepository
         $orderModel = app()->make(AnimalRescueOrderDao::class);
         $depositModel = app()->make(AdoptionDepositDao::class);
 
-        $pendingFundAudit = (int)\app\common\model\animal_rescue\PostFundAudit::getDB()
-            ->alias('a')
+        $auditModel = \app\common\model\animal_rescue\PostFundAudit::getDB();
+
+        $pendingFundAudit = (int)$auditModel->alias('a')
             ->leftJoin('animal_rescue_post p', 'a.post_id = p.post_id')
             ->where('a.status', \app\common\model\animal_rescue\PostFundAudit::STATUS_PENDING)
             ->where('p.fund_status', FundAuditRepository::FUND_AUDITING)
             ->count();
 
+        $totalFundAudit = (int)\app\common\model\animal_rescue\PostFundAudit::getDB()->count();
+
+        $rejectedFundAudit = (int)\app\common\model\animal_rescue\PostFundAudit::getDB()
+            ->where('status', \app\common\model\animal_rescue\PostFundAudit::STATUS_REJECTED)
+            ->count();
+
         return [
-            'total_posts' => $postModel->getModel()::getDB()->where('is_del', 0)->count(),
-            'total_raised' => $orderModel->getModel()::getDB()->where('paid', 1)->sum('amount') ?: 0,
-            'total_participants' => $postModel->getModel()::getDB()->where('is_del', 0)->sum('participant_count') ?: 0,
-            'total_deposit' => $depositModel->getModel()::getDB()->where('status', 1)->whereNotNull('pay_time')->where('pay_time', '<>', '')->sum('amount') ?: 0,
+            'total_posts' => AnimalRescuePost::getDB()->where('is_del', 0)->count(),
+            'total_raised' => AnimalRescueOrder::getDB()->where('paid', 1)->sum('amount') ?: 0,
+            'total_participants' => AnimalRescuePost::getDB()->where('is_del', 0)->sum('participant_count') ?: 0,
+            'total_deposit' => AdoptionDeposit::getDB()->where('status', 1)->whereNotNull('pay_time')->where('pay_time', '<>', '')->sum('amount') ?: 0,
             'pending_fund_audit' => $pendingFundAudit,
+            'total_fund_audit' => $totalFundAudit,
+            'rejected_fund_audit' => $rejectedFundAudit,
         ];
     }
 

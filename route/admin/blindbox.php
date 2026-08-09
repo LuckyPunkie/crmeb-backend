@@ -45,6 +45,14 @@ Route::group(function () {
         Route::post('batch', '/batchBlindbox')->name('adminBlindBoxBatch')->option([
             '_alias' => '批量设置盲盒权限',
         ]);
+        Route::get('free_win_rate', '/freeWinRate')->name('adminBlindBoxFreeWinRate')->option([
+            '_alias' => '商家免费开盒中奖率',
+            '_path' => '/marketing/blindbox/settings',
+        ]);
+        Route::post('free_win_rate', '/saveFreeWinRate')->name('adminBlindBoxSaveFreeWinRate')->option([
+            '_alias' => '保存商家免费开盒中奖率',
+            '_path' => '/marketing/blindbox/settings',
+        ]);
     })->prefix('admin.store.BlindBox')->option([
         '_path' => '/marketing/blindbox',
         '_auth' => true,

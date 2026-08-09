@@ -14,6 +14,7 @@
 namespace app\controller\api\store\product;
 
 
+use app\common\model\store\coupon\StoreCouponUser;
 use app\common\repositories\store\coupon\StoreCouponProductRepository;
 use app\common\repositories\store\coupon\StoreCouponRepository;
 use app\common\repositories\store\coupon\StoreCouponUserRepository;
@@ -140,14 +141,21 @@ class StoreCoupon extends BaseController
     {
         // 检查优惠券是否存在
         if (!$repository->exists($id)) {
-            // 如果优惠券不存在，返回失败信息
             return app('json')->fail('优惠券不存在');
+        }
+
+        // 检查用户是否已领取过该券（status: 0未使用 1已使用 2已过期）
+        $already = StoreCouponUser::where('uid', $this->uid)
+            ->where('coupon_id', $id)
+            ->whereIn('status', [0, 1])
+            ->find();
+        if ($already) {
+            return app('json')->fail('您已领取过该优惠券');
         }
 
         // 标记优惠券为被当前用户领取
         $repository->receiveCoupon($id, $this->uid);
 
-        // 领取成功，返回成功信息
         return app('json')->success('领取成功');
     }
 

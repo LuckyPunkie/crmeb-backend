@@ -12,6 +12,7 @@
 namespace app\common\repositories\store\nearby;
 
 use app\common\dao\store\nearby\NearbyShopCategoryDao;
+use app\common\model\system\merchant\MerchantCategory;
 use app\common\repositories\BaseRepository;
 
 class NearbyShopCategoryRepository extends BaseRepository
@@ -22,12 +23,32 @@ class NearbyShopCategoryRepository extends BaseRepository
     }
 
     /**
-     * 获取分类树（带缓存，TTL 1 小时）
+     * 获取分类树（统一走 eb_merchant_category，带缓存 1 小时）
      */
     public function getTree()
     {
         return app('cache')->remember('nearby_category_tree', function () {
-            return $this->dao->getTree();
+            $list = MerchantCategory::getDB()
+                ->field('merchant_category_id as id, pid, category_name as name')
+                ->order('sort ASC, merchant_category_id ASC')
+                ->select()->toArray();
+
+            $tree = [];
+            $map  = [];
+            foreach ($list as &$item) {
+                if ((int)$item['pid'] === 0) {
+                    $item['children'] = [];
+                    $tree[] = &$item;
+                    $map[$item['id']] = &$item;
+                }
+            }
+            unset($item);
+            foreach ($list as $item) {
+                if ((int)$item['pid'] > 0 && isset($map[$item['pid']])) {
+                    $map[$item['pid']]['children'][] = $item;
+                }
+            }
+            return $tree;
         }, 3600);
     }
 }

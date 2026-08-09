@@ -51,10 +51,10 @@ class NearbyShopRepository extends BaseRepository
     {
         $limit = min($limit, 100); // 分页上限保护
 
-        // 仅展示：开关开启 + 已在商户端完成附近好店设置（至少选了分类）
+        // 仅展示：开关开启 + 已设置店铺分类
         $query = Merchant::getDB()->alias('m')
             ->where('m.nearby_is_show', 1)
-            ->where('m.nearby_category_id', '>', 0)
+            ->where('m.category_id', '>', 0)
             ->where('m.status', 1)
             ->where('m.is_del', 0);
 
@@ -68,7 +68,7 @@ class NearbyShopRepository extends BaseRepository
 
         // 分类筛选
         if (!empty($where['nearby_category_id'])) {
-            $query->where('m.nearby_category_id', (int)$where['nearby_category_id']);
+            $query->where('m.category_id', (int)$where['nearby_category_id']);
         }
 
         // 关键词搜索
@@ -81,11 +81,15 @@ class NearbyShopRepository extends BaseRepository
             });
         }
 
-        // 标签筛选（多个标签逗号分隔）
-        if (!empty($where['tags'])) {
-            $tags = explode(',', $where['tags']);
-            foreach ($tags as $tag) {
-                $query->where('m.nearby_tags', 'like', '%' . trim($tag) . '%');
+        // 标签筛选（label_id，逗号分隔多个）
+        if (!empty($where['label_id'])) {
+            $labelIds = array_filter(array_map('intval', explode(',', (string)$where['label_id'])));
+            if (!empty($labelIds)) {
+                $merIds = \app\common\model\system\merchant\MerchantLabelStore::getDB()
+                    ->whereIn('label_id', $labelIds)
+                    ->where('is_margin', '<>', 1)
+                    ->column('mer_id');
+                $query->whereIn('m.mer_id', empty($merIds) ? [0] : $merIds);
             }
         }
 
@@ -147,22 +151,27 @@ class NearbyShopRepository extends BaseRepository
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
 
+        $listArr = $list->toArray();
+
         // 批量预取分类名称，避免 N+1 查询
-        $catIds = array_filter(array_unique(array_column($list->toArray(), 'nearby_category_id')));
+        $catIds = array_filter(array_unique(array_column($listArr, 'category_id')));
         $categories = [];
         if (!empty($catIds)) {
-            $rows = \app\common\model\store\nearby\NearbyShopCategory::getDB()
-                ->whereIn('id', $catIds)
+            $rows = \app\common\model\system\merchant\MerchantCategory::getDB()
+                ->whereIn('merchant_category_id', $catIds)
                 ->select()
                 ->toArray();
-            // ThinkPHP Collection 无 keyBy，用 array_column 按 id 索引
-            $categories = array_column($rows, null, 'id');
+            $categories = array_column($rows, null, 'merchant_category_id');
         }
+
+        // 批量预取各商户已生效的标签，避免 N+1 查询
+        $merIds = array_filter(array_unique(array_column($listArr, 'mer_id')));
+        $merTagsMap = $this->batchFetchMerTags($merIds);
 
         // 格式化列表数据
         $formattedList = [];
         foreach ($list as $item) {
-            $formattedList[] = $this->formatListItem($item, $where, $categories);
+            $formattedList[] = $this->formatListItem($item, $where, $categories, $merTagsMap);
         }
 
         return ['count' => $count, 'list' => $formattedList];
@@ -178,7 +187,7 @@ class NearbyShopRepository extends BaseRepository
             ->where('status', 1)
             ->where('is_del', 0)
             ->where('nearby_is_show', 1)
-            ->where('nearby_category_id', '>', 0)
+            ->where('category_id', '>', 0)
             ->find();
 
         if (!$merchant) {
@@ -207,22 +216,28 @@ class NearbyShopRepository extends BaseRepository
      */
     protected function formatDetailItem(array $data, array $where = [])
     {
-        // 标签
-        $data['tags'] = !empty($data['nearby_tags']) ? explode(',', $data['nearby_tags']) : [];
+        // 优先使用 label_store 中已生效的标签，兜底回退到 nearby_tags
+        $storeTags = $this->resolveTagsByMerId((int)$data['mer_id']);
+        $data['tags'] = !empty($storeTags) ? $storeTags : $this->resolveTags($data['nearby_tags'] ?? '');
 
         // 分类名称 / 是否餐饮店（父级或自身名为「餐饮美食」）
         $data['nearby_category_name'] = '';
         $data['nearby_category_pid'] = 0;
         $data['is_catering'] = 0;
-        if (!empty($data['nearby_category_id'])) {
-            $category = $this->categoryDao->get($data['nearby_category_id']);
+        if (!empty($data['category_id'])) {
+            $category = \app\common\model\system\merchant\MerchantCategory::getDB()
+                ->where('merchant_category_id', (int)$data['category_id'])
+                ->find();
             if ($category) {
-                $data['nearby_category_name'] = $category['name'] ?? '';
+                $category = $category->toArray();
+                $data['nearby_category_name'] = $category['category_name'] ?? '';
                 $data['nearby_category_pid'] = (int)($category['pid'] ?? 0);
                 $parentName = '';
                 if ($data['nearby_category_pid'] > 0) {
-                    $parent = $this->categoryDao->get($data['nearby_category_pid']);
-                    $parentName = $parent ? ($parent['name'] ?? '') : '';
+                    $parent = \app\common\model\system\merchant\MerchantCategory::getDB()
+                        ->where('merchant_category_id', $data['nearby_category_pid'])
+                        ->find();
+                    $parentName = $parent ? ($parent['category_name'] ?? '') : '';
                 } else {
                     $parentName = $data['nearby_category_name'];
                 }
@@ -284,6 +299,7 @@ class NearbyShopRepository extends BaseRepository
                 })
                 ->order('coupon_price DESC')
                 ->select()
+                ->append(['send_num'])
                 ->toArray();
             $data['coupons'] = $couponList;
             $data['vouchers'] = $couponList;
@@ -327,17 +343,22 @@ class NearbyShopRepository extends BaseRepository
      * @param array $where 查询条件（含经纬度）
      * @param array $categories 批量预取的分类缓存 [id => [...]]
      */
-    protected function formatListItem($item, array $where = [], array $categories = [])
+    protected function formatListItem($item, array $where = [], array $categories = [], array $merTagsMap = [])
     {
         $data = is_array($item) ? $item : $item->toArray();
 
-        // 标签
-        $data['tags'] = !empty($data['nearby_tags']) ? explode(',', $data['nearby_tags']) : [];
+        // 优先使用批量预取的 label_store 标签，兜底回退到 nearby_tags
+        $merId = (int)($data['mer_id'] ?? 0);
+        if (!empty($merTagsMap[$merId])) {
+            $data['tags'] = $merTagsMap[$merId];
+        } else {
+            $data['tags'] = $this->resolveTags($data['nearby_tags'] ?? '');
+        }
 
         // 分类名称（从预取缓存获取，避免 N+1 查询）
         $data['nearby_category_name'] = '';
-        if (!empty($data['nearby_category_id']) && isset($categories[$data['nearby_category_id']])) {
-            $data['nearby_category_name'] = $categories[$data['nearby_category_id']]['name'] ?? '';
+        if (!empty($data['category_id']) && isset($categories[$data['category_id']])) {
+            $data['nearby_category_name'] = $categories[$data['category_id']]['category_name'] ?? '';
         }
 
         // 是否营业中
@@ -367,6 +388,80 @@ class NearbyShopRepository extends BaseRepository
         $data['avg_price'] = $data['nearby_avg_price'] ?? 0;
 
         return $data;
+    }
+
+    /**
+     * 将 nearby_tags 字符串转为标签名数组
+     * 兼容旧字符串 key 和新数字 label_id
+     */
+    /**
+     * 批量预取多个商户的已生效标签，返回 [mer_id => [label_name, ...]]
+     */
+    protected function batchFetchMerTags(array $merIds): array
+    {
+        if (empty($merIds)) return [];
+        $rows = \app\common\model\system\merchant\MerchantLabelStore::getDB()
+            ->alias('s')
+            ->join('merchant_label l', 's.label_id = l.id')
+            ->whereIn('s.mer_id', $merIds)
+            ->where('s.is_margin', '<>', 1)
+            ->field('s.mer_id, l.label_name')
+            ->select()
+            ->toArray();
+        $map = [];
+        foreach ($rows as $row) {
+            $map[$row['mer_id']][] = $row['label_name'];
+        }
+        return $map;
+    }
+
+    /**
+     * 查询单个商户的已生效标签名称数组
+     */
+    protected function resolveTagsByMerId(int $merId): array
+    {
+        if (!$merId) return [];
+        return \app\common\model\system\merchant\MerchantLabelStore::getDB()
+            ->alias('s')
+            ->join('merchant_label l', 's.label_id = l.id')
+            ->where('s.mer_id', $merId)
+            ->where('s.is_margin', '<>', 1)
+            ->column('l.label_name');
+    }
+
+    protected function resolveTags(string $nearbyTags): array
+    {
+        if (empty($nearbyTags)) return [];
+        $raw = array_filter(array_map('trim', explode(',', $nearbyTags)));
+        if (empty($raw)) return [];
+
+        // 旧版英文 key → 中文名映射
+        $legacyMap = [
+            'must-eat'      => '必吃榜',
+            'gold-shop'     => '金牌好店',
+            'careful-manage'=> '用心经营',
+            'public-good'   => '公益商家',
+            'industry-top1' => '行业top1',
+            'industry-top2' => '行业top2',
+        ];
+
+        $numericIds = array_values(array_filter($raw, 'is_numeric'));
+        if (!empty($numericIds)) {
+            $labelNames = \app\common\model\system\merchant\MerchantLabel::getDB()
+                ->whereIn('id', array_map('intval', $numericIds))
+                ->column('label_name', 'id');
+            $result = [];
+            foreach ($raw as $t) {
+                if (is_numeric($t) && isset($labelNames[(int)$t])) {
+                    $result[] = $labelNames[(int)$t];
+                } elseif (!is_numeric($t)) {
+                    $result[] = $legacyMap[$t] ?? $t;
+                }
+            }
+            return $result;
+        }
+        // 全部是旧字符串 key
+        return array_values(array_map(fn($t) => $legacyMap[$t] ?? $t, $raw));
     }
 
     /**

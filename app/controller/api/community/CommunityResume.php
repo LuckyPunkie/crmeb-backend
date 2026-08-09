@@ -32,8 +32,9 @@ class CommunityResume extends BaseController
         'real_name', 'gender', 'birthday', 'phone', 'email',
         'education', 'work_years', 'city', 'expect_job', 'expect_salary',
         'education_history', 'work_history', 'education_list', 'work_list', 'skills',
-        'introduction', 'work_summary', 'self_evaluation', 'resume_file',
+        'self_evaluation',
         'is_default'
+        // resume_file / resume_file_name / parse_status 由 upload 接口独立管理，不走此字段列表
     ];
 
     public function __construct(App $app, CommunityResumeRepository $repository)
@@ -44,15 +45,15 @@ class CommunityResume extends BaseController
     }
 
     /**
-     * 简历文件解析（异步）
+     * 解析简历文件，同步返回解析结果
      */
     public function parse()
     {
         $uid = $this->request->uid();
         $resumeId = $this->request->param('resume_id');
         if (!$resumeId) throw new ValidateException('缺少简历ID');
-        $taskId = $this->repository->parseResume((int)$resumeId, $uid);
-        return app('json')->success(['task_id' => $taskId], '解析任务已提交');
+        $data = $this->repository->parseResume((int)$resumeId, $uid);
+        return app('json')->success($data, '解析完成');
     }
 
     /**
@@ -146,11 +147,18 @@ class CommunityResume extends BaseController
             throw new ValidateException('仅支持 Word/PDF 格式');
         }
 
+        $originalName = $file->getOriginalName();
         $savePath = 'uploads/resume/' . date('Ymd');
         $saveName = \think\facade\Filesystem::disk('public')->putFile($savePath, $file);
         $url = '/storage/' . str_replace('\\', '/', $saveName);
 
-        return app('json')->success(['url' => $url]);
+        // 如果传了 resume_id，只更新 resume_file，不碰其他字段
+        $resumeId = (int)$this->request->post('resume_id', 0);
+        if ($resumeId > 0) {
+            $this->repository->saveFile($resumeId, $uid, $url, $originalName);
+        }
+
+        return app('json')->success(['url' => $url, 'file_name' => $originalName]);
     }
 
     /**

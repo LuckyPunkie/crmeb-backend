@@ -31,6 +31,8 @@ Route::group(function () {
     Route::get('nearby/package/lst/:mer_id', 'api.store.nearby.NearbyPackage/lst');
     // 套餐详情
     Route::get('nearby/package/detail/:id', 'api.store.nearby.NearbyPackage/detail');
+    // 商家标签列表
+    Route::get('nearby/labels', 'api.store.nearby.NearbyShop/labels');
     // 热门搜索
     Route::get('nearby/search/hot', 'api.store.nearby.NearbySearch/hot');
     // 搜索商家
@@ -44,6 +46,11 @@ Route::group(function () {
     Route::post('nearby/bill/create', 'api.store.nearby.NearbyBill/create');
     Route::post('nearby/bill/pay/:order_sn', 'api.store.nearby.NearbyBill/pay');
 })->middleware(UserTokenMiddleware::class, false);
+
+// 代金券购买（需登录）
+Route::group(function () {
+    Route::post('nearby/coupon/buy', 'api.store.nearby.NearbyVoucher/buy');
+})->middleware(UserTokenMiddleware::class, true);
 
 // 网购享免单准备（需登录）
 Route::group(function () {

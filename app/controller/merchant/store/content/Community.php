@@ -168,6 +168,9 @@ class Community extends BaseController
             openId: $this->user->wechat->routine_openid ?? '',
             mediaType: 3
         );
+        if ($data['is_type'] == 1 && empty($data['image'])) {
+            throw new ValidateException('图片不能为空');
+        }
         app()->make(CommunityValidate::class)->check($data);
         $arr = explode("\n", $data['content']);
         $title = rtrim(ltrim($arr[0]));

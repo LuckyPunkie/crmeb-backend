@@ -226,6 +226,7 @@ class CommunityRepository extends BaseRepository
             ->find();
         if ($info) {
             $info = $info->append(['time']);
+            $info = $this->appendTopics($info);
         }
 
         return $info;
@@ -259,13 +260,14 @@ class CommunityRepository extends BaseRepository
 
         unset($where['community_id']);
         $data = $this->getApiList($where, $page, $limit, $userInfo);
-        if ($data['list']->isEmpty() && isset($where['topic_id'])) {
+        if (empty($data['list']) && isset($where['topic_id'])) {
             unset($where['topic_id']);
             $data = $this->getApiList($where, $page, $limit, $userInfo);
         }
 
         if ($first && $page == 1) {
-            $data['list']->unshift($first);
+            $firstArr = is_array($first) ? $first : (method_exists($first, 'toArray') ? $first->toArray() : (array)$first);
+            array_unshift($data['list'], $firstArr);
             $data['count']++;
         }
         return $data;
@@ -703,6 +705,7 @@ class CommunityRepository extends BaseRepository
         $data['uid']            = $user->uid;
         $data['avatar']         = $user->avatar;
         $data['nickname']       = $user->nickname;
+        $data['sex']            = $user->sex ?? 0;
         $data['is_start']       = $is_start;
         $data['is_liked']       = $is_liked;
         $data['member_icon']    = systemConfig('member_status') ? ($user->member->brokerage_icon ?? '') : '';

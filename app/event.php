@@ -104,9 +104,14 @@ return [
         'pay_success_presell' => [\crmeb\listens\pay\PresellPaySuccessListen::class],
         'pay_success_meal' => [\crmeb\listens\pay\MealSuccessListen::class],
         // 附近好店买单支付回调
-        'pay.notify' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
+        'pay.notify' => [
+            \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
+            \crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class,
+        ],
         'pay_success_bill' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         'pay_success_bill_pay' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
+        // 代金券购买支付回调
+        'pay_success_coupon_buy' => [\crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class],
         'pay_success_order' => [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,

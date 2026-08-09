@@ -611,7 +611,7 @@ class StoreOrderDao extends BaseDao
             $query->where(function ($query) use ($orderId, $where, $_uid) {
                 $query->whereLike('order_id|order_sn', "%{$where['keyword']}%")->whereOr('order_id', 'in', $orderId)->whereOr('uid', 'in', $_uid);
             });
-        })->where('paid', 1)->where('status', '>',0)->order('pay_time DESC');
+        })->where('paid', 1)->where('status', '>=', 0)->order('pay_time DESC');
     }
 
     /**

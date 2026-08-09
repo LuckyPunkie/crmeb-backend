@@ -37,6 +37,15 @@ Route::group(function () {
         Route::get('recycle/stats', '/recycleStats')->name('merchantBlindBoxRecycleStats')->option([
             '_alias' => '盲盒回收统计',
         ]);
+        Route::get('exclusive/lst', '/exclusiveLst')->name('merchantBlindBoxExclusiveLst')->option([
+            '_alias' => '专属盲盒列表',
+        ]);
+        Route::post('exclusive/set', '/exclusiveSet')->name('merchantBlindBoxExclusiveSet')->option([
+            '_alias' => '设置专属盲盒',
+        ]);
+        Route::post('exclusive/delete', '/exclusiveDelete')->name('merchantBlindBoxExclusiveDelete')->option([
+            '_alias' => '删除专属盲盒',
+        ]);
     })->prefix('merchant.store.BlindBox')->option([
         '_path' => '/product/blindbox',
         '_auth' => true,

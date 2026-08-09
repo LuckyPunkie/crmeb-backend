@@ -22,6 +22,7 @@ class MerchantCategoryValidate extends Validate
 
     protected $rule = [
         'category_name|分类名称' => 'require|max:32',
-        'commission_rate|手续费' => 'require|float|>=:0|<=:100'
+        'commission_rate|手续费' => 'float|>=:0|<=:100',
+        'pid|父级ID'            => 'integer|>=:0',
     ];
 }

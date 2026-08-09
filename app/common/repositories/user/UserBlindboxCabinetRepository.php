@@ -119,14 +119,26 @@ class UserBlindboxCabinetRepository extends BaseRepository
                 'attrValue' => function ($query) {
                     // 本项目规格名字段为 sku（非旧版 suk）
                     $query->field('value_id,product_id,sku,image,price,probability_weight,unique');
+                },
+                'order' => function ($query) {
+                    $query->field('order_id,status,user_address,delivery_type');
                 }
             ])
             ->select();
 
         $weightCache = [];
         foreach ($list as $item) {
-            // 盒柜发货流程未接，统一视为未发货，避免前端把 status=1 当成已发货
-            $item->shipping_status = 'pending';
+            $orderStatus  = $item->order ? (int)$item->order->status : 0;
+            $userAddress  = $item->order ? (string)$item->order->user_address : '';
+            if ($orderStatus >= 2) {
+                $item->shipping_status = 'received';
+            } elseif ($orderStatus === 1) {
+                $item->shipping_status = 'shipped';
+            } elseif ($userAddress !== '') {
+                $item->shipping_status = 'address_set';
+            } else {
+                $item->shipping_status = 'pending';
+            }
             if ($item->attrValue && $item->attrValue->probability_weight > 0) {
                 $pid = $item->product_id;
                 if (!isset($weightCache[$pid])) {

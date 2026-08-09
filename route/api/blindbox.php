@@ -16,6 +16,7 @@ use think\facade\Route;
 Route::group('store/blindbox', function () {
     Route::get('shop_list', '/shopList');
     Route::get('product_list', '/productList');
+    Route::get('home_list', '/homeList');
     Route::get('detail/:id', '/detail');
     // 普通店铺主页盲盒入口
     Route::get('entry', '/entry');
@@ -24,6 +25,8 @@ Route::group('store/blindbox', function () {
 // 需登录
 Route::group('store/blindbox', function () {
     Route::post('bind_share', '/bindShare');
+    Route::get('free_open/check', '/freeOpenCheck');
+    Route::post('free_open', '/freeOpen');
     Route::get('result/:order_id', '/result');
     Route::get('cabinet', '/cabinet');
     Route::get('cabinet_stats', '/cabinetStats');

@@ -49,7 +49,9 @@ class ScanOrderOrder extends BaseController
         $user = $this->request->userInfo();
         $uid = (int)$user->uid;
 
-        $table = $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true);
+        $table = $tableId > 0
+            ? $this->tableRepository->assertTableAccess($merId, $tableId, $sign, true)
+            : ['table_label' => '', 'id' => 0];
         $config = $this->configRepository->getConfig($merId);
         $needPay = (int)$config['need_pay'] === 1;
 
