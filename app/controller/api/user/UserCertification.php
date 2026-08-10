@@ -100,6 +100,47 @@ class UserCertification extends BaseController
     }
 
     /**
+     * 接收前端 WebView 提取的学历信息，比对姓名后写库
+     * POST /api/user/certification/chsi_verify
+     */
+    public function chsiVerify()
+    {
+        $uid    = $this->request->uid();
+        $name   = trim($this->request->post('name', ''));
+        $school = trim($this->request->post('school', ''));
+        $major  = trim($this->request->post('major', ''));
+        $level  = trim($this->request->post('level', ''));
+
+        if (!$name) {
+            return app('json')->fail('未获取到备案姓名');
+        }
+
+        $user = Db::name('user')->where('uid', $uid)->find();
+        if (!$user) return app('json')->fail('用户不存在');
+
+        $realName = trim($user['real_name'] ?? '');
+        if (!$realName) {
+            return app('json')->fail('请先完成实名认证再进行学历核验');
+        }
+        if ($name !== $realName) {
+            return app('json')->fail('备案报告姓名与实名不一致');
+        }
+
+        $desc = "学信网核验通过：{$school} {$major}（{$level}）";
+        try {
+            $this->repository->save($uid, 'education', $desc, []);
+        } catch (\InvalidArgumentException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+
+        return app('json')->success([
+            'school' => $school,
+            'major'  => $major,
+            'level'  => $level,
+        ], '学历核验成功');
+    }
+
+    /**
      * 提交/更新认证（自动视为 AI 通过）
      * POST /api/user/certification/save
      */

@@ -209,6 +209,7 @@ Route::group(function () {
         // 资质认证
         Route::get('certification', 'UserCertification/list');
         Route::post('certification/save', 'UserCertification/save');
+        Route::post('certification/chsi_verify', 'UserCertification/chsiVerify');
         Route::get('review_status', 'UserCertification/reviewStatus');
         Route::post('review_urgent/:uid', 'UserCertification/applyUrgent');
 
