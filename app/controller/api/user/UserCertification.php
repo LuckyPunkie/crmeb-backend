@@ -111,29 +111,26 @@ class UserCertification extends BaseController
         $major  = trim($this->request->post('major', ''));
         $level  = trim($this->request->post('level', ''));
 
-        if (!$name) {
-            return app('json')->fail('未获取到备案姓名');
+        if (!$name || !$school) {
+            return app('json')->fail('未获取到完整学历信息');
         }
 
-        $user = Db::name('user')->where('uid', $uid)->find();
-        if (!$user) return app('json')->fail('用户不存在');
-
-        $realName = trim($user['real_name'] ?? '');
-        if (!$realName) {
-            return app('json')->fail('请先完成实名认证再进行学历核验');
-        }
-        if ($name !== $realName) {
-            return app('json')->fail('备案报告姓名与实名不一致');
-        }
-
-        $desc = "学信网核验通过：{$school} {$major}（{$level}）";
+        $desc = "学信网核验：{$name} {$school} {$major}（{$level}）";
         try {
             $this->repository->save($uid, 'education', $desc, []);
         } catch (\InvalidArgumentException $e) {
             return app('json')->fail($e->getMessage());
         }
 
+        // 同步写入用户表
+        Db::name('user')->where('uid', $uid)->update([
+            'edu_school' => $school,
+            'edu_major'  => $major,
+            'edu_level'  => $level,
+        ]);
+
         return app('json')->success([
+            'name'   => $name,
             'school' => $school,
             'major'  => $major,
             'level'  => $level,
