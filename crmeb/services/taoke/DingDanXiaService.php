@@ -43,6 +43,17 @@ class DingDanXiaService extends BaseServices
         return $this->request('tbk/material_recommend', $params, 'POST');
     }
     
+    public function taobaoLiveGoods(int $page = 1, int $pageSize = 20): array
+    {
+        $params = [
+            'page_no' => $page,
+            'page_size' => $pageSize,
+            'material_id' => '117935',
+            'final_promotion_target_type' => 10,
+        ];
+        return $this->request('tbk/material_recommend', $params, 'POST');
+    }
+
     public function taobaoGoodsSearch(int $page = 1, int $pageSize = 20,$q='',$cate=0): array
     {
         $params = [

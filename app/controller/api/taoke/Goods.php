@@ -320,6 +320,42 @@ class Goods extends BaseController
         }
     }
     
+    /**
+     * 淘宝直播商品列表
+     * POST /api/taoke/goods/taobao_live
+     */
+    public function taobaoLive()
+    {
+        $page = $this->request->post('page_no', 1);
+        $limit = $this->request->post('page_size', 20);
+        try {
+            $raw = $this->dingdanxiaService->taobaoLiveGoods($page, $limit);
+            $list = [];
+            foreach ((array)$raw as $val) {
+                if (!is_array($val)) continue;
+                $basic = $val['item_basic_info'] ?? [];
+                $price = $val['price_promotion_info'] ?? [];
+                $pub   = $val['publish_info'] ?? [];
+                $targetType = (string)($price['final_promotion_target_type'] ?? '');
+                $list[] = [
+                    'goods_id'  => $val['item_id'] ?? '',
+                    'title'     => $basic['title'] ?? $basic['short_title'] ?? '',
+                    'image'     => 'https:' . ($basic['pict_url'] ?? ''),
+                    'price'     => $price['final_promotion_price'] ?? '0.00',
+                    'ot_price'  => $price['reserve_price'] ?? '',
+                    'sales'     => (int)($basic['volume'] ?? 0),
+                    'click_url' => 'https:' . ltrim($pub['click_url'] ?? '', '/'),
+                    'platform'  => 'taobao',
+                    'is_live'   => $targetType === '10',
+                ];
+            }
+            return app('json')->success(['list' => $list]);
+        } catch (\Exception $e) {
+            Log::error('淘宝直播商品获取失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('获取失败，请稍后重试');
+        }
+    }
+
      /**
      * 生成淘宝推广链接
      * POST /api/taoke/goods/create_taobao_link

@@ -53,6 +53,7 @@ Route::group('taoke', function () {
         Route::get('service_tabs', 'api.taoke.Goods/serviceTabs');
         Route::post('aggregate_recommend', 'api.taoke.Goods/aggregateRecommend');
         Route::post('brand_goods', 'api.taoke.Goods/brandGoods');
+        Route::post('taobao_live', 'api.taoke.Goods/taobaoLive');
         
         Route::post('category', 'api.taoke.Goods/category');
     })->middleware(UserTokenMiddleware::class, false);
