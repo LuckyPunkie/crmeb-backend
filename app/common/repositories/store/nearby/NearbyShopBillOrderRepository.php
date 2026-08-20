@@ -106,6 +106,22 @@ class NearbyShopBillOrderRepository extends BaseRepository
             Log::error('NearbyBill notifyScanPayVoice failed: ' . $e->getMessage());
         }
 
+        // 消费送股：买单实付发放股本金
+        try {
+            if ((int)($order['uid'] ?? 0) > 0) {
+                app()->make(\app\common\repositories\store\equity\EquityGrantRepository::class)
+                    ->grantOnConsume(
+                        (int)$order['mer_id'],
+                        (int)$order['uid'],
+                        $order['pay_price'],
+                        (string)$order['order_sn'],
+                        'bill'
+                    );
+            }
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill equity grant failed: ' . $e->getMessage());
+        }
+
         return $order;
     }
 

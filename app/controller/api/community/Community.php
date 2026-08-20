@@ -105,7 +105,7 @@ class Community extends BaseController
      */
     public function userList()
     {
-        $where = $this->request->params(['keyword', 'sex', 'age_min', 'age_max', 'education']);
+        $where = $this->request->params(['keyword', 'sex', 'age_min', 'age_max', 'education', 'height_min', 'height_max']);
         [$page, $limit] = $this->getPage();
 
         $userRepository = app()->make(UserRepository::class);

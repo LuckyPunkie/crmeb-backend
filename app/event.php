@@ -107,22 +107,26 @@ return [
         'pay.notify' => [
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class,
+            \crmeb\listens\pay\EquityInvestPaySuccessListen::class,
         ],
         'pay_success_bill' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         'pay_success_bill_pay' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         // 代金券购买支付回调
         'pay_success_coupon_buy' => [\crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class],
+        'pay_success_equity_invest' => [\crmeb\listens\pay\EquityInvestPaySuccessListen::class],
         'pay_success_order' => [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
             \crmeb\listens\pay\AnimalRescuePaySuccessListen::class,
             \crmeb\listens\pay\WelfareFreePaySuccessListen::class,
+            \crmeb\listens\pay\EquityConsumePaySuccessListen::class,
         ],
         // 本地/模拟支付走 paySuccess 后抛出，盲盒入柜/公益分账依赖此事件
         'order.paySuccess' => [
             \crmeb\listens\pay\BlindBoxPaySuccessListen::class,
             \crmeb\listens\pay\WelfareFreePaySuccessListen::class,
+            \crmeb\listens\pay\EquityConsumePaySuccessListen::class,
         ],
         //数据大屏
         'data.screen.send' =>[\crmeb\listens\DataScreenListen::class],

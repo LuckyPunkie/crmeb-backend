@@ -1760,6 +1760,23 @@ class StoreRefundOrderRepository extends BaseRepository
             \think\facade\Log::error('Welfare refund handle failed: ' . $e->getMessage());
         }
 
+        // 消费送股：订单退款按比例扣减股本金
+        try {
+            $order = $refundOrder->order;
+            if ($order && (int)$order['uid'] > 0 && (int)$order['mer_id'] > 0) {
+                $originPay = (float)($order['pay_price'] ?? 0);
+                app()->make(\app\common\repositories\store\equity\EquityGrantRepository::class)
+                    ->clawbackOnOrderRefund(
+                        (string)($order['order_id'] ?? $order['order_sn'] ?? ''),
+                        'order',
+                        (float)$refundOrder->refund_price,
+                        $originPay
+                    );
+            }
+        } catch (\Throwable $e) {
+            \think\facade\Log::error('Equity refund clawback failed: ' . $e->getMessage());
+        }
+
         if ($refundOrder->platform_refund_price > 0) {
             if ($refundOrder->order->firstProfitsharing) {
                 $model                          = $refundOrder->order->firstProfitsharing;

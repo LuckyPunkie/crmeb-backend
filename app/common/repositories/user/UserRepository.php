@@ -2579,6 +2579,20 @@ class UserRepository extends BaseRepository
             }
         }
 
+        if (!empty($where['height_min']) || !empty($where['height_max'])) {
+            $hMin = max(0, intval($where['height_min'] ?? 0));
+            $hMax = max(0, intval($where['height_max'] ?? 0));
+            $heightQuery = \think\facade\Db::name('user_profile')->where('height', '>', 0);
+            if ($hMin > 0) {
+                $heightQuery->where('height', '>=', $hMin);
+            }
+            if ($hMax > 0) {
+                $heightQuery->where('height', '<=', $hMax);
+            }
+            $heightUids = $heightQuery->column('uid');
+            $query->whereIn('uid', $heightUids ?: [0]);
+        }
+
         $count = $query->count();
         $list = $query->page($page, $limit)->select()->toArray();
 

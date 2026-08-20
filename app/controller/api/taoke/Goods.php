@@ -243,7 +243,11 @@ class Goods extends BaseController
         $q = $this->request->param('keyword', '');
         $cat = $this->request->param('cat', 0);
         try {
-            $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit, $q, $cat);
+            if ($q === '' || $q === null) {
+                $result = $this->dingdanxiaService->taobaoGoods((int)$page, (int)$limit);
+            } else {
+                $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit, $q, $cat);
+            }
             $data = [];
             foreach ($result as $k => $val) {
                 // 确保 $val 是数组
@@ -256,11 +260,11 @@ class Goods extends BaseController
 
                 $data[] = [
                     'goods_id' => $val['item_id'] ?? '',
-                    'title' => $itemBasic['title'] ?? '',
-                    'image' => $itemBasic['pict_url'] ?? '',
-                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : 0,
-                    'price' => $priceInfo['final_promotion_price'] ?? '0.00',
-                    'ot_price' => $priceInfo['reserve_price'] ?? '0.00',
+                    'title' => $itemBasic['title'] ?? ($val['title'] ?? ''),
+                    'image' => $itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''),
+                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($val['volume'] ?? 0),
+                    'price' => $priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'),
+                    'ot_price' => $priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'),
                 ];
             }
 
@@ -287,7 +291,12 @@ class Goods extends BaseController
         $q = $this->request->post('keyword', '');
         $cat = $this->request->post('cat', 0);
         try {
-            $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit,$q,$cat);
+            // 空关键词走物料推荐，避免淘宝搜索无词返回空列表
+            if ($q === '' || $q === null) {
+                $result = $this->dingdanxiaService->taobaoGoods((int)$page, (int)$limit);
+            } else {
+                $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit, $q, $cat);
+            }
              $data = [];
              foreach ($result as $k=>$val){
                  // 确保 $val 是数组
@@ -300,11 +309,11 @@ class Goods extends BaseController
         
                 $data[] = [
                     'goods_id' => $val['item_id'] ?? '',
-                    'title' => $itemBasic['title'] ?? '',
-                    'image' => $itemBasic['pict_url'] ?? '',
-                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : 0,
-                    'price' => $priceInfo['final_promotion_price'] ?? '0.00',
-                    'ot_price' => $priceInfo['reserve_price'] ?? '0.00',
+                    'title' => $itemBasic['title'] ?? ($val['title'] ?? ''),
+                    'image' => $itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''),
+                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($val['volume'] ?? 0),
+                    'price' => $priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'),
+                    'ot_price' => $priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'),
                 ];
             }
 
