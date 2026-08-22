@@ -41,6 +41,8 @@ class Message extends BaseController
             'gender' => (string)$this->request->param('gender', ''),
             'age_min' => (int)$this->request->param('age_min', 0),
             'age_max' => (int)$this->request->param('age_max', 0),
+            'height_min' => (int)$this->request->param('height_min', 0),
+            'height_max' => (int)$this->request->param('height_max', 0),
             'education' => (string)$this->request->param('education', ''),
         ];
         $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type, $filter);

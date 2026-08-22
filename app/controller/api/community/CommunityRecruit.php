@@ -329,4 +329,16 @@ class CommunityRecruit extends BaseController
         $data = $this->repository->getApplyResume((int)$applyId, $user->uid);
         return app('json')->success($data);
     }
+
+    /**
+     * 用户回复面试邀请（接受/婉拒）
+     */
+    public function respondInterview($applyId)
+    {
+        $uid = $this->request->uid();
+        $action = $this->request->param('action', '');
+        if (!in_array($action, ['accept', 'decline'])) throw new ValidateException('操作类型错误');
+        $this->repository->respondInterview((int)$applyId, $uid, $action);
+        return app('json')->success('操作成功');
+    }
 }

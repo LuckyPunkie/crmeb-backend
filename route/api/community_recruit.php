@@ -26,6 +26,7 @@ Route::group(function () {
     Route::get('community/recruit/my-applications', 'api.community.CommunityRecruit/myApplications');
     Route::get('community/recruit/application/:id', 'api.community.CommunityRecruit/applicationDetail');
     Route::get('community/recruit/apply-resume/:applyId', 'api.community.CommunityRecruit/applyResume');
+    Route::post('community/recruit/respond/:applyId', 'api.community.CommunityRecruit/respondInterview');
 })->middleware(UserTokenMiddleware::class, true);
 
 // 无需登录的路由

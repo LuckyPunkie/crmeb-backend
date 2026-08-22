@@ -68,7 +68,8 @@ class RelevanceDao extends BaseDao
             });
         });
         // 设置查询条件，筛选出与用户ID关联且类型符合的关联记录
-        $query->where('left_id',$where['uid'])->where('type',RelevanceRepository::TYPE_COMMUNITY_START);
+        $type = $where['type'] ?? RelevanceRepository::TYPE_COMMUNITY_START;
+        $query->where('left_id',$where['uid'])->where('type', $type);
         // 返回构建好的查询构建器
         return $query;
     }

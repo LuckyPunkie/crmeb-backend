@@ -275,6 +275,7 @@ Route::group(function () {
         Route::post('start/:id', 'Community/startCommunity');
         Route::get('start/lst', 'Community/getUserStartCommunity');
         Route::post('collect/:id', 'Community/collectCommunity');
+        Route::get('collect/lst', 'Community/getUserCollectCommunity');
 
         Route::post('reply/create/:id', 'CommunityReply/create');
         Route::post('reply/start/:id', 'CommunityReply/start');
@@ -495,6 +496,7 @@ Route::group(function () {
     Route::get('command/copy', 'api.Common/getCommand');
     Route::group('discounts', function () {
         Route::get('lst', '/lst');
+        Route::get('detail/:id', '/detail');
     })->prefix('api.store.product.Discounts');
     //test
     Route::any('store/test', 'api.Test/test');

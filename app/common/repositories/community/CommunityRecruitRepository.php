@@ -291,6 +291,74 @@ class CommunityRecruitRepository extends BaseRepository
     }
 
     /**
+     * 用户回复面试邀请（接受/婉拒）
+     * 接受 → status=5，婉拒 → status=6，并通知商家
+     */
+    public function respondInterview(int $applyId, int $uid, string $action): void
+    {
+        $applyDao = app()->make(CommunityRecruitApplyDao::class);
+        $apply = $applyDao->search(['id' => $applyId, 'uid' => $uid])->find();
+        if (!$apply) throw new ValidateException('投递记录不存在');
+        if ((int)$apply['status'] !== 2) throw new ValidateException('当前状态不支持此操作');
+
+        $newStatus = $action === 'accept' ? 5 : 6;
+        $applyDao->update($applyId, ['status' => $newStatus]);
+
+        $this->notifyMerchantResponse($apply->toArray(), $newStatus);
+    }
+
+    /**
+     * 用户回复面试 → 商家系统通知
+     */
+    protected function notifyMerchantResponse(array $apply, int $status): void
+    {
+        $recruit = $this->dao->get((int)($apply['recruit_id'] ?? 0));
+        if (!$recruit) return;
+
+        $merUid = (int)($recruit['mer_uid'] ?? 0);
+        $applicantUid = (int)($apply['uid'] ?? 0);
+        if ($merUid <= 0) return;
+
+        $jobTitle = (string)($recruit['job_title'] ?? '岗位');
+
+        $applicantName = '';
+        try {
+            $user = Db::name('user')->where('uid', $applicantUid)->field('nickname')->find();
+            $applicantName = (string)($user['nickname'] ?? '');
+        } catch (\Throwable $e) {}
+
+        if ($status === 5) {
+            $title = '求职者接受了面试邀请';
+            $text = ($applicantName ? "【{$applicantName}】" : '求职者') . "已接受您对「{$jobTitle}」岗位的面试邀请";
+        } else {
+            $title = '求职者婉拒了面试邀请';
+            $text = ($applicantName ? "【{$applicantName}】" : '求职者') . "婉拒了您对「{$jobTitle}」岗位的面试邀请";
+        }
+
+        $payload = \app\common\repositories\user\UserNotificationRepository::buildNoteContent([
+            'text' => $text,
+            'position' => $jobTitle,
+            'apply_id' => (int)($apply['id'] ?? 0),
+            'recruit_id' => (int)($recruit['id'] ?? 0),
+            'community_id' => (int)($recruit['community_id'] ?? 0),
+            'status' => $status,
+        ]);
+
+        try {
+            app()->make(\app\common\repositories\user\UserNotificationRepository::class)
+                ->createAndPush(
+                    $merUid,
+                    $applicantUid,
+                    'recruit',
+                    $title,
+                    $payload,
+                    'recruit_apply',
+                    (int)($apply['id'] ?? 0)
+                );
+        } catch (\Throwable $e) {}
+    }
+
+    /**
      * 关闭/开启招聘
      */
     public function toggleStatus(int $communityId, int $merUid, int $status)
@@ -360,7 +428,7 @@ class CommunityRecruitRepository extends BaseRepository
     }
 
     /**
-     * 商家查看应聘者简历（校验岗位归属）
+     * 商家查看应聘者简历（校验岗位归属，自动标记已查看）
      */
     public function getApplyResume(int $applyId, int $merUid)
     {
@@ -371,6 +439,13 @@ class CommunityRecruitRepository extends BaseRepository
         $recruit = $this->dao->get($apply['recruit_id']);
         if (!$recruit || (int)$recruit['mer_uid'] !== $merUid) {
             throw new ValidateException('无权查看');
+        }
+
+        // 仅当状态为 0（已投递/待处理）时，自动升为 1（已查看），并推通知
+        if ((int)$apply['status'] === 0) {
+            $applyDao->update($applyId, ['status' => 1]);
+            $apply['status'] = 1;
+            $this->notifyApplicantStatusChange($apply->toArray(), $recruit->toArray(), 1);
         }
 
         $resumeId = (int)($apply['resume_id'] ?? 0);

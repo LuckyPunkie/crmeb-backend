@@ -219,6 +219,19 @@ class Community extends BaseController
     }
 
     /**
+     * 我收藏过的文章
+     * @param RelevanceRepository $relevanceRepository
+     * @return \think\response\Json
+     */
+    public function getUserCollectCommunity(RelevanceRepository $relevanceRepository)
+    {
+        [$page, $limit] = $this->getPage();
+        $where['uid'] = $this->user->uid;
+        $data = $relevanceRepository->getUserCollectCommunity($where, $page, $limit);
+        return app('json')->success($data);
+    }
+
+    /**
      *  文章详情
      * @param $id
      * @return mixed

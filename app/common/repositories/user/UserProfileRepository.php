@@ -28,8 +28,17 @@ class UserProfileRepository extends BaseRepository
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
             'annual_income', 'car_count', 'house_count', 'total_assets',
             'relationship_status', 'dating_purpose',
+            'school_name', 'marital_status', 'want_kids', 'smoking', 'drinking',
+            'tattoo', 'only_child', 'pets', 'about_me',
+            'hope_age_min', 'hope_age_max', 'hope_height_min', 'hope_education',
+            'hope_cities', 'hope_text', 'hobbies',
+            'cover_info', 'cover_about', 'cover_hope', 'cover_hobby',
+            'hobby_photo_1', 'hobby_photo_2',
         ];
         $filtered = array_intersect_key($data, array_flip($allowed));
+        if (isset($filtered['hobbies']) && is_array($filtered['hobbies'])) {
+            $filtered['hobbies'] = json_encode(array_values($filtered['hobbies']), JSON_UNESCAPED_UNICODE);
+        }
         $this->dao->upsert($uid, $filtered);
     }
 
@@ -89,6 +98,10 @@ class UserProfileRepository extends BaseRepository
             }
         }
 
+        if (!empty($profile['height'])) {
+            $parts[] = ((int)$profile['height']) . 'cm';
+        }
+
         // 学历：1高中 2大专 3本科 4硕士 5博士 6中专 7小学 8初中
         $eduMap = [
             1 => '高中', 2 => '大专', 3 => '本科', 4 => '硕士',
@@ -97,10 +110,6 @@ class UserProfileRepository extends BaseRepository
         $eduKey = (int)($profile['education'] ?? 0);
         if ($eduKey && isset($eduMap[$eduKey])) {
             $parts[] = $eduMap[$eduKey];
-        }
-
-        if (!empty($profile['height'])) {
-            $parts[] = ((int)$profile['height']) . 'cm';
         }
 
         return $parts ? implode(' · ', $parts) : '';

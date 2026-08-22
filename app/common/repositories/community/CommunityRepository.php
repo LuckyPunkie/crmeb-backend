@@ -715,6 +715,21 @@ class CommunityRepository extends BaseRepository
         $data['user_label_name'] = $user->label_id ? app()->make(\app\common\repositories\user\UserLabelRepository::class)->labels($user->label_id) : [];
         $data['profile_items']  = $this->buildProfileItems($user, $uid);
 
+        $profileRepo = app()->make(\app\common\repositories\user\UserProfileRepository::class);
+        $profile = $profileRepo->getByUid($uid);
+        if (!empty($profile['hobbies']) && is_string($profile['hobbies'])) {
+            $decoded = json_decode($profile['hobbies'], true);
+            $profile['hobbies'] = is_array($decoded) ? $decoded : [];
+        } elseif (isset($profile['hobbies']) && !is_array($profile['hobbies'])) {
+            $profile['hobbies'] = [];
+        } elseif (empty($profile)) {
+            $profile = [];
+        } else {
+            $profile['hobbies'] = $profile['hobbies'] ?? [];
+        }
+        $data['profile'] = $profile;
+        $data['profile_brief'] = $profile ? $profileRepo->formatProfileBrief($profile) : '';
+
         $review = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
             ->buildReviewDisplay(is_array($user) ? $user : $user->toArray());
         $data['review_label'] = $review['review_label'];

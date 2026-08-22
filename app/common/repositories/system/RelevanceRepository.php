@@ -310,6 +310,19 @@ class RelevanceRepository extends BaseRepository
     }
 
     /**
+     * 我收藏过的文章
+     * @param array $where
+     * @param int $page
+     * @param int $limit
+     * @return array
+     */
+    public function getUserCollectCommunity(array $where, int $page, int $limit)
+    {
+        $where['type'] = self::TYPE_COMMUNITY_COLLECT;
+        return $this->getUserStartCommunity($where, $page, $limit);
+    }
+
+    /**
      * 我点赞过的文章
      * @param int $uid
      * @return \think\Collection

@@ -23,7 +23,8 @@ class MiniOrderShippingListen implements ListenerInterface
 {
     public function handle($event): void
     {
-        [$order_type, $order, $delivery_type, $delivery_id, $delivery_name, $sub_mchid] = $event;
+        [$order_type, $order, $delivery_type, $delivery_id, $delivery_name] = $event;
+        $sub_mchid = $event[5] ?? '';
         $order_shipping_open = systemConfig('order_shipping_open', 0);  // 小程序发货信息管理服务开关
         if (empty($order) || !$order_shipping_open) {
             return;

@@ -245,6 +245,9 @@ class UserDialogRepository extends BaseRepository
         $ageMin = max(0, (int)($filter['age_min'] ?? 0));
         $ageMax = max(0, (int)($filter['age_max'] ?? 0));
         $hasAgeFilter = $ageMin > 0 || $ageMax > 0;
+        $heightMin = max(0, (int)($filter['height_min'] ?? 0));
+        $heightMax = max(0, (int)($filter['height_max'] ?? 0));
+        $hasHeightFilter = $heightMin > 0 || $heightMax > 0;
 
         $educations = [];
         if (!empty($filter['education'])) {
@@ -255,7 +258,7 @@ class UserDialogRepository extends BaseRepository
         }
         $hasEduFilter = !empty($educations);
 
-        if ($gender === null && !$hasAgeFilter && !$hasEduFilter) {
+        if ($gender === null && !$hasAgeFilter && !$hasHeightFilter && !$hasEduFilter) {
             return null;
         }
 
@@ -281,6 +284,18 @@ class UserDialogRepository extends BaseRepository
                     }
                 });
             });
+        }
+
+        if ($hasHeightFilter) {
+            $heightQuery = Db::name('user_profile')->where('height', '>', 0);
+            if ($heightMin > 0) {
+                $heightQuery->where('height', '>=', $heightMin);
+            }
+            if ($heightMax > 0) {
+                $heightQuery->where('height', '<=', $heightMax);
+            }
+            $heightUids = $heightQuery->column('uid');
+            $query->whereIn('uid', $heightUids ?: [0]);
         }
 
         if ($hasEduFilter) {

@@ -219,6 +219,7 @@ class NearbyShopRepository extends BaseRepository
         // 优先使用 label_store 中已生效的标签，兜底回退到 nearby_tags
         $storeTags = $this->resolveTagsByMerId((int)$data['mer_id']);
         $data['tags'] = !empty($storeTags) ? $storeTags : $this->resolveTags($data['nearby_tags'] ?? '');
+        $data['tags'] = $this->appendWelfareTag($data['tags'] ?? [], $data);
 
         // 分类名称 / 是否餐饮店（父级或自身名为「餐饮美食」）
         $data['nearby_category_name'] = '';
@@ -272,12 +273,38 @@ class NearbyShopRepository extends BaseRepository
             $data['recommends'] = [];
         }
 
-        // 套餐（通过PackageRepository获取）
+        // 套餐（从优惠套餐获取）
         try {
-            $packageRepo = app()->make(\app\common\repositories\store\nearby\NearbyShopPackageRepository::class);
-            $data['packages'] = $packageRepo->getTopList($data['mer_id'], 4)->toArray();
-        } catch (\think\db\exception\DbException $e) {
-            \think\facade\Log::warning('NearbyShop getDetail packages failed: ' . $e->getMessage());
+            $discountRepo = app()->make(\app\common\repositories\store\product\StoreDiscountRepository::class);
+            $dWhere = ['status' => 1, 'is_show' => 1, 'is_del' => 0, 'end_time' => 1, 'mer_id' => $data['mer_id']];
+            $dResult = $discountRepo->getApilist($dWhere, 4);
+            $data['packages'] = array_map(function ($item) {
+                // discounts 类型处理后：sku.price=套餐内价，sku.ot_price=商品原价
+                $bundleTotal    = '0';
+                $originalTotal  = '0';
+                foreach ($item['discountsProduct'] ?? [] as $dp) {
+                    $skus = $dp['product']['sku'] ?? [];
+                    if (!empty($skus)) {
+                        $bundlePrices = array_column($skus, 'price');
+                        $origPrices   = array_column($skus, 'ot_price');
+                        $bundleTotal   = bcadd($bundleTotal,   (string)min($bundlePrices), 2);
+                        if (!empty($origPrices)) {
+                            $originalTotal = bcadd($originalTotal, (string)min($origPrices), 2);
+                        }
+                    }
+                }
+                return [
+                    'id'             => $item['discount_id'],
+                    'name'           => $item['title'],
+                    'price'          => $bundleTotal,
+                    'original_price' => bccomp($originalTotal, $bundleTotal, 2) > 0 ? $originalTotal : null,
+                    'image'          => $item['image'] ?? '',
+                    'discount'       => null,
+                    'sales'          => $item['sales'] ?? 0,
+                ];
+            }, $dResult['list'] ?? []);
+        } catch (\Exception $e) {
+            \think\facade\Log::warning('NearbyShop getDetail discounts failed: ' . $e->getMessage());
             $data['packages'] = [];
         }
 
@@ -354,6 +381,7 @@ class NearbyShopRepository extends BaseRepository
         } else {
             $data['tags'] = $this->resolveTags($data['nearby_tags'] ?? '');
         }
+        $data['tags'] = $this->appendWelfareTag($data['tags'] ?? [], $data);
 
         // 分类名称（从预取缓存获取，避免 N+1 查询）
         $data['nearby_category_name'] = '';
@@ -427,6 +455,20 @@ class NearbyShopRepository extends BaseRepository
             ->where('s.mer_id', $merId)
             ->where('s.is_margin', '<>', 1)
             ->column('l.label_name');
+    }
+
+    /**
+     * is_welfare_shop=1 时补齐「公益商家」标签（列表/详情统一）
+     */
+    protected function appendWelfareTag(array $tags, array $data): array
+    {
+        if (empty($data['is_welfare_shop'])) {
+            return array_values($tags);
+        }
+        if (!in_array('公益商家', $tags, true)) {
+            array_unshift($tags, '公益商家');
+        }
+        return array_values($tags);
     }
 
     protected function resolveTags(string $nearbyTags): array
