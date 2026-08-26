@@ -8,6 +8,7 @@ return [
     // ==================== 聚推客配置 ====================
     'jutuike' => [
         'appkey' => env('taoke.jutuike_appkey', ''),
+        'pub_id' => env('taoke.jutuike_pub_id', ''),
         'api_url' => 'http://api.jutuike.com/',
     ],
 

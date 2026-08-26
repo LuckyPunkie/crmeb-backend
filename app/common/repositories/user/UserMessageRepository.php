@@ -53,9 +53,9 @@ class UserMessageRepository extends BaseRepository
         }
 
         $myRelation = $this->getMyRelationType($dialog, $fromUid);
-        if ($myRelation == 0) {
-            $unrepliedCount = $this->dao->getUnrepliedCount($fromUid, $toUid);
-            if ($unrepliedCount >= 3) {
+        if ($this->isStrangerMessageLimited($dialog, $fromUid)) {
+            $sentCount = $this->dao->getSentCount($fromUid, $toUid);
+            if ($sentCount >= 3) {
                 throw new ValidateException('对方关注或回复你之前，只能发送3条消息');
             }
         }
@@ -170,5 +170,17 @@ class UserMessageRepository extends BaseRepository
             }
         }
         return 0;
+    }
+
+    /**
+     * 是否仍受陌生人 3 条消息限制（未关注且对方未回复）
+     */
+    public function isStrangerMessageLimited($dialog, int $myUid): bool
+    {
+        if ($this->getMyRelationType($dialog, $myUid) != 0) {
+            return false;
+        }
+        $otherUid = ($dialog->uid_a == $myUid) ? (int)$dialog->uid_b : (int)$dialog->uid_a;
+        return !$this->dao->hasReplied($otherUid, $myUid);
     }
 }

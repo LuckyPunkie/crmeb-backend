@@ -498,9 +498,6 @@ class AdoptionRepository extends BaseRepository
         if ($application->uid == $publisherUid) {
             throw new \think\exception\ValidateException('不能审核自己的申请');
         }
-        if ($status == -1 && empty($remark)) {
-            throw new \think\exception\ValidateException('拒绝申请请填写原因');
-        }
 
         Db::transaction(function () use ($applicationId, $status, $remark) {
             $this->dao->update($applicationId, [

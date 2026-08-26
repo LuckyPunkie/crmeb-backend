@@ -90,6 +90,12 @@ class DiyRepository extends BaseRepository
                 'assist_color' => '#FFB200',
                 'theme' => '--view-theme: #1DB0FC;--view-assist:#FFB200;--view-priceColor:#1db0fc;--view-bgColor:rgba(29, 176, 252, 0.06);--view-minorColor:rgba(29, 176, 252,.1);--view-bntColor11:#FFD652;--view-bntColor12:#FEB60F;--view-bntColor21:#40D1F4;--view-bntColor22:#1DB0FC;'
             ],
+            'brand' => [
+                'type' => 'brand',
+                'theme_color' => '#0231F9',
+                'assist_color' => '#3A5AFA',
+                'theme' => '--view-theme: #0231F9;--view-assist:#0231F9;--view-priceColor:#0231F9;--view-bgColor:rgba(2, 49, 249, 0.1);--view-minorColor:rgba(2, 49, 249,.1);--view-bntColor11:#0231F9;--view-bntColor12:#3a5afa;--view-bntColor21:#0231F9;--view-bntColor22:#3a5afa;'
+            ],
         ];
         return $var[$type] ?? $var['default'];
     }
@@ -548,7 +554,7 @@ class DiyRepository extends BaseRepository
     {
         $data = $this->dao->getSearch(['is_diy' => self::IS_DIY_FAB, 'is_del' => 0, 'mer_id' => 0])->order('id desc')->find();
         if (!$data) {
-            throw new ValidateException('数据为空');
+            return null;
         }
 
         $data['value'] = json_decode($data['value'], true);
@@ -565,7 +571,7 @@ class DiyRepository extends BaseRepository
 
         $data = $this->dao->getSearch($where)->order('id desc')->find();
         if (!$data) {
-            throw new ValidateException('数据为空');
+            return null;
         }
 
         $data['value'] = json_decode($data['value'], true);

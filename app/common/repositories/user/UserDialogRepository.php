@@ -367,12 +367,16 @@ class UserDialogRepository extends BaseRepository
             $online = 0;
         }
 
+        $strangerLimited = app()->make(UserMessageRepository::class)
+            ->isStrangerMessageLimited((object)$dialog, $myUid);
+
         return [
-            'uid'           => $user['uid'],
-            'nickname'      => $user['nickname'],
-            'avatar'        => $user['avatar'],
-            'relation_type' => $myRelation,
-            'online_status' => $online,
+            'uid'               => $user['uid'],
+            'nickname'          => $user['nickname'],
+            'avatar'            => $user['avatar'],
+            'relation_type'     => $myRelation,
+            'stranger_limited'  => $strangerLimited,
+            'online_status'     => $online,
         ];
     }
 }

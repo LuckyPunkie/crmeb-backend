@@ -70,12 +70,16 @@ class ServiceGoodsRepository
                 case 'taobao':
                     return $this->normalizeTaobao($this->dingdanxia->taobaoGoods($page, $limit));
                 case 'jd':
-                    return $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
+                    $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
+                    if (!empty($list)) {
+                        return $list;
+                    }
+                    return $this->normalizeJd($this->jutuike->jdSelection($page, $limit));
                 case 'pdd':
-                    $raw = $this->dingdanxia->pddGoods($page, $limit, $cate ?: 4);
+                    $raw = $this->dingdanxia->pddGoods($page, $limit, $cate);
                     return $this->normalizePdd($raw['list'] ?? (is_array($raw) ? $raw : []));
                 case 'douyin':
-                    return $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch('', $page, $limit));
+                    return $this->fetchDouyinList($keyword, $page, $limit);
                 default:
                     return [];
             }
@@ -97,7 +101,7 @@ class ServiceGoodsRepository
                     $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $limit);
                     return $this->normalizePddSearch($raw);
                 case 'douyin':
-                    return $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch($keyword, $page, $limit));
+                    return $this->fetchDouyinList($keyword, $page, $limit);
                 default:
                     return [];
             }
@@ -132,7 +136,9 @@ class ServiceGoodsRepository
                 'goods_id' => $goodsId,
                 'title' => $itemBasic['title'] ?? '',
                 'image' => $itemBasic['pict_url'] ?? '',
-                'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : 0,
+                'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($itemBasic['volume'] ?? 0),
+                'sales_text' => trim((string)($itemBasic['annual_vol'] ?? '')),
+                'annual_vol' => trim((string)($itemBasic['annual_vol'] ?? '')),
                 'price' => $priceInfo['final_promotion_price'] ?? '0.00',
                 'ot_price' => $priceInfo['reserve_price'] ?? '0.00',
             ];
@@ -246,6 +252,19 @@ class ServiceGoodsRepository
         return $list;
     }
 
+    protected function fetchDouyinList(string $keyword, int $page, int $limit): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            $keyword = '热销';
+        }
+        $list = $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch($keyword, $page, $limit));
+        if (!empty($list)) {
+            return $list;
+        }
+        return $this->normalizeDouyin($this->jutuike->douyinProductSearch($keyword, $page, $limit));
+    }
+
     protected function normalizeDouyin($result): array
     {
         $list = [];
@@ -261,7 +280,7 @@ class ServiceGoodsRepository
             if (!is_array($val)) {
                 continue;
             }
-            $goodsId = (string)($val['product_id'] ?? ($val['productId'] ?? ''));
+            $goodsId = (string)($val['product_id'] ?? ($val['productId'] ?? ($val['goods_id'] ?? '')));
             if ($goodsId === '') {
                 continue;
             }
@@ -273,13 +292,15 @@ class ServiceGoodsRepository
             $list[] = [
                 'platform' => 'douyin',
                 'goods_id' => $goodsId,
-                'title' => $val['title'] ?? '',
-                'image' => $val['cover'] ?? ($val['image'] ?? ''),
-                'sales' => (int)($val['sales'] ?? 0),
+                'title' => $val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? '')),
+                'store_name' => $val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? '')),
+                'image' => $val['cover'] ?? ($val['cover_url'] ?? ($val['image'] ?? ($val['img'] ?? ''))),
+                'sales' => (int)($val['sales'] ?? ($val['sell_num'] ?? 0)),
+                'sales_text' => (string)($val['sell_num_text'] ?? ($val['sales_text'] ?? '')),
                 'price' => $price ?: '0.00',
                 'ot_price' => '0.00',
                 'shop_name' => $val['shop_name'] ?? '',
-                'detail_url' => $val['detail_url'] ?? '',
+                'detail_url' => $val['detail_url'] ?? ($val['product_url'] ?? ''),
             ];
         }
         return $list;

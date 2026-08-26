@@ -25,6 +25,7 @@ Route::group('taoke', function () {
         Route::get('taobao', 'api.taoke.Goods/taobao');
         Route::get('taobao_search', 'api.taoke.Goods/taobaoSearch');
         Route::get('taobao_detail', 'api.taoke.Goods/taobaoDetail');
+        Route::post('taobao_goods_detail', 'api.taoke.Goods/taobaoGoodsDetail');
         Route::post('taobao_orders', 'api.taoke.Goods/taobaoOrders');
         
         Route::post('jutuike_order', 'api.taoke.Goods/jutuikeOrder');

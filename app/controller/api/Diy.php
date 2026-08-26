@@ -565,12 +565,10 @@ class Diy extends BaseController
     {
         $key = env('APP_KEY').'_sys.get_sys_fab_info';
         $data = Cache::remember($key,function(){
-            $res = app()->make(DiyRepository::class)->fabInfo();
-
-            return $res;
+            return app()->make(DiyRepository::class)->fabInfo();
         }, 60);
-        if (empty($data['value'])) {
-            return app('json')->fail('暂无数据');
+        if (!$data || empty($data['value'])) {
+            return app('json')->success(['value' => null, 'is_show' => 0]);
         }
 
         return app('json')->success($data);
@@ -584,12 +582,10 @@ class Diy extends BaseController
 
         $key = env('APP_KEY').'_sys.get_sys_product_category_'.$merId;
         $data = Cache::remember($key,function() use ($merId){
-            $res = app()->make(DiyRepository::class)->productCategoryInfo((int)$merId);
-
-            return $res;
+            return app()->make(DiyRepository::class)->productCategoryInfo((int)$merId);
         }, 60);
-        if (empty($data['value'])) {
-            return app('json')->fail('暂无数据');
+        if (!$data || empty($data['value'])) {
+            return app('json')->success(['value' => ['index' => 0]]);
         }
 
         return app('json')->success($data);

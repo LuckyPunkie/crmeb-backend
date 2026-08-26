@@ -29,6 +29,55 @@ class JuTuiKeService extends BaseServices
     }
 
     /**
+     * 抖音精选联盟商品搜索（聚推客 act 接口，订单侠无权限时回退）
+     */
+    public function douyinProductSearch(string $title = '', int $page = 1, int $pageSize = 20): array
+    {
+        $pubId = trim((string)config('taoke.jutuike.pub_id', ''));
+        if ($pubId === '') {
+            return [];
+        }
+        $title = trim($title);
+        if ($title === '') {
+            $title = '热销';
+        }
+        $page = max(1, (int)$page);
+        $pageSize = max(1, min(20, (int)$pageSize));
+
+        try {
+            $response = $this->httpClient->get('http://api.act.jutuike.com/dyfx/product_search', [
+                'query' => [
+                    'pub_id' => $pubId,
+                    'page' => $page,
+                    'page_size' => $pageSize,
+                    'title' => $title,
+                    'search_type' => 1,
+                    'sort_type' => 1,
+                ],
+            ]);
+            $result = json_decode($response->getBody()->getContents(), true);
+            if (!is_array($result)) {
+                return [];
+            }
+            if ((int)($result['code'] ?? 0) !== 1 && (int)($result['code'] ?? 0) !== 200) {
+                Log::warning('聚推客抖音搜索无结果', [
+                    'code' => $result['code'] ?? null,
+                    'msg' => $result['msg'] ?? '',
+                    'title' => $title,
+                ]);
+                return [];
+            }
+            return $result['data'] ?? [];
+        } catch (\Throwable $e) {
+            Log::error('聚推客抖音搜索异常', [
+                'title' => $title,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    /**
      * 发送HTTP请求
      * @param string $url
      * @param array $params

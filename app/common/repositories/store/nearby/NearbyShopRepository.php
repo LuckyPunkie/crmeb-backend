@@ -258,11 +258,11 @@ class NearbyShopRepository extends BaseRepository
         // 评分星数（转换为1-5的星级格式，保留真实0分）
         $data['star'] = round($data['product_score'] ?? 5, 1);
 
-        // 评价数
-        $data['reply_count'] = $data['care_count'] ?? 0;
-
         // 人均消费
         $data['avg_price'] = $data['nearby_avg_price'] ?? 0;
+
+        // 店铺头图（多图轮播）
+        $data['hero_images'] = $this->resolveHeroImages($data);
 
         // 推荐菜（通过RecommendRepository获取）
         try {
@@ -344,9 +344,11 @@ class NearbyShopRepository extends BaseRepository
             $replyRepo = app()->make(\app\common\repositories\store\product\ProductReplyRepository::class);
             $replies = $replyRepo->getList(['mer_id' => $data['mer_id']], 1, 10);
             $data['replies'] = $replies['list'] ?? [];
+            $data['reply_count'] = (int)($replies['count'] ?? count($data['replies']));
         } catch (\Exception $e) {
             \think\facade\Log::warning('NearbyShop getDetail replies failed: ' . $e->getMessage());
             $data['replies'] = [];
+            $data['reply_count'] = 0;
         }
 
         // 企业微信顾客群（一期 branch_id=0 总店；分店上线后按当前门店 ID 查询）
@@ -523,6 +525,43 @@ class NearbyShopRepository extends BaseRepository
             + cos($lat1) * cos($lat2) * sin($dLng / 2) * sin($dLng / 2);
         $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
         return round($earthRadius * $c, 2);
+    }
+
+    /**
+     * 解析店铺头图列表（支持 JSON 字符串，去重并兜底 banner/avatar）
+     */
+    protected function resolveHeroImages(array $data): array
+    {
+        $images = [];
+        $raw = $data['hero_images'] ?? null;
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            if (is_array($decoded)) {
+                $images = $decoded;
+            } else {
+                $images = [$raw];
+            }
+        } elseif (is_array($raw)) {
+            $images = $raw;
+        }
+
+        $list = [];
+        foreach ($images as $item) {
+            $url = is_string($item) ? $item : (is_array($item) ? ($item['url'] ?? $item['image'] ?? '') : '');
+            $url = trim((string)$url);
+            if ($url !== '' && !in_array($url, $list, true)) {
+                $list[] = $url;
+            }
+        }
+
+        if (empty($list) && !empty($data['mer_banner'])) {
+            $list[] = $data['mer_banner'];
+        }
+        if (empty($list) && !empty($data['mer_avatar'])) {
+            $list[] = $data['mer_avatar'];
+        }
+
+        return $list;
     }
 
     /**

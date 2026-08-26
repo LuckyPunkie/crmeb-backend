@@ -2600,7 +2600,7 @@ class UserRepository extends BaseRepository
             $uids = array_column($list, 'uid');
             $profiles = \think\facade\Db::name('user_profile')
                 ->whereIn('uid', $uids)
-                ->field('uid,education,height,birth_month,job_title,current_city,hometown_city,relationship_status,dating_purpose')
+                ->field('uid,education,height,birth_month,zodiac,job_title,current_city,hometown_city,relationship_status,dating_purpose,cover_info,cover_about,cover_hope,cover_hobby,hobby_photo_1,hobby_photo_2')
                 ->select()
                 ->toArray();
             $profileMap = [];
@@ -2638,6 +2638,25 @@ class UserRepository extends BaseRepository
                 $item['job_title'] = $profile['job_title'] ?? '';
                 $item['current_city'] = $profile['current_city'] ?? '';
                 $item['education_label'] = $eduLabelMap[$item['education']] ?? '';
+                $zodiacVal = isset($profile['zodiac']) ? intval($profile['zodiac']) : 0;
+                $zodiacLabelMap = [
+                    1 => '白羊座', 2 => '金牛座', 3 => '双子座', 4 => '巨蟹座', 5 => '狮子座', 6 => '处女座',
+                    7 => '天秤座', 8 => '天蝎座', 9 => '射手座', 10 => '摩羯座', 11 => '水瓶座', 12 => '双鱼座',
+                ];
+                $item['zodiac'] = $zodiacVal;
+                $item['zodiac_label'] = $zodiacLabelMap[$zodiacVal] ?? '';
+                $item['profile'] = [
+                    'birth_month' => $profile['birth_month'] ?? '',
+                    'education' => $item['education'],
+                    'height' => $item['height'],
+                    'zodiac' => $zodiacVal,
+                    'cover_info' => $profile['cover_info'] ?? '',
+                    'cover_about' => $profile['cover_about'] ?? '',
+                    'cover_hope' => $profile['cover_hope'] ?? '',
+                    'cover_hobby' => $profile['cover_hobby'] ?? '',
+                    'hobby_photo_1' => $profile['hobby_photo_1'] ?? '',
+                    'hobby_photo_2' => $profile['hobby_photo_2'] ?? '',
+                ];
                 if (
                     (empty($item['birthday']) || $item['birthday'] === '0000-00-00')
                     && !empty($profile['birth_month'])

@@ -45,4 +45,20 @@ class UserMessageDao extends BaseDao
             ->where('is_read', 0)
             ->count();
     }
+
+    public function getSentCount(int $fromUid, int $toUid): int
+    {
+        return $this->getModel()::where('from_uid', $fromUid)
+            ->where('to_uid', $toUid)
+            ->where('msn_type', '<>', 100)
+            ->count();
+    }
+
+    public function hasReplied(int $fromUid, int $toUid): bool
+    {
+        return $this->getModel()::where('from_uid', $fromUid)
+            ->where('to_uid', $toUid)
+            ->where('msn_type', '<>', 100)
+            ->count() > 0;
+    }
 }

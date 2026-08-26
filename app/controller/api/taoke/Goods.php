@@ -72,29 +72,23 @@ class Goods extends BaseController
                 ['id' => 4, 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
             ];
         } elseif ($type == 'pdd') {
-            $data = [
-                ['id' => 4, 'text' => '秒杀'],
-                ['id' => 7, 'text' => '百亿补贴'],
-                ['id' => 31, 'text' => '品牌黑标'],
-                ['id' => 24, 'text' => '品牌高佣'],
-                ['id' => 10564, 'text' => '精选爆品'],
-                
-            ];
+            $data = $this->getPddCategoryTags();
         } elseif ($type == 'jd') {
+            // jd/material_query 的 eliteId：1猜你喜欢、2实时热销、3大额券、4-9.9包邮、13270国补
             $data = [
-                ['id' => 2, 'text' => '精选卖场'],
-                ['id' => 10, 'text' => '9.9包邮'],
-                ['id' => 110, 'text' => '自营'],
-                ['id' => 15, 'text' => '京东配送'],
-                ['id' => 25, 'text' => '数码家电'],
-                
+                ['id' => 1, 'text' => '猜你喜欢'],
+                ['id' => 2, 'text' => '实时热销'],
+                ['id' => 3, 'text' => '大额券'],
+                ['id' => 4, 'text' => '9.9包邮'],
+                ['id' => 13270, 'text' => '国家补贴'],
             ];
         } elseif ($type == 'douyin') {
             $data = [
                 ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
-                ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆'],
-                ['id' => 3, 'text' => '服饰鞋包', 'keyword' => '服饰'],
-                ['id' => 4, 'text' => '居家日用', 'keyword' => '居家'],
+                ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆护肤'],
+                ['id' => 3, 'text' => '服饰鞋包', 'keyword' => '服饰鞋包'],
+                ['id' => 4, 'text' => '居家日用', 'keyword' => '居家日用'],
+                ['id' => 5, 'text' => '食品零食', 'keyword' => '零食'],
             ];
         } elseif ($type == 'recommend') {
             // 与淘宝一致的价格筛选
@@ -156,7 +150,11 @@ class Goods extends BaseController
         }
         try {
             if ($keyword !== '') {
-                $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+                if ($platform !== '' && in_array(strtolower($platform), $knownPlatforms, true)) {
+                    $list = $this->serviceGoodsRepository->searchPlatform($platform, $keyword, $page, $limit);
+                } else {
+                    $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+                }
             } else {
                 $list = $this->serviceGoodsRepository->aggregateRecommend($page, $limit, $platform);
             }
@@ -206,7 +204,7 @@ class Goods extends BaseController
             return app('json')->success(['list' => $list]);
         } catch (\Exception $e) {
             Log::error('抖音商品列表获取失败', ['error' => $e->getMessage()]);
-            return app('json')->fail('搜索失败，请稍后重试');
+            return app('json')->success(['list' => []]);
         }
     }
 
@@ -306,12 +304,19 @@ class Goods extends BaseController
         
                 $itemBasic = $val['item_basic_info'] ?? [];
                 $priceInfo = $val['price_promotion_info'] ?? [];
+                $salesText = trim((string)($itemBasic['annual_vol'] ?? ''));
+                $sales = isset($itemBasic['tk_total_sales'])
+                    ? (int)$itemBasic['tk_total_sales']
+                    : (int)($itemBasic['volume'] ?? ($val['volume'] ?? 0));
         
                 $data[] = [
+                    'platform' => 'taobao',
                     'goods_id' => $val['item_id'] ?? '',
                     'title' => $itemBasic['title'] ?? ($val['title'] ?? ''),
                     'image' => $itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''),
-                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($val['volume'] ?? 0),
+                    'sales' => $sales,
+                    'sales_text' => $salesText,
+                    'annual_vol' => $salesText,
                     'price' => $priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'),
                     'ot_price' => $priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'),
                 ];
@@ -325,7 +330,7 @@ class Goods extends BaseController
                 'page' => $page,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->fail('搜索失败，请稍后重试'.$e->getMessage());
+            return app('json')->success(['list' => []]);
         }
     }
     
@@ -399,45 +404,81 @@ class Goods extends BaseController
 
 
     /**
+     * 拼多多分类标签（订单侠 activity_tags，失败则兜底）
+     */
+    protected function getPddCategoryTags(): array
+    {
+        $fallback = [
+            ['id' => 4, 'text' => '秒杀'],
+            ['id' => 7, 'text' => '百亿补贴'],
+            ['id' => 31, 'text' => '品牌黑标'],
+            ['id' => 24, 'text' => '品牌高佣'],
+            ['id' => 10564, 'text' => '精选爆品'],
+        ];
+        try {
+            $raw = $this->dingdanxiaService->pdd_tags();
+            if (!is_array($raw) || !$raw) {
+                return $fallback;
+            }
+            $rows = isset($raw['list']) && is_array($raw['list']) ? $raw['list'] : $raw;
+            $data = [];
+            foreach ($rows as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $id = $item['id'] ?? ($item['tag_id'] ?? ($item['activity_tag'] ?? ''));
+                $text = $item['name'] ?? ($item['text'] ?? ($item['tag_name'] ?? ''));
+                if ($id === '' || $text === '') {
+                    continue;
+                }
+                $data[] = [
+                    'id' => $id,
+                    'text' => $text,
+                ];
+            }
+            return $data ?: $fallback;
+        } catch (\Throwable $e) {
+            Log::error('拼多多分类标签获取失败', ['error' => $e->getMessage()]);
+            return $fallback;
+        }
+    }
+
+    /**
      * 淘宝商品详情
      * GET /api/taoke/goods/taobao_detail
      */
     public function taobaoDetail()
     {
-        $goodsId = $this->request->get('goods_id', '');
+        $goodsId = $this->request->get('goods_id', $this->request->get('id', ''));
+        return $this->fetchTaobaoGoodsDetail((string)$goodsId);
+    }
 
-        if (empty($goodsId)) {
+    /**
+     * 淘宝商品详情
+     * POST /api/taoke/goods/taobao_goods_detail
+     */
+    public function taobaoGoodsDetail()
+    {
+        $goodsId = $this->request->post('goods_id', $this->request->post('id', ''));
+        return $this->fetchTaobaoGoodsDetail((string)$goodsId);
+    }
+
+    protected function fetchTaobaoGoodsDetail(string $goodsId)
+    {
+        if ($goodsId === '') {
             return app('json')->fail('商品ID不能为空');
         }
+        $title = (string)$this->request->post('title', $this->request->post('store_name', ''));
 
         try {
-            // 调用商品详情API
-            $result = [
-                'goods_id' => $goodsId,
-                'goods_title' => '示例商品标题',
-                'goods_pic' => 'https://example.com/pic.jpg',
-                'price' => 99.00,
-                'coupon_price' => 10.00,
-                'price_after_quan' => 89.00,
-                'commission_rate' => 2.5,
-                'commission_money' => 2.23,
-                'sales' => 10000,
-                'is_tmall' => 1,
-                'shop_title' => '示例店铺',
-            ];
-
-            // 计算预估收益
-            $uid = $this->request->uid() ?? 0;
-            if ($uid > 0) {
-                $stats = $this->commissionRepository->getUserCommissionStats($uid);
-                $userRate = $stats['self_rate'] ?? 50;
-
-                $result['earn_self'] = round($result['price_after_quan'] * $result['commission_rate'] * $userRate / 10000, 2);
-                $result['earn_share'] = round($result['price_after_quan'] * $result['commission_rate'] * ($userRate - 20) / 10000, 2);
+            $result = $this->dingdanxiaService->taobaoGoodsDetail($goodsId, $title);
+            if (isset($result[0]) && is_array($result[0])) {
+                $result = $result[0];
             }
-
+            if (!$result || !is_array($result)) {
+                return app('json')->fail('商品详情为空');
+            }
             return app('json')->success($result);
-
         } catch (\Exception $e) {
             Log::error('获取淘宝商品详情失败', [
                 'goods_id' => $goodsId,
@@ -579,34 +620,20 @@ class Goods extends BaseController
      */
     public function pddGoods()
     {
-        $page = $this->request->post('page_no', $this->request->post('page', 1));
-        $limit = $this->request->post('page_size', $this->request->post('limit', 20));
-        $cate = $this->request->post('cate', 0);
+        $page = (int)$this->request->post('page_no', $this->request->post('page', 1));
+        $limit = (int)$this->request->post('page_size', $this->request->post('limit', 20));
+        $cate = (int)$this->request->post('cate', 0);
+        $keyword = (string)$this->request->post('keyword', '');
         try {
-            $result = $this->dingdanxiaService->pddGoods($page, $limit,$cate);
-            //var_dump($result);
-            $data = [];
-            foreach ($result['list'] as $k => $val) {
-                 $data[] = [
-                    'goods_id' => $val['goods_id'] ?? '0',
-                    'title' => $val['goods_name'] ?? '',
-                    'image' => $val['goods_image_url'] ?? '',
-                    'sales' => isset($val['sales_tip']) ? (int)$val['sales_tip'] : 0,
-                    'price' => ($val['min_normal_price'] ?? 0) / 100,
-                    'ot_price' => '0.00',
-                    'goods_sign' =>$val['goods_sign']
-                ];
-            }
-
-            return app('json')->success(['list'=>$data]);
-
+            $list = $this->serviceGoodsRepository->searchPlatform('pdd', $keyword, $page, $limit, $cate);
+            return app('json')->success(['list' => $list]);
         } catch (\Exception $e) {
             Log::error('拼多多商品列表获取失败', [
                 'page' => $page,
                 'cate' => $cate,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->fail('搜索失败，请稍后重试');
+            return app('json')->success(['list' => []]);
         }
     }
     
@@ -772,54 +799,20 @@ class Goods extends BaseController
      */
     public function jdGoods()
     {
-        $page = $this->request->post('page_no', $this->request->post('page', 1));
-        $limit = $this->request->post('page_size', $this->request->post('limit', 20));
-        $cate = $this->request->post('cate', 0);
+        $page = (int)$this->request->post('page_no', $this->request->post('page', 1));
+        $limit = (int)$this->request->post('page_size', $this->request->post('limit', 20));
+        $cate = (int)$this->request->post('cate', 0);
+        $keyword = (string)$this->request->post('keyword', '');
         try {
-            $result = $this->dingdanxiaService->jdGoods($page, $limit,$cate);
-            $data = [];
-            foreach ($result as $k => $val) {
-                $priceInfo = $val['priceInfo'] ?? [];
-                $shopInfo = $val['shopInfo'] ?? [];
-                $promotionInfo = $val['promotionInfo'] ?? [];
-                $imageList = $val['imageInfo']['imageList'] ?? [];
-                $images = [];
-                foreach ($imageList as $img) {
-                    if (!empty($img['url'])) {
-                        $images[] = $img['url'];
-                    }
-                }
-                $materialUrl = (string)($val['materialUrl'] ?? '');
-                $clickURL = (string)($promotionInfo['clickURL'] ?? ($promotionInfo['clickUrl'] ?? ''));
-                $data[] = [
-                    'goods_id' => $val['itemId'] ?? '0',
-                    'title' => $val['skuName'] ?? '',
-                    'store_name' => $val['skuName'] ?? '',
-                    'image' => $images[0] ?? '',
-                    'images' => $images,
-                    'sales' => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
-                    'price' => $priceInfo['lowestCouponPrice'] ?? '0.00',
-                    'ot_price' => $priceInfo['price'] ?? '0.00',
-                    'is_hot' => $val['isHot'] ?? '0',
-                    'materialUrl' => $materialUrl,
-                    'clickURL' => $clickURL,
-                    'clickUrl' => $clickURL,
-                    'shopName' => $shopInfo['shopName'] ?? '',
-                    'shopId' => $shopInfo['shopId'] ?? '',
-                    'shopLevel' => $shopInfo['shopLevel'] ?? '',
-                ];
-            }
-
-            return app('json')->success(['list'=>$data]);
-
-
+            $list = $this->serviceGoodsRepository->searchPlatform('jd', $keyword, $page, $limit, $cate);
+            return app('json')->success(['list' => $list]);
         } catch (\Exception $e) {
             Log::error('京东商品列表获取失败', [
-                 'page' => $page,
+                'page' => $page,
                 'cate' => $cate,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->fail('搜索失败，请稍后重试');
+            return app('json')->success(['list' => []]);
         }
     }
     
