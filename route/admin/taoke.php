@@ -16,6 +16,18 @@ Route::group(function () {
         ->name('serviceBrandTabSave')
         ->option(['_alias' => '保存服务页品牌类别', '_auth' => true, '_path' => '/serviceBrandTab/index']);
 
+    Route::get('service_tab_config', 'admin.taoke.ServiceTabConfig/index')
+        ->name('serviceTabConfigIndex')
+        ->option(['_alias' => '服务页Tab配置列表', '_auth' => false, '_path' => '/serviceBrandTab/index']);
+
+    Route::post('service_tab_config/save', 'admin.taoke.ServiceTabConfig/save')
+        ->name('serviceTabConfigSave')
+        ->option(['_alias' => '保存服务页Tab配置', '_auth' => true, '_path' => '/serviceBrandTab/index']);
+
+    Route::post('service_tab_config/delete', 'admin.taoke.ServiceTabConfig/delete')
+        ->name('serviceTabConfigDelete')
+        ->option(['_alias' => '删除服务页Tab配置', '_auth' => true, '_path' => '/serviceBrandTab/index']);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

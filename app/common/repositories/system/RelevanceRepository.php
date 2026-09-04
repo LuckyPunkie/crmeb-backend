@@ -197,7 +197,7 @@ class RelevanceRepository extends BaseRepository
      * @author Qinii
      * @day 10/28/21
      */
-    public function getUserFocus(int $uid, int $page, int $limit)
+    public function getUserFocus(int $uid, int $page, int $limit, bool $mutualOnly = false)
     {
         $query = $this->dao->getSearch([
             'left_id' => $uid,
@@ -207,6 +207,16 @@ class RelevanceRepository extends BaseRepository
                 $query->field('uid,avatar,nickname,count_fans,count_content');
             }
         ]);
+        if ($mutualOnly) {
+            $mutualUids = Db::name('relevance')
+                ->where('type', self::TYPE_COMMUNITY_FANS)
+                ->where('right_id', $uid)
+                ->column('left_id');
+            if (empty($mutualUids)) {
+                return ['count' => 0, 'list' => []];
+            }
+            $query->whereIn('right_id', $mutualUids);
+        }
         $count = $query->count();
         $list = $query->page($page, $limit)->select()->append(['is_fans']);
         $data = [];
@@ -362,6 +372,16 @@ class RelevanceRepository extends BaseRepository
     {
         // 通过DAO层的搜索方法查询符合条件的记录，并返回其数量
         return $this->dao->getSearch([$field => $value, 'type'    => $type,])->count();
+    }
+
+    public function getMutualFollowCount(int $uid): int
+    {
+        return (int) Db::name('relevance')
+            ->alias('r1')
+            ->join('relevance r2', 'r2.left_id = r1.right_id AND r2.right_id = r1.left_id AND r2.type = r1.type')
+            ->where('r1.type', self::TYPE_COMMUNITY_FANS)
+            ->where('r1.left_id', $uid)
+            ->count('r1.left_id');
     }
 
 

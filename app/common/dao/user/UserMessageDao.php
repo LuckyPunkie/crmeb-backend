@@ -61,4 +61,15 @@ class UserMessageDao extends BaseDao
             ->where('msn_type', '<>', 100)
             ->count() > 0;
     }
+
+    public function searchInDialog(int $dialogId, string $keyword, int $page, int $limit)
+    {
+        $keyword = trim($keyword);
+        return $this->getModel()::where('dialog_id', $dialogId)
+            ->where('msn_type', 1)
+            ->whereLike('msn', '%' . $keyword . '%')
+            ->order('create_time', 'desc')
+            ->page($page, $limit)
+            ->select();
+    }
 }

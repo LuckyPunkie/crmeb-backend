@@ -60,7 +60,7 @@ class CommunityRecruit extends BaseController
             'title', 'content',
             'job_title', 'work_city', 'salary_range', 'job_desc',
             'job_require', 'hire_count', 'deadline', 'company_intro',
-            'images', 'topic_id', 'topic_names'
+            'images', 'topic_id', 'topic_names', ['visibility', 0]
         ]);
         app()->make(CommunityRecruitValidate::class)->check($data);
 
@@ -85,6 +85,7 @@ class CommunityRecruit extends BaseController
             ], JSON_UNESCAPED_UNICODE),
             'status' => 1,
             'is_show' => 1,
+            'visibility' => (int)($data['visibility'] ?? 0),
         ];
         if (!empty($data['images'])) {
             $communityData['image'] = is_array($data['images'])
@@ -140,7 +141,7 @@ class CommunityRecruit extends BaseController
             'title', 'content',
             'job_title', 'work_city', 'salary_range', 'job_desc',
             'job_require', 'hire_count', 'deadline', 'company_intro',
-            'images', 'topic_id', 'topic_names'
+            'images', 'topic_id', 'topic_names', ['visibility', -1]
         ]);
         app()->make(CommunityRecruitValidate::class)->check($data);
 
@@ -160,6 +161,9 @@ class CommunityRecruit extends BaseController
                 'work_city' => $data['work_city'],
             ], JSON_UNESCAPED_UNICODE),
         ];
+        if ((int)($data['visibility'] ?? -1) >= 0) {
+            $communityData['visibility'] = (int)$data['visibility'];
+        }
         if (!empty($data['images'])) {
             $communityData['image'] = is_array($data['images'])
                 ? implode(',', $data['images'])

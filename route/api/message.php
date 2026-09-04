@@ -19,9 +19,14 @@ Route::group('message', function () {
 
     Route::group('user', function () {
         Route::get('history/:uid', 'api.message.Message/messageHistory');
+        Route::get('settings/:uid', 'api.message.Message/chatSettings');
+        Route::get('search/:uid', 'api.message.Message/searchHistory');
         Route::post('send/:uid', 'api.message.Message/sendMessage');
         Route::post('recall/:message_id', 'api.message.Message/recallMessage');
+        Route::post('report/:uid', 'api.message.Message/reportUser');
         Route::put('read/:uid', 'api.message.Message/markAsRead');
+        Route::put('black/:uid', 'api.message.Message/toggleBlacklist');
+        Route::put('clear/:uid', 'api.message.Message/clearHistory');
     });
 
     Route::group('notification', function () {

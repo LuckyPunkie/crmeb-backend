@@ -105,7 +105,14 @@ class Community extends BaseController
      */
     public function userList()
     {
-        $where = $this->request->params(['keyword', 'sex', 'age_min', 'age_max', 'education', 'height_min', 'height_max']);
+        $where = $this->request->params([
+            'keyword', 'sex', 'age_min', 'age_max', 'education', 'height_min', 'height_max',
+            'weight_min', 'weight_max', 'zodiac', 'school_name', 'job_title',
+            'hometown_province', 'hometown_city', 'current_province', 'current_city',
+            'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
+            'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
+            'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
+        ]);
         [$page, $limit] = $this->getPage();
 
         $userRepository = app()->make(UserRepository::class);
@@ -347,7 +354,7 @@ class Community extends BaseController
      */
     public function checkParams()
     {
-        $data = $this->request->params(['image','topic_id','topic_names','content','spu_id','order_id',['is_type',1],'video_link','title']);
+        $data = $this->request->params(['image','topic_id','topic_names','content','spu_id','order_id',['is_type',1],'video_link','title',['visibility',0]]);
         $config = systemConfig(["community_app_switch",'community_audit','community_video_audit']);
         $data['status'] = 0;
         $data['is_show'] = 0;
@@ -515,7 +522,8 @@ class Community extends BaseController
     public function getUserFocus(RelevanceRepository $relevanceRepository)
     {
         [$page, $limit] = $this->getPage();
-        $start = $relevanceRepository->getUserFocus($this->user->uid, $page, $limit);
+        $mutual = (bool) $this->request->param('mutual', 0);
+        $start = $relevanceRepository->getUserFocus($this->user->uid, $page, $limit, $mutual);
         return app('json')->success($start);
     }
 

@@ -70,6 +70,13 @@ Route::group(function () {
         Route::get('settlement_list', '/settlementLst')->name('systemAnimalRescueSettlementLst')->option([
             '_alias' => '月捐结算记录',
         ]);
+        // Banner 配置
+        Route::get('banner', '/getBanner')->name('systemAnimalRescueGetBanner')->option([
+            '_alias' => '获取救助页Banner',
+        ]);
+        Route::post('banner', '/saveBanner')->name('systemAnimalRescueSaveBanner')->option([
+            '_alias' => '保存救助页Banner',
+        ]);
     })->prefix('admin.animal_rescue.AnimalRescue')->option([
         '_path' => '/animal_rescue/list',
         '_auth' => true,

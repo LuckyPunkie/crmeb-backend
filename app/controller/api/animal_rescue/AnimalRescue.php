@@ -53,6 +53,15 @@ class AnimalRescue extends BaseController
     }
 
     /**
+     * 获取 Banner 配置（无需登录）
+     */
+    public function banner()
+    {
+        $data = systemConfig(['animal_rescue_banner_img', 'animal_rescue_banner_link']);
+        return app('json')->success($data);
+    }
+
+    /**
      * 帖子列表（无需登录）
      * @return \think\response\Json
      */

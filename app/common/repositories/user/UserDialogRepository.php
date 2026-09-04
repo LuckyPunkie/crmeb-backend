@@ -15,6 +15,8 @@ namespace app\common\repositories\user;
 use app\common\dao\user\UserDialogDao;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\service\StoreServiceUserRepository;
+use app\common\repositories\system\RelevanceRepository;
+use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
@@ -24,6 +26,8 @@ use think\facade\Log;
  */
 class UserDialogRepository extends BaseRepository
 {
+    use UserProfileFilterTrait;
+
     public function __construct(UserDialogDao $dao)
     {
         $this->dao = $dao;
@@ -37,7 +41,7 @@ class UserDialogRepository extends BaseRepository
     /**
      * 获取消息列表（合并私信+客服）
      */
-    public function dialogList(int $uid, int $page, int $limit, string $type = 'all', array $filter = [])
+    public function dialogList(int $uid, int $page, int $limit, string $type = 'all', array $filter = [], string $sort = 'latest')
     {
         $matchingUids = $this->getMatchingUserUids($filter);
         $hasUserFilter = $matchingUids !== null;
@@ -123,8 +127,14 @@ class UserDialogRepository extends BaseRepository
         }
 
         $userCount = $dialogQuery->count();
-        $list = $dialogQuery->order('d.last_message_time', 'desc')
-            ->page($page, $limit)->select()->toArray();
+
+        if (in_array($sort, ['unread_gift_amount', 'total_gift_amount'], true)) {
+            $allList = $dialogQuery->order('d.last_message_time', 'desc')->select()->toArray();
+            $list = $allList;
+        } else {
+            $list = $dialogQuery->order('d.last_message_time', 'desc')
+                ->page($page, $limit)->select()->toArray();
+        }
 
         $chatUids = [];
         foreach ($list as $item) {
@@ -155,7 +165,7 @@ class UserDialogRepository extends BaseRepository
         }
 
         $result = [];
-        $typeDesc = [1 => '', 2 => '[表情]', 3 => '[图片]', 9 => '[语音]', 100 => ''];
+        $typeDesc = [1 => '', 2 => '[表情]', 3 => '[图片]', 9 => '[语音]', 10 => '[礼物]', 100 => ''];
         foreach ($list as $item) {
             $chatUid = ($item['uid_a'] == $uid) ? $item['uid_b'] : $item['uid_a'];
             $isMeA = ($item['uid_a'] == $uid);
@@ -186,6 +196,34 @@ class UserDialogRepository extends BaseRepository
                 'is_blacked'        => $isMeA ? $item['is_black_b'] : $item['is_black_a'],
                 'sex'               => (int)($userInfo['sex'] ?? 0),
             ];
+        }
+
+        if (in_array($sort, ['unread_gift_amount', 'total_gift_amount'], true) && $result) {
+            $dialogIds = array_values(array_filter(array_map(function ($row) {
+                return ($row['type'] ?? '') === 'user' ? (int)$row['dialog_id'] : 0;
+            }, $result)));
+            $amountMap = app()->make(\app\common\repositories\gift\GiftRepository::class)
+                ->getDialogGiftAmounts($uid, $dialogIds, $sort);
+            usort($result, function ($a, $b) use ($amountMap) {
+                if (($a['type'] ?? '') !== 'user' && ($b['type'] ?? '') !== 'user') {
+                    return 0;
+                }
+                if (($a['type'] ?? '') !== 'user') {
+                    return 1;
+                }
+                if (($b['type'] ?? '') !== 'user') {
+                    return -1;
+                }
+                $amtA = $amountMap[$a['dialog_id']] ?? 0;
+                $amtB = $amountMap[$b['dialog_id']] ?? 0;
+                if ($amtA != $amtB) {
+                    return $amtB <=> $amtA;
+                }
+                return strtotime($b['last_message_time'] ?? '2000-01-01')
+                    <=> strtotime($a['last_message_time'] ?? '2000-01-01');
+            });
+            $offset = max(0, ($page - 1) * $limit);
+            $result = array_slice($result, $offset, $limit);
         }
 
         $count = $userCount;
@@ -258,7 +296,9 @@ class UserDialogRepository extends BaseRepository
         }
         $hasEduFilter = !empty($educations);
 
-        if ($gender === null && !$hasAgeFilter && !$hasHeightFilter && !$hasEduFilter) {
+        $profileUids = $this->filterUidsByUserProfile($filter);
+
+        if ($gender === null && !$hasAgeFilter && !$hasHeightFilter && !$hasEduFilter && $profileUids === null) {
             return null;
         }
 
@@ -301,6 +341,10 @@ class UserDialogRepository extends BaseRepository
         if ($hasEduFilter) {
             $eduUids = Db::name('user_profile')->whereIn('education', $educations)->column('uid');
             $query->whereIn('uid', $eduUids ?: [0]);
+        }
+
+        if ($profileUids !== null) {
+            $query->whereIn('uid', $profileUids ?: [0]);
         }
 
         return $query->column('uid');
@@ -346,6 +390,82 @@ class UserDialogRepository extends BaseRepository
         return 0;
     }
 
+    public function getDialogBetween(int $uid1, int $uid2): ?array
+    {
+        $uidA = min($uid1, $uid2);
+        $uidB = max($uid1, $uid2);
+        $dialog = Db::name('user_dialog')->where('uid_a', $uidA)->where('uid_b', $uidB)->find();
+        return $dialog ?: null;
+    }
+
+    public function isBlacklistedByMe(int $myUid, int $targetUid): bool
+    {
+        $dialog = $this->getDialogBetween($myUid, $targetUid);
+        if (!$dialog) {
+            return false;
+        }
+        if ((int)$dialog['uid_a'] === $myUid) {
+            return (bool)$dialog['is_black_a'];
+        }
+        return (bool)$dialog['is_black_b'];
+    }
+
+    public function isBlockedBetween(int $uid1, int $uid2): bool
+    {
+        $dialog = $this->getDialogBetween($uid1, $uid2);
+        if (!$dialog) {
+            return false;
+        }
+        if ((int)$dialog['uid_a'] === $uid1) {
+            if ($dialog['is_black_a'] || $dialog['is_black_b']) {
+                return true;
+            }
+        } else {
+            if ($dialog['is_black_a'] || $dialog['is_black_b']) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function setBlacklist(int $myUid, int $targetUid, bool $black): void
+    {
+        if ($myUid === $targetUid) {
+            throw new ValidateException('不能拉黑自己');
+        }
+        $dialog = $this->getOrCreate($myUid, $targetUid);
+        if ((int)$dialog->uid_a === $myUid) {
+            $dialog->is_black_a = $black ? 1 : 0;
+        } else {
+            $dialog->is_black_b = $black ? 1 : 0;
+        }
+        $dialog->save();
+    }
+
+    public function clearHistory(int $myUid, int $targetUid): void
+    {
+        $dialog = $this->getOrCreate($myUid, $targetUid);
+        if ((int)$dialog->uid_a === $myUid) {
+            $dialog->is_clear_a = 1;
+            $dialog->unread_a = 0;
+        } else {
+            $dialog->is_clear_b = 1;
+            $dialog->unread_b = 0;
+        }
+        $dialog->save();
+        app()->make(UserMessageRepository::class)->markAsRead((int)$dialog->dialog_id, $myUid);
+    }
+
+    public function getChatSettings(int $myUid, int $targetUid): array
+    {
+        $dialog = $this->getOrCreate($myUid, $targetUid);
+        $chatUser = $this->getChatUser((int)$dialog->dialog_id, $myUid);
+        $isMeA = ((int)$dialog->uid_a === $myUid);
+        $chatUser['is_blacked'] = $isMeA ? (int)$dialog->is_black_a : (int)$dialog->is_black_b;
+        $chatUser['dialog_id'] = (int)$dialog->dialog_id;
+        return $chatUser;
+    }
+
     public function getChatUser(int $dialogId, int $myUid): array
     {
         $dialog = Db::name('user_dialog')->where('dialog_id', $dialogId)->find();
@@ -355,10 +475,17 @@ class UserDialogRepository extends BaseRepository
 
         $chatUid = ($dialog['uid_a'] == $myUid) ? $dialog['uid_b'] : $dialog['uid_a'];
 
-        $user = Db::name('user')->field('uid,nickname,avatar')->where('uid', $chatUid)->find();
+        $user = Db::name('user')->field('uid,nickname,avatar,sex')->where('uid', $chatUid)->find();
         if (!$user) {
             return [];
         }
+
+        $profileBrief = app()->make(UserProfileRepository::class)->getBriefByUid($chatUid);
+        $isFans = app()->make(RelevanceRepository::class)->getWhereCount([
+            'left_id' => $myUid,
+            'right_id' => $chatUid,
+            'type' => RelevanceRepository::TYPE_COMMUNITY_FANS,
+        ]);
 
         $myRelation = $this->resolveRelation($dialog, ($dialog['uid_a'] == $myUid));
         try {
@@ -370,13 +497,19 @@ class UserDialogRepository extends BaseRepository
         $strangerLimited = app()->make(UserMessageRepository::class)
             ->isStrangerMessageLimited((object)$dialog, $myUid);
 
+        $isMeA = ((int)$dialog['uid_a'] === $myUid);
         return [
             'uid'               => $user['uid'],
             'nickname'          => $user['nickname'],
             'avatar'            => $user['avatar'],
+            'sex'               => (int)($user['sex'] ?? 0),
+            'profile_brief'     => $profileBrief,
+            'is_fans'           => $isFans ? 1 : 0,
             'relation_type'     => $myRelation,
             'stranger_limited'  => $strangerLimited,
             'online_status'     => $online,
+            'is_blacked'        => $isMeA ? (int)$dialog['is_black_a'] : (int)$dialog['is_black_b'],
+            'is_blocked'        => $this->isBlockedBetween($myUid, (int)$chatUid) ? 1 : 0,
         ];
     }
 }

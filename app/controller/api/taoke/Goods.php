@@ -5,6 +5,7 @@ namespace app\controller\api\taoke;
 use app\common\repositories\taoke\CommissionRepository;
 use app\common\repositories\taoke\ServiceBrandTabRepository;
 use app\common\repositories\taoke\ServiceGoodsRepository;
+use app\common\repositories\taoke\ServiceTabConfigRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JuTuiKeService;
@@ -41,13 +42,19 @@ class Goods extends BaseController
      */
     protected $serviceBrandTabRepository;
 
+    /**
+     * @var ServiceTabConfigRepository
+     */
+    protected $serviceTabConfigRepository;
+
     public function __construct(
         App $app,
         JuTuiKeService $jutuikeService,
         DingDanXiaService $dingdanxiaService,
         CommissionRepository $commissionRepository,
         ServiceGoodsRepository $serviceGoodsRepository,
-        ServiceBrandTabRepository $serviceBrandTabRepository
+        ServiceBrandTabRepository $serviceBrandTabRepository,
+        ServiceTabConfigRepository $serviceTabConfigRepository
     ) {
         parent::__construct($app);
         $this->jutuikeService = $jutuikeService;
@@ -55,6 +62,7 @@ class Goods extends BaseController
         $this->commissionRepository = $commissionRepository;
         $this->serviceGoodsRepository = $serviceGoodsRepository;
         $this->serviceBrandTabRepository = $serviceBrandTabRepository;
+        $this->serviceTabConfigRepository = $serviceTabConfigRepository;
     }
     
     /*
@@ -114,21 +122,28 @@ class Goods extends BaseController
     }
 
     /**
-     * 服务页平台 Tab 配置（含后台品牌类）
+     * 服务页平台 Tab 配置（内置 + 自定义品牌，来自 service_tab_config 表）
      * GET /api/taoke/goods/service_tabs
      */
     public function serviceTabs()
     {
-        $brand = $this->serviceBrandTabRepository->getPublicConfig();
+        $tabs = $this->serviceTabConfigRepository->listEnabled();
+        // 兼容旧字段 brand_tab：取第一条自定义 tab
+        $legacyBrand = ['enabled' => false, 'name' => '', 'brands' => []];
+        foreach ($tabs as $t) {
+            if ((int)$t['tab_type'] === 2 && !empty($t['brands'])) {
+                $legacyBrand = [
+                    'enabled' => true,
+                    'name'    => $t['name'],
+                    'brands'  => $t['brands'],
+                    'tab_key' => $t['tab_key'],
+                ];
+                break;
+            }
+        }
         return app('json')->success([
-            'platforms' => [
-                ['type' => 'recommend', 'name' => '推荐'],
-                ['type' => 'taobao', 'name' => '淘宝'],
-                ['type' => 'jd', 'name' => '京东'],
-                ['type' => 'pdd', 'name' => '拼多多'],
-                ['type' => 'douyin', 'name' => '抖音'],
-            ],
-            'brand_tab' => $brand,
+            'tabs'      => $tabs,
+            'brand_tab' => $legacyBrand,
         ]);
     }
 
@@ -143,7 +158,7 @@ class Goods extends BaseController
         $platform = (string)$this->request->param('platform', '');
         $keyword = (string)$this->request->param('keyword', '');
         // 兼容旧调用：platform 传了非平台名时当作关键词（如价格筛选）
-        $knownPlatforms = ['taobao', 'jd', 'pdd', 'douyin'];
+        $knownPlatforms = ['taobao', 'jd', 'pdd', 'wph', 'douyin'];
         if ($keyword === '' && $platform !== '' && !in_array(strtolower($platform), $knownPlatforms, true)) {
             $keyword = $platform;
             $platform = '';
@@ -174,18 +189,44 @@ class Goods extends BaseController
         $page = (int)$this->request->param('page', $this->request->param('page_no', 1));
         $limit = (int)$this->request->param('limit', $this->request->param('page_size', 20));
         $keyword = (string)$this->request->param('keyword', '');
-        if ($keyword === '') {
-            $config = $this->serviceBrandTabRepository->getPublicConfig();
-            $keyword = $config['brands'][0] ?? '';
+        $tabKey = (string)$this->request->param('tab_key', '');
+
+        // 模式 1：keyword 直接指定 → 走单关键词聚合
+        if ($keyword !== '') {
+            try {
+                $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+                return app('json')->success(['list' => $list]);
+            } catch (\Exception $e) {
+                Log::error('服务页品牌商品失败', ['keyword' => $keyword, 'error' => $e->getMessage()]);
+                return app('json')->fail('获取品牌商品失败');
+            }
         }
-        if ($keyword === '') {
+
+        // 模式 2：tab_key 指定 + keyword 空 → 该 tab 全部品牌聚合搜索
+        if ($tabKey !== '') {
+            $custom = $this->serviceTabConfigRepository->findCustomByKey($tabKey);
+            if ($custom && !empty($custom['brands'])) {
+                try {
+                    $list = $this->serviceGoodsRepository->searchByBrands($custom['brands'], $page, $limit);
+                    return app('json')->success(['list' => $list]);
+                } catch (\Exception $e) {
+                    Log::error('服务页品牌多关键词聚合失败', ['tab_key' => $tabKey, 'error' => $e->getMessage()]);
+                    return app('json')->fail('获取品牌商品失败');
+                }
+            }
+        }
+
+        // 模式 3：兜底 —— 回退到旧 service_brand_tab 单条配置
+        $config = $this->serviceBrandTabRepository->getPublicConfig();
+        $fallback = $config['brands'][0] ?? '';
+        if ($fallback === '') {
             return app('json')->success(['list' => []]);
         }
         try {
-            $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
+            $list = $this->serviceGoodsRepository->searchByBrand($fallback, $page, $limit);
             return app('json')->success(['list' => $list]);
         } catch (\Exception $e) {
-            Log::error('服务页品牌商品失败', ['keyword' => $keyword, 'error' => $e->getMessage()]);
+            Log::error('服务页品牌兜底失败', ['error' => $e->getMessage()]);
             return app('json')->fail('获取品牌商品失败');
         }
     }
@@ -951,6 +992,9 @@ class Goods extends BaseController
         $page = $this->request->post('page_no', 1);
         $limit = $this->request->post('page_size', 20);
         $keyword = $this->request->post('keyword', '');
+        if (empty($keyword)) {
+            $keyword = '热销';
+        }
         try {
             $result = $this->dingdanxiaService->wphGoods($keyword,$page, $limit);
             $data = [];

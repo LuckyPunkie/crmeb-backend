@@ -48,7 +48,11 @@ class UserMessageRepository extends BaseRepository
         $dialog = $dialogDao->getOrCreate($fromUid, $toUid);
         $dialogId = $dialog->dialog_id;
 
-        if ($dialog->uid_a == $fromUid ? $dialog->is_black_b : $dialog->is_black_a) {
+        $isMeA = ($dialog->uid_a == $fromUid);
+        if ($isMeA ? $dialog->is_black_a : $dialog->is_black_b) {
+            throw new ValidateException('你已拉黑对方，无法发送消息');
+        }
+        if ($isMeA ? $dialog->is_black_b : $dialog->is_black_a) {
             throw new ValidateException('对方已将你拉黑，无法发送消息');
         }
 
@@ -77,6 +81,13 @@ class UserMessageRepository extends BaseRepository
             $dialog->last_message = '[图片]';
         } elseif ((int)$data['msn_type'] === 9) {
             $dialog->last_message = '[语音]';
+        } elseif ((int)$data['msn_type'] === 10) {
+            $giftName = '';
+            $decoded = json_decode($data['msn'] ?? '', true);
+            if (is_array($decoded) && !empty($decoded['gift_name'])) {
+                $giftName = $decoded['gift_name'];
+            }
+            $dialog->last_message = $giftName ? ('[礼物] ' . $giftName) : '[礼物]';
         } else {
             $dialog->last_message = '[消息]';
         }
@@ -119,6 +130,7 @@ class UserMessageRepository extends BaseRepository
         $messageResult = $message->toArray();
         $messageResult['send_time'] = strtotime($messageResult['create_time']);
         $messageResult['send_date'] = date('H:i', strtotime($messageResult['create_time']));
+        $messageResult['from_avatar'] = $userInfo['avatar'] ?? '';
 
         return $messageResult;
     }
@@ -146,6 +158,23 @@ class UserMessageRepository extends BaseRepository
     {
         $this->dao->markAsRead($dialogId, $toUid);
         app()->make(UserDialogDao::class)->resetUnread($dialogId, $toUid);
+    }
+
+    public function searchHistory(int $dialogId, int $myUid, string $keyword, int $page, int $limit): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            throw new ValidateException('请输入搜索关键词');
+        }
+        $list = $this->dao->searchInDialog($dialogId, $keyword, $page, $limit);
+        $result = [];
+        foreach ($list as $msg) {
+            $item = $msg->toArray();
+            $item['send_time'] = strtotime($item['create_time']);
+            $item['send_date'] = date('Y-m-d H:i', strtotime($item['create_time']));
+            $result[] = $item;
+        }
+        return $result;
     }
 
     private function getMyRelationType($dialog, int $myUid): int

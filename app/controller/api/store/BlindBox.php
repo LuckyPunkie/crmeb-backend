@@ -307,17 +307,22 @@ class BlindBox extends BaseController
             ];
         }
 
+        $contentData = $productRepository->getContent($id);
+        $sliderImages = $this->normalizeSliderImages($product);
+
         $data = [
             'product_id' => $product['product_id'],
             'store_name' => $product['store_name'],
+            'store_info' => $product['store_info'] ?? '',
             'image' => $product['image'],
-            'slider_image' => $product['slider_image'],
+            'slider_image' => $sliderImages,
             'price' => $product['price'],
             'ot_price' => $product['ot_price'],
             'sales' => $product['sales'],
             'stock' => $product['stock'],
             'mer_id' => $product['mer_id'],
-            'description' => $product['description'],
+            'description' => $product['store_info'] ?? '',
+            'content' => $contentData,
             'reply_count' => $product['reply_count'] ?? 0,
             'is_blindbox' => true,
             'merchant' => [
@@ -578,6 +583,58 @@ class BlindBox extends BaseController
         });
 
         return app('json')->success('申请发货成功');
+    }
+
+    /**
+     * 轮播图字段兼容 JSON 字符串 / 逗号分隔 / 模型 accessor 拆包异常
+     */
+    protected function normalizeSliderImages($product): array
+    {
+        $raw = is_object($product) && method_exists($product, 'getData')
+            ? ($product->getData('slider_image') ?? '')
+            : ($product['slider_image'] ?? '');
+
+        $images = $this->flattenSliderImageValues($raw);
+        if (!$images) {
+            $image = is_object($product) ? ($product['image'] ?? '') : ($product['image'] ?? '');
+            if ($image) {
+                $images = [(string)$image];
+            }
+        }
+
+        return array_values(array_unique(array_filter($images)));
+    }
+
+    protected function flattenSliderImageValues($raw): array
+    {
+        if (empty($raw)) {
+            return [];
+        }
+        if (is_array($raw)) {
+            $images = [];
+            foreach ($raw as $item) {
+                $images = array_merge($images, $this->flattenSliderImageValues($item));
+            }
+            return $images;
+        }
+
+        $str = trim((string)$raw);
+        if ($str === '') {
+            return [];
+        }
+
+        if ($str[0] === '[' || $str[0] === '{') {
+            $decoded = json_decode($str, true);
+            if (is_array($decoded)) {
+                return $this->flattenSliderImageValues($decoded);
+            }
+        }
+
+        if (strpos($str, 'http') !== false && strpos($str, ',') !== false) {
+            return array_values(array_filter(array_map('trim', explode(',', $str))));
+        }
+
+        return [$str];
     }
 
     /**

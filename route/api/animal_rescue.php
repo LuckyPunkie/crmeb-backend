@@ -17,6 +17,7 @@ Route::group('animal_rescue', function () {
     Route::get('lst', '/lst');
     Route::get('detail/:id', '/show');
     Route::get('category_count', '/categoryCount');
+    Route::get('banner', '/banner');
 })->prefix('api.animal_rescue.AnimalRescue')
   ->middleware(UserTokenMiddleware::class, false);
 

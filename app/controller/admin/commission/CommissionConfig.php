@@ -24,14 +24,15 @@ class CommissionConfig extends BaseController
 
     public function save(): \think\response\Json
     {
-        $redRate  = (float)$this->request->param('red_rate', 0);
-        $paidRate = (float)$this->request->param('paid_rate', 0);
-        $remark   = (string)$this->request->param('remark', '');
+        $redRate   = (float)$this->request->param('red_rate', 0);
+        $paidRate  = (float)$this->request->param('paid_rate', 0);
+        $videoRate = (float)$this->request->param('video_rate', 0);
+        $remark    = (string)$this->request->param('remark', '');
 
         $adminInfo = $this->request->adminInfo();
         $operator  = $adminInfo['real_name'] ?? ($adminInfo['account'] ?? '管理员');
 
-        $this->repository->saveConfig($redRate, $paidRate, $operator, $remark);
+        $this->repository->saveConfig($redRate, $paidRate, $videoRate, $operator, $remark);
 
         return app('json')->success('保存成功');
     }

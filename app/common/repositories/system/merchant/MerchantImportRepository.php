@@ -8,6 +8,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 use think\exception\ValidateException;
 use think\facade\Db;
+use think\facade\Log;
 
 /**
  * 商家批量导入
@@ -91,7 +92,8 @@ class MerchantImportRepository extends BaseRepository
             '4. 店铺分类：' . ($catHint ? implode('  ', $catHint) : '（后台暂无分类，请先添加）'),
             '5. 店铺类型：' . ($typeHint ? implode('  ', $typeHint) : '（后台暂无类型，请先添加）'),
             '6. 同名商户已存在时将覆盖更新基础信息。',
-            '7. 第2行为示例，导入前请删除或改成真实数据。',
+            '7. 填写「商户地址」后，系统将自动调用腾讯地图解析经纬度（需后台已配置 tx_map_key）；地址请尽量包含省市区，以提高解析准确度。',
+            '8. 第2行为示例，导入前请删除或改成真实数据。',
         ];
         foreach ($helpLines as $i => $line) {
             $help->setCellValue('A' . ($i + 1), $line);
@@ -185,6 +187,7 @@ class MerchantImportRepository extends BaseRepository
         $created = 0;
         $updated = 0;
         $failed = [];
+        $geocodeFailed = [];
 
         for ($r = 1; $r < count($rows); $r++) {
             $row = $rows[$r];
@@ -207,6 +210,20 @@ class MerchantImportRepository extends BaseRepository
             try {
                 $data['category_id'] = $this->resolveCategoryId($data['category_id'] ?? '', $catNameMap);
                 $data['type_id'] = $this->resolveTypeId($data['type_id'] ?? '', $typeNameMap);
+                if (!empty($data['mer_address'])) {
+                    $coords = $this->resolveCoordinates((string)$data['mer_address']);
+                    if ($coords) {
+                        $data['lat'] = $coords['lat'];
+                        $data['long'] = $coords['long'];
+                    } else {
+                        $geocodeFailed[] = [
+                            'row' => $r + 1,
+                            'mer_name' => (string)($data['mer_name'] ?? ''),
+                            'msg' => '地址未能解析经纬度，店铺已导入但需商户端手动查找位置',
+                        ];
+                    }
+                    usleep(100000);
+                }
                 $result = $this->upsertMerchant($merchantRepo, $data, $adminInfo);
                 if ($result === 'created') {
                     $created++;
@@ -218,7 +235,36 @@ class MerchantImportRepository extends BaseRepository
             }
         }
 
-        return compact('created', 'updated', 'failed');
+        return [
+            'created' => $created,
+            'updated' => $updated,
+            'failed' => $failed,
+            'geocode_failed' => $geocodeFailed,
+        ];
+    }
+
+    /**
+     * 根据地址解析经纬度（腾讯地图）
+     */
+    private function resolveCoordinates(string $address): ?array
+    {
+        $address = trim($address);
+        if ($address === '') {
+            return null;
+        }
+        try {
+            $result = lbs_address([], $address);
+            if (empty($result['location']['lat']) || empty($result['location']['lng'])) {
+                return null;
+            }
+            return [
+                'lat' => (float)$result['location']['lat'],
+                'long' => (float)$result['location']['lng'],
+            ];
+        } catch (\Throwable $e) {
+            Log::info('商家导入地址解析失败: ' . $address . ' - ' . $e->getMessage());
+            return null;
+        }
     }
 
     private function resolveCategoryId(string $raw, array $nameMap): int
@@ -279,6 +325,10 @@ class MerchantImportRepository extends BaseRepository
                 'mark' => (string)($data['mark'] ?? ''),
                 'create_source' => self::SOURCE_IMPORT,
             ];
+            if (isset($data['lat'], $data['long'])) {
+                $update['lat'] = $data['lat'];
+                $update['long'] = $data['long'];
+            }
             Db::name('merchant')->where('mer_id', $exist['mer_id'])->update($update);
             return 'updated';
         }
@@ -304,6 +354,10 @@ class MerchantImportRepository extends BaseRepository
             'create_source' => self::SOURCE_IMPORT,
             'admin_info' => $adminInfo,
         ];
+        if (isset($data['lat'], $data['long'])) {
+            $payload['lat'] = $data['lat'];
+            $payload['long'] = $data['long'];
+        }
 
         $merchant = $merchantRepo->createMerchant($payload);
         // createMerchant 可能未写入 create_source，强制补写

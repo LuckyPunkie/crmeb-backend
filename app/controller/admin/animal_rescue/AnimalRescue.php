@@ -14,6 +14,7 @@ namespace app\controller\admin\animal_rescue;
 
 use app\common\repositories\animal_rescue\AdoptionRepository;
 use app\common\repositories\animal_rescue\AnimalRescueRepository;
+use app\common\repositories\system\config\ConfigValueRepository;
 use app\validate\api\AnimalRescueValidate;
 use crmeb\basic\BaseController;
 use think\App;
@@ -211,5 +212,24 @@ class AnimalRescue extends BaseController
         $where = $this->request->params(['merchant_id', 'settlement_month', 'post_id']);
         [$page, $limit] = $this->getPage();
         return app('json')->success($fundRepo->getAdminSettlementList($where, $page, $limit));
+    }
+
+    /**
+     * 获取爱心救助页 Banner 配置
+     */
+    public function getBanner()
+    {
+        $data = systemConfig(['animal_rescue_banner_img', 'animal_rescue_banner_link']);
+        return app('json')->success($data);
+    }
+
+    /**
+     * 保存爱心救助页 Banner 配置
+     */
+    public function saveBanner(ConfigValueRepository $configRepo)
+    {
+        $data = $this->request->params(['animal_rescue_banner_img', 'animal_rescue_banner_link']);
+        $configRepo->setFormData($data, 0);
+        return app('json')->success('保存成功');
     }
 }

@@ -79,6 +79,16 @@ class UserBillDao extends BaseDao
             ->whereIn('type', ['order_one', 'order_two'])->with('user')->where('status', 0)->select();
     }
 
+    public function getTimeoutGiftIncomeBill($time)
+    {
+        return UserBill::getDB()->where('create_time', '<=', $time)
+            ->where('category', 'brokerage')
+            ->where('type', 'gift_income')
+            ->where('status', 0)
+            ->with('user')
+            ->select();
+    }
+
     /**
      * 获取过期积分账单
      *
@@ -358,7 +368,7 @@ class UserBillDao extends BaseDao
                 // 现在金额为0时的查询条件
                 if ($where['now_money'] == 0) {
                     $query->where('category', 'now_money')
-                        ->whereIn('type', ['pay_product', 'recharge', 'sys_inc_money', 'sys_dec_money', 'brokerage', 'presell', 'refund','extract']);
+                        ->whereIn('type', ['pay_product', 'recharge', 'sys_inc_money', 'sys_dec_money', 'brokerage', 'presell', 'refund','extract', 'paid_content_income']);
                 // 现在金额为1时的查询条件
                 } else if ($where['now_money'] == 1) {
                     $query->where('category', 'now_money')
@@ -366,7 +376,7 @@ class UserBillDao extends BaseDao
                 // 现在金额为2时的查询条件
                 } else if ($where['now_money'] == 2) {
                     $query->where('category', 'now_money')
-                        ->whereIn('type', ['recharge', 'sys_inc_money', 'brokerage', 'refund','extract']);
+                        ->whereIn('type', ['recharge', 'sys_inc_money', 'brokerage', 'refund','extract', 'paid_content_income']);
                 }
             })
             // 根据用户ID(uid)和商户ID(mer_id)查询

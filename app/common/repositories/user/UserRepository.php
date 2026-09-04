@@ -54,7 +54,7 @@ use think\Model;
  */
 class UserRepository extends BaseRepository
 {
-
+    use UserProfileFilterTrait;
 
     /**
      * UserRepository constructor.
@@ -2591,6 +2591,11 @@ class UserRepository extends BaseRepository
             }
             $heightUids = $heightQuery->column('uid');
             $query->whereIn('uid', $heightUids ?: [0]);
+        }
+
+        $profileUids = $this->filterUidsByUserProfile($where);
+        if ($profileUids !== null) {
+            $query->whereIn('uid', $profileUids ?: [0]);
         }
 
         $count = $query->count();

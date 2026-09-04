@@ -54,6 +54,24 @@ class ServiceGoodsRepository
         return array_slice($this->uniqueList($list), 0, $limit);
     }
 
+    /**
+     * 多品牌聚合搜索：对每个 keyword 各调一遍 searchByBrand，合并去重再截断
+     */
+    public function searchByBrands(array $keywords, int $page = 1, int $limit = 20): array
+    {
+        $keywords = array_values(array_filter(array_map('trim', $keywords), function ($k) {
+            return $k !== '';
+        }));
+        if (empty($keywords)) return [];
+        $per = max(4, (int)ceil($limit / count($keywords)));
+        $merged = [];
+        foreach ($keywords as $kw) {
+            $merged = array_merge($merged, $this->searchByBrand($kw, $page, $per));
+            if (count($merged) >= $limit * 3) break; // 早停：够 3 倍就不继续
+        }
+        return array_slice($this->uniqueList($merged), 0, $limit);
+    }
+
     public function searchPlatform(string $platform, string $keyword, int $page = 1, int $limit = 20, $cate = 0): array
     {
         $platform = strtolower(trim($platform));
@@ -102,6 +120,8 @@ class ServiceGoodsRepository
                     return $this->normalizePddSearch($raw);
                 case 'douyin':
                     return $this->fetchDouyinList($keyword, $page, $limit);
+                case 'wph':
+                    return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
                 default:
                     return [];
             }
@@ -113,6 +133,27 @@ class ServiceGoodsRepository
             ]);
             return [];
         }
+    }
+
+    protected function normalizeWph($result): array
+    {
+        if (!is_array($result)) return [];
+        $list = [];
+        foreach ($result as $val) {
+            if (!is_array($val)) continue;
+            $list[] = [
+                'platform'   => 'wph',
+                'goods_id'   => (string)($val['goodsId'] ?? ''),
+                'title'      => (string)($val['goodsName'] ?? ''),
+                'store_name' => (string)($val['goodsName'] ?? ''),
+                'image'      => (string)($val['goodsMainPicture'] ?? ''),
+                'price'      => (string)($val['vipPrice'] ?? '0.00'),
+                'ot_price'   => (string)($val['marketPrice'] ?? '0.00'),
+                'sales'      => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
+                'sales_text' => '',
+            ];
+        }
+        return $list;
     }
 
     protected function normalizeTaobao($result): array

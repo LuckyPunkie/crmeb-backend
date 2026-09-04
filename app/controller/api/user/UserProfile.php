@@ -65,7 +65,7 @@ class UserProfile extends BaseController
             'hope_age_min', 'hope_age_max', 'hope_height_min', 'hope_education',
         ];
         $stringFields = [
-            'birth_month', 'job_title',
+            'birth_month', 'job_title', 'wechat_id',
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
             'school_name', 'pets', 'about_me', 'hope_cities', 'hope_text',
             'cover_info', 'cover_about', 'cover_hope', 'cover_hobby',
@@ -75,7 +75,7 @@ class UserProfile extends BaseController
         $allowEmpty = [
             'cover_info', 'cover_about', 'cover_hope', 'cover_hobby',
             'hobby_photo_1', 'hobby_photo_2', 'about_me', 'hope_text',
-            'hobbies', 'pets', 'school_name', 'hope_cities',
+            'hobbies', 'pets', 'school_name', 'hope_cities', 'wechat_id',
         ];
         // 允许写入 0
         $allowZero = ['car_count', 'house_count'];
@@ -109,6 +109,13 @@ class UserProfile extends BaseController
             } else {
                 $filtered['hobbies'] = [];
             }
+        }
+        if (array_key_exists('wechat_id', $filtered)) {
+            $filtered['wechat_id'] = mb_substr(trim((string)$filtered['wechat_id']), 0, 64);
+        }
+        if (array_key_exists('wechat_unlock_price', $input)) {
+            $price = round(max(0, min(9999, (float)$input['wechat_unlock_price'])), 2);
+            $filtered['wechat_unlock_price'] = $price;
         }
 
         if (!empty($filtered)) {

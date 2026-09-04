@@ -117,6 +117,36 @@ class CommunityRepository extends BaseRepository
 
     /**
      *  移动端列表
+     * 获取与当前用户存在拉黑关系（任一方向）的对方 uid 列表
+     * 用于视频/图文列表过滤：被作者拉黑或我拉黑作者，双向不可见
+     */
+    protected function getBlockedRelatedUids(int $viewerUid): array
+    {
+        if ($viewerUid <= 0) return [];
+        $rows = \think\facade\Db::name('user_dialog')
+            ->where(function ($q) use ($viewerUid) {
+                $q->where(function ($q2) use ($viewerUid) {
+                    $q2->where('uid_a', $viewerUid)->where(function ($q3) {
+                        $q3->where('is_black_a', 1)->whereOr('is_black_b', 1);
+                    });
+                })->whereOr(function ($q2) use ($viewerUid) {
+                    $q2->where('uid_b', $viewerUid)->where(function ($q3) {
+                        $q3->where('is_black_a', 1)->whereOr('is_black_b', 1);
+                    });
+                });
+            })
+            ->field('uid_a,uid_b')
+            ->select()
+            ->toArray();
+        $blocked = [];
+        foreach ($rows as $r) {
+            $other = (int)$r['uid_a'] === $viewerUid ? (int)$r['uid_b'] : (int)$r['uid_a'];
+            if ($other > 0) $blocked[] = $other;
+        }
+        return array_values(array_unique($blocked));
+    }
+
+    /**
      * @param array $where
      * @param int $page
      * @param int $limit
@@ -130,6 +160,40 @@ class CommunityRepository extends BaseRepository
         if (!isset($where['is_type']) && $config) $where['is_type'] = $config;
         $where['is_del'] = 0;
         $query = $this->dao->search($where);
+
+        // 可见性过滤：自己看自己的帖不限制；看他人或公共流才过滤
+        $viewerUid = isset($userInfo) && $userInfo ? (int)$userInfo->uid : 0;
+        $isOwnFeed = $viewerUid && isset($where['uid']) && (int)$where['uid'] === $viewerUid;
+        if (!$isOwnFeed) {
+            if ($viewerUid) {
+                $fansType = \app\common\repositories\system\RelevanceRepository::TYPE_COMMUNITY_FANS;
+                $iFollow = \think\facade\Db::name('relevance')
+                    ->where('left_id', $viewerUid)->where('type', $fansType)->column('right_id') ?: [];
+                $mutualUids = $iFollow ? (\think\facade\Db::name('relevance')
+                    ->where('type', $fansType)->whereIn('left_id', $iFollow)
+                    ->where('right_id', $viewerUid)->column('left_id') ?: []) : [];
+                $query->where(function ($q) use ($viewerUid, $mutualUids) {
+                    $q->where('Community.visibility', 0);
+                    if ($mutualUids) {
+                        $q->whereOr(function ($q2) use ($mutualUids) {
+                            $q2->where('Community.visibility', 1)->whereIn('Community.uid', $mutualUids);
+                        });
+                    }
+                    $q->whereOr(function ($q2) use ($viewerUid) {
+                        $q2->where('Community.visibility', 2)->where('Community.uid', $viewerUid);
+                    });
+                });
+
+                // 拉黑过滤：过滤掉与当前用户之间存在拉黑关系（任一方向）的作者
+                $blockedUids = $this->getBlockedRelatedUids($viewerUid);
+                if ($blockedUids) {
+                    $query->whereNotIn('Community.uid', $blockedUids);
+                }
+            } else {
+                $query->where('Community.visibility', 0);
+            }
+        }
+
         $query->with([
             'author' => function ($query) use ($userInfo) {
                 $query->field('uid,real_name,phone,status,avatar,nickname,count_start,count_fans,count_content');
@@ -155,7 +219,7 @@ class CommunityRepository extends BaseRepository
         }
         $count = $query->count();
         $list = $query->page($page, $limit)->setOption('field', [])
-            ->field('community_id,title,image,topic_id,Community.count_start,count_reply,start,Community.create_time,Community.uid,Community.status,Community.pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal')
+            ->field('community_id,title,image,topic_id,Community.count_start,count_reply,start,Community.create_time,Community.uid,Community.status,Community.pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal,Community.visibility')
             ->select()->append(['time']);
 
         $redpacketDao = app()->make(\app\common\dao\community\CommunityRedpacketDao::class);
@@ -173,10 +237,16 @@ class CommunityRepository extends BaseRepository
                 ] : null;
             } elseif ($item['community_type'] == 2) {
                 $paid = $paidDao->search(['community_id' => $item['community_id']])->find();
-                $item['type_data'] = $paid ? [
-                    'price' => $paid['price'],
-                    'buy_count' => $paid['buy_count'],
-                ] : null;
+                if ($paid) {
+                    $paidRepo = app()->make(CommunityPaidContentRepository::class);
+                    $item['type_data'] = $paidRepo->buildTypeData(
+                        $paid->toArray(),
+                        (int)$item['uid'],
+                        $userInfo
+                    );
+                } else {
+                    $item['type_data'] = null;
+                }
             } elseif ($item['community_type'] == 3) {
                 $recruit = $recruitDao->search(['community_id' => $item['community_id']])->find();
                 $item['type_data'] = $recruit ? [
@@ -201,6 +271,17 @@ class CommunityRepository extends BaseRepository
     {
         $where['is_del'] = 0;
         $where['community_id'] = $community_id;
+        // 拉黑过滤：作者与当前用户存在拉黑关系时，不返回
+        $viewerUid = isset($userInfo) && $userInfo ? (int)$userInfo->uid : 0;
+        if ($viewerUid > 0) {
+            $blockedUids = $this->getBlockedRelatedUids($viewerUid);
+            if ($blockedUids) {
+                $ownerUid = (int)$this->dao->search(['community_id' => $community_id])->value('uid');
+                if ($ownerUid > 0 && in_array($ownerUid, $blockedUids, true)) {
+                    return null;
+                }
+            }
+        }
         $info = $this->dao->search($where)
             ->with([
                 'author' => function ($query) use ($userInfo) {
@@ -222,11 +303,31 @@ class CommunityRepository extends BaseRepository
                     $query->where('left_id', $userInfo->uid ?? 0);
                 }
             ])
-            ->field('community_id,title,image,topic_id,Community.count_start,count_reply,start,Community.create_time,Community.uid,Community.status,is_show,content,video_link,is_type,refusal')
+            ->field('community_id,title,image,topic_id,Community.count_start,count_reply,start,Community.create_time,Community.uid,Community.status,is_show,content,video_link,is_type,community_type,community_type_data,refusal')
             ->find();
         if ($info) {
             $info = $info->append(['time']);
             $info = $this->appendTopics($info);
+            $infoArr = is_array($info) ? $info : $info->toArray();
+            if ((int)($infoArr['community_type'] ?? 0) === 2) {
+                $paidDao = app()->make(\app\common\dao\community\CommunityPaidDao::class);
+                $paid = $paidDao->search(['community_id' => $infoArr['community_id']])->find();
+                if ($paid) {
+                    $paidRepo = app()->make(CommunityPaidContentRepository::class);
+                    $infoArr['type_data'] = $paidRepo->buildTypeData(
+                        $paid->toArray(),
+                        (int)$infoArr['uid'],
+                        $userInfo
+                    );
+                }
+                if (is_object($info)) {
+                    foreach ($infoArr as $k => $v) {
+                        $info[$k] = $v;
+                    }
+                } else {
+                    $info = $infoArr;
+                }
+            }
         }
 
         return $info;
@@ -344,11 +445,29 @@ class CommunityRepository extends BaseRepository
                 },
             ])
             ->hidden(['is_del'])
-            ->field('community_id,title,image,topic_id,count_start,count_reply,start,create_time,uid,status,pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal')
+            ->field('community_id,title,image,topic_id,count_start,count_reply,start,create_time,uid,status,pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal,visibility')
             ->find();
 
         if (!$data) throw new ValidateException('内容不存在，可能已被删除了哦～');
         $data = $data->toArray();
+
+        // 可见性权限检查
+        if (!$is_author) {
+            $vis = (int)($data['visibility'] ?? 0);
+            if ($vis === 2) {
+                throw new ValidateException('该内容仅作者本人可见');
+            }
+            if ($vis === 1) {
+                $fansType = \app\common\repositories\system\RelevanceRepository::TYPE_COMMUNITY_FANS;
+                $iFollow = $user ? \think\facade\Db::name('relevance')
+                    ->where('left_id', $user->uid)->where('right_id', $data['uid'])->where('type', $fansType)->count() : 0;
+                $theyFollow = $user ? \think\facade\Db::name('relevance')
+                    ->where('left_id', $data['uid'])->where('right_id', $user->uid)->where('type', $fansType)->count() : 0;
+                if (!($iFollow && $theyFollow)) {
+                    throw new ValidateException('该内容仅互关好友可见');
+                }
+            }
+        }
         $data = $this->appendTopics($data);
         $data['is_collect'] = $user ? ($this->isCollected($id, (int)$user->uid) ? 1 : 0) : 0;
         $data['count_collect'] = $this->collectCount($id);
@@ -395,6 +514,9 @@ class CommunityRepository extends BaseRepository
                     'buy_count' => $paid['buy_count'],
                     'trial_ratio' => $paid['trial_ratio'],
                     'free_content' => $paid['free_content'],
+                    'video_paid_mode' => (int)($paid['video_paid_mode'] ?? 0),
+                    'video_trial_duration' => (float)($paid['video_trial_duration'] ?? 0),
+                    'video_duration' => (float)($paid['video_duration'] ?? 0),
                     'is_unlocked' => $isUnlocked,
                 ];
                 if ($isUnlocked) {
@@ -695,6 +817,15 @@ class CommunityRepository extends BaseRepository
         } else {
             $user = app()->make(UserRepository::class)->get($uid);
             if (!$user) return app('json')->fail('用户不存在');
+            if ($self && app()->make(\app\common\repositories\user\UserDialogRepository::class)->isBlockedBetween($self->uid, $uid)) {
+                return [
+                    'uid' => $uid,
+                    'nickname' => $user->nickname,
+                    'avatar' => $user->avatar,
+                    'is_blocked' => true,
+                    'is_self' => false,
+                ];
+            }
             // $self 为 null 时（未登录）跳过关注状态查询
             if ($self) {
                 $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
@@ -711,8 +842,18 @@ class CommunityRepository extends BaseRepository
         $data['member_icon']    = systemConfig('member_status') ? ($user->member->brokerage_icon ?? '') : '';
         $data['is_self']        = $is_self;
         $data['fans']           = $user->count_fans;
+        $data['mutual']         = $relevanceRepository->getMutualFollowCount($uid);
         $data['phone']          = $is_self ? ($user->phone ?: '') : '';
         $data['user_label_name'] = $user->label_id ? app()->make(\app\common\repositories\user\UserLabelRepository::class)->labels($user->label_id) : [];
+        $certRepo = app()->make(\app\common\repositories\user\UserCertificationRepository::class);
+        $certNames = $certRepo->getApprovedDisplayNames($uid);
+        foreach ($data['user_label_name'] as $labelName) {
+            $labelName = trim((string)$labelName);
+            if ($labelName !== '' && !in_array($labelName, $certNames, true)) {
+                $certNames[] = $labelName;
+            }
+        }
+        $data['cert_list'] = $certNames;
         $data['profile_items']  = $this->buildProfileItems($user, $uid);
 
         $profileRepo = app()->make(\app\common\repositories\user\UserProfileRepository::class);
@@ -736,6 +877,25 @@ class CommunityRepository extends BaseRepository
         $data['can_apply_urgent'] = $review['can_apply_urgent'];
         $data['profile_review_status'] = $review['profile_review_status'];
         $data['profile_review_urgent'] = $review['profile_review_urgent'];
+
+        $wechatId = trim((string)($profile['wechat_id'] ?? ''));
+        $unlockPrice = round((float)($profile['wechat_unlock_price'] ?? 0), 2);
+        $wechatUnlocked = false;
+        if ($self && !$is_self) {
+            if ($unlockPrice <= 0) {
+                $wechatUnlocked = true;
+            } else {
+                $wechatUnlocked = (bool)\think\facade\Db::name('user_wechat_unlock')
+                    ->where('buyer_uid', $self->uid)
+                    ->where('target_uid', $uid)
+                    ->where('pay_status', 1)
+                    ->count();
+            }
+        }
+        $data['has_wechat'] = $wechatId !== '';
+        $data['wechat_unlock_price'] = $unlockPrice;
+        $data['wechat_unlocked'] = $is_self || $wechatUnlocked;
+        $data['wechat_id'] = ($is_self || $wechatUnlocked || $unlockPrice <= 0) ? $wechatId : '';
 
         return $data;
     }

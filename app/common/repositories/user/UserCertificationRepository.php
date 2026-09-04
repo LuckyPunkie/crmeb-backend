@@ -29,6 +29,40 @@ class UserCertificationRepository extends BaseRepository
         return $this->dao->getByUid($uid);
     }
 
+    /**
+     * 已通过认证展示名（C 端个人主页等）
+     */
+    public function getApprovedDisplayNames(int $uid): array
+    {
+        $typeNames = [
+            'identity'    => '实名认证',
+            'realname'    => '实名认证',
+            'real_name'   => '实名认证',
+            'marriage'    => '婚姻认证',
+            'education'   => '学历认证',
+            'work'        => '工作认证',
+            'income'      => '收入认证',
+            'car'         => '车产认证',
+            'house'       => '房产认证',
+            'asset'       => '资产认证',
+            'real_person' => '真人认证',
+        ];
+        $names = [];
+        $seen = [];
+        foreach ($this->getByUid($uid) as $row) {
+            if ((int)($row['status'] ?? 0) !== 1) {
+                continue;
+            }
+            $type = (string)($row['type'] ?? '');
+            if ($type === '' || isset($seen[$type])) {
+                continue;
+            }
+            $seen[$type] = true;
+            $names[] = $typeNames[$type] ?? self::LABEL_MAP[$type] ?? '认证';
+        }
+        return $names;
+    }
+
     /** 用户级审核状态 */
     public const REVIEW_NONE = 0;
     public const REVIEW_AI_PASS = 1;       // AI审核通过（排队人工）

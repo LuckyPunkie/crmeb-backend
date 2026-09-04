@@ -49,6 +49,8 @@ return [
              \crmeb\listens\AuthCancelPresellOrderListen::class,
             // 自动解冻佣金
              \crmeb\listens\AutoUnLockBrokerageListen::class,
+            // 礼物收益 7 天后解冻
+             \crmeb\listens\AutoUnlockGiftIncomeListen::class,
             // 自动发送短信提醒用户支付 10分钟未支付提醒
              \crmeb\listens\AutoSendPayOrderSmsListen::class,
             //自动同步短信状态
@@ -108,12 +110,16 @@ return [
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class,
             \crmeb\listens\pay\EquityInvestPaySuccessListen::class,
+            \crmeb\listens\pay\GiftOrderPaySuccessListen::class,
+            \crmeb\listens\pay\CommunityPaidPaySuccessListen::class,
         ],
         'pay_success_bill' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         'pay_success_bill_pay' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         // 代金券购买支付回调
         'pay_success_coupon_buy' => [\crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class],
         'pay_success_equity_invest' => [\crmeb\listens\pay\EquityInvestPaySuccessListen::class],
+        'pay_success_gift_order' => [\crmeb\listens\pay\GiftOrderPaySuccessListen::class],
+        'pay_success_community_paid' => [\crmeb\listens\pay\CommunityPaidPaySuccessListen::class],
         'pay_success_order' => [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,

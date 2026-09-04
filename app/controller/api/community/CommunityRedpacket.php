@@ -45,7 +45,7 @@ class CommunityRedpacket extends BaseController
     {
         $data = $this->request->params([
             'title', 'content', 'images', 'topic_id', 'topic_names', 'spu_id',
-            'amount_per_person', 'total_count', 'deadline'
+            'amount_per_person', 'total_count', 'deadline', ['visibility', 0]
         ]);
         app()->make(CommunityRedpacketValidate::class)->check($data);
 
@@ -72,6 +72,7 @@ class CommunityRedpacket extends BaseController
             ]),
             'status' => 1,
             'is_show' => 0,
+            'visibility' => (int)($data['visibility'] ?? 0),
         ];
         if (!empty($data['images'])) $communityData['image'] = implode(',', $data['images']);
         if (!empty($data['topic_id'])) $communityData['topic_id'] = $data['topic_id'];
@@ -104,7 +105,7 @@ class CommunityRedpacket extends BaseController
 
         $data = $this->request->params([
             'title', 'content', 'images', 'topic_id', 'topic_names', 'spu_id',
-            'amount_per_person', 'total_count', 'deadline'
+            'amount_per_person', 'total_count', 'deadline', ['visibility', -1]
         ]);
 
         $redpacketDao = app()->make(\app\common\dao\community\CommunityRedpacketDao::class);
@@ -150,6 +151,9 @@ class CommunityRedpacket extends BaseController
             ], JSON_UNESCAPED_UNICODE),
             'topic_names' => $data['topic_names'] ?? [],
         ];
+        if ((int)($data['visibility'] ?? -1) >= 0) {
+            $communityData['visibility'] = (int)$data['visibility'];
+        }
         if (!empty($data['images'])) {
             $communityData['image'] = is_array($data['images'])
                 ? implode(',', $data['images'])

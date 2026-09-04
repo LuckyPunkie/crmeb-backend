@@ -17,6 +17,7 @@ namespace app\controller\admin\system\merchant;
 use crmeb\services\pay\Pay;
 use app\common\repositories\store\coupon\StoreCouponRepository;
 use app\common\repositories\store\product\ProductCopyRepository;
+use app\common\repositories\store\product\ProductRepository;
 use app\common\repositories\store\service\StoreServiceRepository;
 use app\common\repositories\system\operate\OperateLogRepository;
 use crmeb\basic\BaseController;
@@ -221,6 +222,10 @@ class Merchant extends BaseController
                 app()->make(\app\common\repositories\animal_rescue\FundAuditRepository::class)
                     ->syncMerchantShelterFlag((int)$id, (int)$data['type_id']);
             }
+            if (array_key_exists('status', $data)) {
+                $merStatus = ($merchant['is_del'] || !$merchant['mer_state'] || !$data['status']) ? 0 : 1;
+                app()->make(ProductRepository::class)->changeMerchantProduct($id, ['mer_status' => $merStatus]);
+            }
         });
 
         try{
@@ -317,6 +322,9 @@ class Merchant extends BaseController
         $this->repository->update($id, compact('status'));
         app()->make(StoreCouponRepository::class)->getSearch([])->where('mer_id', $id)->update(['status' => $status]);
         app()->make(StoreServiceRepository::class)->close($id, 'mer_id');
+        // 同步商品 mer_status，避免异步队列异常时商户端商品列表为空
+        $merStatus = ($merchant['is_del'] || !$merchant['mer_state'] || !$status) ? 0 : 1;
+        app()->make(ProductRepository::class)->changeMerchantProduct($id, ['mer_status' => $merStatus]);
         Queue::push(ChangeMerchantStatusJob::class, $id);
         // 商户编辑记录日志
         event('create_operate_log', [

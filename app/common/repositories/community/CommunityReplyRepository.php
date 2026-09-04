@@ -170,6 +170,9 @@ class CommunityReplyRepository extends BaseRepository
         // 一级评论作者附带资料简要（出身年份·学历·身高）
         $list = $this->attachAuthorProfileBrief($list);
 
+        // 付费内容：标记哪些评论者已解锁
+        $this->attachIsUnlock($list, (int)$where['community_id']);
+
         // 返回包含所有、开始、计数和列表的数组
         return compact('all', 'start', 'count', 'list');
     }
@@ -221,6 +224,28 @@ class CommunityReplyRepository extends BaseRepository
         return $list;
     }
 
+    /**
+     * 为评论列表附加 is_unlock 字段：评论者是否已解锁该付费内容
+     */
+    protected function attachIsUnlock($list, int $communityId): void
+    {
+        if (!$list || !count($list)) return;
+        try {
+            $orderDao = app()->make(\app\common\dao\community\CommunityPaidOrderDao::class);
+            $buyerUids = $orderDao->search([
+                'community_id' => $communityId,
+                'pay_status'   => 1,
+            ])->column('buyer_uid');
+            $buyerUids = array_map('intval', $buyerUids);
+        } catch (\Throwable $e) {
+            $buyerUids = [];
+        }
+        foreach ($list as $item) {
+            if (!is_object($item)) continue;
+            $authorUid = (int)(isset($item->author) ? ($item->author->uid ?? 0) : 0);
+            $item->setAttr('is_unlock', in_array($authorUid, $buyerUids, true));
+        }
+    }
 
     /**
      * 发表评论

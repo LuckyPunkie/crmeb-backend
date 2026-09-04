@@ -45,8 +45,15 @@ class CommunityPaidContent extends BaseController
     {
         $data = $this->request->params([
             'title', 'free_content', 'paid_content', 'price',
-            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id'
+            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id',
+            'video_link', 'video_paid_mode', 'video_trial_duration', 'video_duration', 'content',
+            ['visibility', 0]
         ]);
+        $isVideo = !empty($data['video_link']);
+        if ($isVideo) {
+            return $this->createVideoPaid($data);
+        }
+
         app()->make(CommunityPaidValidate::class)->check($data);
 
         $uid = $this->request->uid();
@@ -69,6 +76,7 @@ class CommunityPaidContent extends BaseController
             ]),
             'status' => 1,
             'is_show' => 1,
+            'visibility' => (int)($data['visibility'] ?? 0),
         ];
         if (!empty($data['images'])) $communityData['image'] = implode(',', $data['images']);
         if (!empty($data['topic_id'])) $communityData['topic_id'] = $data['topic_id'];
@@ -115,8 +123,15 @@ class CommunityPaidContent extends BaseController
 
         $data = $this->request->params([
             'title', 'free_content', 'paid_content', 'price',
-            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id'
+            'trial_ratio', 'images', 'paid_images', 'topic_id', 'topic_names', 'spu_id',
+            'video_link', 'video_paid_mode', 'video_trial_duration', 'video_duration', 'content',
+            ['visibility', -1]
         ]);
+        $isVideo = !empty($data['video_link']) || (int)$community['is_type'] === 2;
+        if ($isVideo) {
+            return $this->updateVideoPaid($communityId, $community, $data);
+        }
+
         app()->make(CommunityPaidValidate::class)->check($data);
 
         if (mb_strlen($data['free_content']) < 10) throw new ValidateException('免费预览内容不能少于10个字符');
@@ -150,6 +165,9 @@ class CommunityPaidContent extends BaseController
             'topic_names' => $data['topic_names'] ?? [],
             'free_content' => $data['free_content'],
         ];
+        if ((int)($data['visibility'] ?? -1) >= 0) {
+            $communityData['visibility'] = (int)$data['visibility'];
+        }
         if (!empty($data['images'])) {
             $communityData['image'] = is_array($data['images'])
                 ? implode(',', $data['images'])
@@ -201,7 +219,8 @@ class CommunityPaidContent extends BaseController
     {
         $uid = $this->request->uid();
         $payType = $this->request->param('pay_type', 'balance');
-        $result = $this->repository->unlock((int)$id, $uid, $payType);
+        $returnUrl = $this->request->param('return_url', '');
+        $result = $this->repository->unlock((int)$id, $uid, $payType, $returnUrl);
         return app('json')->success($result);
     }
 
@@ -260,5 +279,149 @@ class CommunityPaidContent extends BaseController
         [$page, $limit] = $this->getPage();
         $data = $this->repository->getUnlockedList($uid, $page, $limit);
         return app('json')->success($data);
+    }
+
+    /**
+     * 创建付费视频笔记
+     */
+    protected function createVideoPaid(array $data)
+    {
+        app()->make(CommunityPaidValidate::class)->scene('video')->check($data);
+
+        $uid = $this->request->uid();
+        $videoPaidMode = (int)($data['video_paid_mode'] ?? 1);
+        $trialDuration = (float)($data['video_trial_duration'] ?? 0);
+        $videoDuration = (float)($data['video_duration'] ?? 0);
+        $price = (float)$data['price'];
+
+        if ($price <= 0) throw new ValidateException('付费价格必须大于0');
+        if (!in_array($videoPaidMode, [1, 2], true)) throw new ValidateException('请选择付费模式');
+        if ($videoPaidMode === 2) {
+            if ($trialDuration <= 0) throw new ValidateException('试看时长必须大于0');
+            if ($videoDuration > 0 && $trialDuration >= $videoDuration) {
+                throw new ValidateException('试看时长必须小于视频总时长');
+            }
+        } else {
+            $trialDuration = 0;
+        }
+
+        $desc = trim((string)($data['content'] ?? $data['free_content'] ?? ''));
+        if (mb_strlen($desc) < 10) throw new ValidateException('视频简介不能少于10个字符');
+
+        $title = trim((string)($data['title'] ?? ''));
+        if ($title === '') {
+            $title = mb_substr($desc, 0, 30) ?: '付费视频';
+        }
+
+        $communityData = [
+            'uid' => $uid,
+            'title' => $title,
+            'content' => $desc,
+            'is_type' => $this->communityRepository::COMMUNIT_TYPE_VIDEO,
+            'community_type' => 2,
+            'video_link' => $data['video_link'],
+            'community_type_data' => json_encode([
+                'price' => $price,
+                'video_paid_mode' => $videoPaidMode,
+                'video_trial_duration' => $trialDuration,
+            ], JSON_UNESCAPED_UNICODE),
+            'status' => 1,
+            'is_show' => 1,
+            'free_content' => $desc,
+            'visibility' => (int)($data['visibility'] ?? 0),
+        ];
+        if (!empty($data['images'])) {
+            $communityData['image'] = is_array($data['images']) ? implode(',', $data['images']) : (string)$data['images'];
+        }
+        if (!empty($data['topic_id'])) $communityData['topic_id'] = $data['topic_id'];
+        if (!empty($data['topic_names'])) $communityData['topic_names'] = $data['topic_names'];
+
+        $communityId = $this->communityRepository->create($communityData);
+
+        app()->make(\app\common\dao\community\CommunityPaidDao::class)->create([
+            'community_id' => $communityId,
+            'uid' => $uid,
+            'price' => $price,
+            'trial_ratio' => 0,
+            'free_content' => $desc,
+            'paid_content' => 'video',
+            'paid_images' => '[]',
+            'video_paid_mode' => $videoPaidMode,
+            'video_trial_duration' => $trialDuration,
+            'video_duration' => $videoDuration,
+        ]);
+
+        return app('json')->success(['community_id' => $communityId]);
+    }
+
+    /**
+     * 更新付费视频笔记
+     */
+    protected function updateVideoPaid(int $communityId, $community, array $data)
+    {
+        app()->make(CommunityPaidValidate::class)->scene('video')->check($data);
+
+        $uid = $this->request->uid();
+        $paidDao = app()->make(\app\common\dao\community\CommunityPaidDao::class);
+        $paid = $paidDao->search(['community_id' => $communityId])->find();
+        if (!$paid) throw new ValidateException('付费内容不存在');
+
+        $videoPaidMode = (int)($data['video_paid_mode'] ?? $paid['video_paid_mode'] ?? 1);
+        $trialDuration = (float)($data['video_trial_duration'] ?? $paid['video_trial_duration'] ?? 0);
+        $videoDuration = (float)($data['video_duration'] ?? $paid['video_duration'] ?? 0);
+        $price = (float)($data['price'] ?? $paid['price']);
+
+        if ((int)($paid['buy_count'] ?? 0) > 0) {
+            $price = (float)$paid['price'];
+            $videoPaidMode = (int)$paid['video_paid_mode'];
+            $trialDuration = (float)$paid['video_trial_duration'];
+        }
+
+        if ($videoPaidMode === 2) {
+            if ($trialDuration <= 0) throw new ValidateException('试看时长必须大于0');
+            if ($videoDuration > 0 && $trialDuration >= $videoDuration) {
+                throw new ValidateException('试看时长必须小于视频总时长');
+            }
+        } else {
+            $trialDuration = 0;
+        }
+
+        $desc = trim((string)($data['content'] ?? $data['free_content'] ?? $community['content'] ?? ''));
+        if (mb_strlen($desc) < 10) throw new ValidateException('视频简介不能少于10个字符');
+
+        $title = trim((string)($data['title'] ?? $community['title'] ?? ''));
+        if ($title === '') $title = mb_substr($desc, 0, 30) ?: '付费视频';
+
+        $communityData = [
+            'title' => $title,
+            'content' => $desc,
+            'video_link' => $data['video_link'] ?? $community['video_link'],
+            'community_type' => 2,
+            'community_type_data' => json_encode([
+                'price' => $price,
+                'video_paid_mode' => $videoPaidMode,
+                'video_trial_duration' => $trialDuration,
+            ], JSON_UNESCAPED_UNICODE),
+            'free_content' => $desc,
+        ];
+        if ((int)($data['visibility'] ?? -1) >= 0) {
+            $communityData['visibility'] = (int)$data['visibility'];
+        }
+        if (!empty($data['topic_names'])) $communityData['topic_names'] = $data['topic_names'];
+        if (!empty($data['images'])) {
+            $communityData['image'] = is_array($data['images']) ? implode(',', $data['images']) : (string)$data['images'];
+        }
+        if (!empty($data['topic_id'])) $communityData['topic_id'] = $data['topic_id'];
+
+        $this->communityRepository->edit($communityId, $communityData);
+        $paidDao->update($paid['id'], [
+            'price' => $price,
+            'free_content' => $desc,
+            'video_paid_mode' => $videoPaidMode,
+            'video_trial_duration' => $trialDuration,
+            'video_duration' => $videoDuration,
+        ]);
+
+        return app('json')->success(['community_id' => $communityId]);
     }
 }

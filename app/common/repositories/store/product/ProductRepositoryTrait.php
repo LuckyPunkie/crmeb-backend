@@ -248,18 +248,19 @@ trait ProductRepositoryTrait
      */
     protected function translateAttrResult(array $info) : array
     {
-        $info['attr'] = [];
-        $info['params'] = [];
-        if(empty($info['attr_result'])) {
+        $fallbackAttr = $info['attr'] ?? [];
+        $info['params'] = $info['params'] ?? [];
+        if (empty($info['attr_result'])) {
             unset($info['attr_result']);
+            $info['attr'] = $fallbackAttr;
             return $info;
         }
 
-        $attrResult = json_decode($info['attr_result']['result'],true);
+        $attrResult = json_decode($info['attr_result']['result'], true) ?: [];
         unset($info['attr_result']);
 
-        $info['attr'] = $attrResult['attr'];
-        $info['params'] = $attrResult['params'];
+        $info['attr'] = $attrResult['attr'] ?? $fallbackAttr;
+        $info['params'] = $attrResult['params'] ?? [];
 
         foreach ($info['attrValue'] as &$value) {
             $_sku = implode(',',array_values((array)$value['detail'] ?? []));
@@ -271,6 +272,55 @@ trait ProductRepositoryTrait
 
         return $info;
     }
+
+    /**
+     * 从 SKU 列表还原规格定义（编辑页 attr 丢失时的兜底）
+     */
+    protected function rebuildAttrFromAttrValue(array $attrValue): array
+    {
+        $specMap = [];
+        foreach ($attrValue as $item) {
+            $detail = $item['detail'] ?? [];
+            if (is_string($detail)) {
+                $detail = json_decode($detail, true) ?: [];
+            }
+            if (is_array($detail) && !empty($detail)) {
+                foreach ($detail as $name => $val) {
+                    $name = trim((string)$name);
+                    if ($name === '') {
+                        $name = '款式';
+                    }
+                    $val = trim((string)$val);
+                    if ($val === '') {
+                        continue;
+                    }
+                    $specMap[$name][$val] = true;
+                }
+                continue;
+            }
+            $sku = trim((string)($item['sku'] ?? ''));
+            if ($sku !== '') {
+                $specMap['款式'][$sku] = true;
+            }
+        }
+
+        if (empty($specMap)) {
+            return [];
+        }
+
+        $attr = [];
+        foreach ($specMap as $name => $values) {
+            $attr[] = [
+                'value' => $name,
+                'add_pic' => 0,
+                'detail' => array_map(static function ($value) {
+                    return ['value' => $value, 'image' => ''];
+                }, array_keys($values)),
+            ];
+        }
+        return $attr;
+    }
+
     /**
      * 清除商品缓存
      *

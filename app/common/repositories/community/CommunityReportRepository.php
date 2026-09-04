@@ -51,6 +51,76 @@ class CommunityReportRepository extends BaseRepository
     }
 
     /**
+     * 提交用户举报（私信场景）
+     */
+    public function createUserReport(array $data, int $reporterUid, int $targetUid)
+    {
+        if ($reporterUid === $targetUid) {
+            throw new ValidateException('不能举报自己');
+        }
+        if (empty($data['reason'])) {
+            throw new ValidateException('请填写举报描述');
+        }
+
+        $user = app()->make(\app\common\repositories\user\UserRepository::class)->get($targetUid);
+        if (!$user) {
+            throw new ValidateException('用户不存在');
+        }
+
+        $images = $data['images'] ?? [];
+        if (is_string($images)) {
+            $images = json_decode($images, true) ?: [];
+        }
+        if (!is_array($images)) {
+            $images = [];
+        }
+        if (count($images) > 9) {
+            throw new ValidateException('最多上传9张图片');
+        }
+
+        return $this->dao->create([
+            'community_id' => 0,
+            'reporter_uid' => $reporterUid,
+            'target_uid' => $targetUid,
+            'report_type' => 'user',
+            'reason' => trim((string)$data['reason']),
+            'images' => json_encode(array_values($images)),
+            'status' => 0,
+        ]);
+    }
+
+    /**
+     * 格式化后台展示字段
+     */
+    protected function formatAdminRow(array $row): array
+    {
+        $row['reported_user'] = $row['target'] ?? null;
+        $row['images'] = $this->parseImages($row['images'] ?? null);
+
+        if (!empty($row['community'])) {
+            $row['reported_content'] = $row['community']['title'] ?? ($row['community']['content'] ?? '');
+        } elseif ((int)($row['community_id'] ?? 0) === 0 && ($row['report_type'] ?? '') === 'user') {
+            $row['reported_content'] = $row['reason'] ?? '';
+        } else {
+            $row['reported_content'] = $row['reason'] ?? '';
+        }
+
+        return $row;
+    }
+
+    protected function parseImages($images): array
+    {
+        if (is_array($images)) {
+            return array_values(array_filter($images));
+        }
+        if (is_string($images) && $images !== '') {
+            $decoded = json_decode($images, true);
+            return is_array($decoded) ? array_values(array_filter($decoded)) : [];
+        }
+        return [];
+    }
+
+    /**
      * 管理员：举报列表
      */
     public function adminList($status, int $page, int $limit)
@@ -74,7 +144,11 @@ class CommunityReportRepository extends BaseRepository
             ->order('create_time DESC');
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
-        return compact('count', 'list');
+        $formatted = [];
+        foreach ($list as $item) {
+            $formatted[] = $this->formatAdminRow($item->toArray());
+        }
+        return ['count' => $count, 'list' => $formatted];
     }
 
     /**
@@ -84,7 +158,7 @@ class CommunityReportRepository extends BaseRepository
     {
         $report = $this->dao->get($id);
         if (!$report) throw new ValidateException('举报记录不存在');
-        return $report->load([
+        $report->load([
             'reporter' => function ($query) {
                 $query->field('uid,nickname,avatar');
             },
@@ -95,6 +169,7 @@ class CommunityReportRepository extends BaseRepository
                 $query->field('community_id,title,content,community_type');
             }
         ]);
+        return $this->formatAdminRow($report->toArray());
     }
 
     /**

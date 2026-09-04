@@ -14,6 +14,7 @@ namespace app\controller\api\message;
 
 use app\common\repositories\user\UserDialogRepository;
 use app\common\repositories\user\UserMessageRepository;
+use app\common\repositories\community\CommunityReportRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\UploadService;
 use think\App;
@@ -36,16 +37,16 @@ class Message extends BaseController
         [$page, $limit] = $this->getPage();
         $type = $this->request->param('type', 'all');
         $uid = $this->request->uid();
-        $filter = [
-            'sex' => (int)$this->request->param('sex', 0),
-            'gender' => (string)$this->request->param('gender', ''),
-            'age_min' => (int)$this->request->param('age_min', 0),
-            'age_max' => (int)$this->request->param('age_max', 0),
-            'height_min' => (int)$this->request->param('height_min', 0),
-            'height_max' => (int)$this->request->param('height_max', 0),
-            'education' => (string)$this->request->param('education', ''),
-        ];
-        $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type, $filter);
+        $filter = $this->request->params([
+            'sex', 'gender', 'age_min', 'age_max', 'height_min', 'height_max', 'education',
+            'weight_min', 'weight_max', 'zodiac', 'school_name', 'job_title',
+            'hometown_province', 'hometown_city', 'current_province', 'current_city',
+            'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
+            'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
+            'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
+        ]);
+        $sort = (string)$this->request->param('sort', 'latest');
+        $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type, $filter, $sort);
         return app('json')->success($result);
     }
 
@@ -57,10 +58,12 @@ class Message extends BaseController
         $dialogId = $dialog->dialog_id;
         $list = $this->messageRepository->getHistory($dialogId, $myUid, $page, $limit);
         $chatUser = $this->dialogRepository->getChatUser($dialogId, $myUid);
+        $myUser = \think\facade\Db::name('user')->field('uid,nickname,avatar')->where('uid', $myUid)->find();
         return app('json')->success([
             'count' => count($list),
             'dialog_id' => $dialogId,
             'chat_user' => $chatUser,
+            'my_user' => $myUser ?: [],
             'list' => $list,
         ]);
     }
@@ -115,6 +118,78 @@ class Message extends BaseController
         $dialog = $this->dialogRepository->getOrCreate($myUid, intval($uid));
         $this->messageRepository->markAsRead($dialog->dialog_id, $myUid);
         return app('json')->success('标记成功');
+    }
+
+    public function chatSettings($uid)
+    {
+        $myUid = $this->request->uid();
+        $targetUid = intval($uid);
+        if (!$targetUid) {
+            return app('json')->fail('参数错误');
+        }
+        return app('json')->success($this->dialogRepository->getChatSettings($myUid, $targetUid));
+    }
+
+    public function toggleBlacklist($uid)
+    {
+        $myUid = $this->request->uid();
+        $targetUid = intval($uid);
+        $status = (int)$this->request->param('status', 0);
+        try {
+            $this->dialogRepository->setBlacklist($myUid, $targetUid, $status === 1);
+            return app('json')->success($status === 1 ? '已加入黑名单' : '已移除黑名单');
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    public function clearHistory($uid)
+    {
+        $myUid = $this->request->uid();
+        $targetUid = intval($uid);
+        try {
+            $this->dialogRepository->clearHistory($myUid, $targetUid);
+            return app('json')->success('已清空聊天记录');
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    public function searchHistory($uid)
+    {
+        $myUid = $this->request->uid();
+        $targetUid = intval($uid);
+        $keyword = trim((string)$this->request->param('keyword', ''));
+        [$page, $limit] = $this->getPage();
+        $dialog = $this->dialogRepository->getOrCreate($myUid, $targetUid);
+        try {
+            $list = $this->messageRepository->searchHistory((int)$dialog->dialog_id, $myUid, $keyword, $page, $limit);
+            return app('json')->success([
+                'count' => count($list),
+                'list' => $list,
+            ]);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    public function reportUser($uid)
+    {
+        $myUid = $this->request->uid();
+        $targetUid = intval($uid);
+        if (!$targetUid) {
+            return app('json')->fail('被举报用户不存在');
+        }
+        $data = $this->request->params(['reason', 'images']);
+        try {
+            $reportRepo = app()->make(CommunityReportRepository::class);
+            $report = $reportRepo->createUserReport($data, $myUid, $targetUid);
+            return app('json')->success('举报已提交，等待审核', ['report_id' => $report['id']]);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        } catch (\Throwable $e) {
+            return app('json')->fail('提交失败，请稍后重试');
+        }
     }
 
     public function uploadVoice()

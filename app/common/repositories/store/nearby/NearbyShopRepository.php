@@ -168,10 +168,13 @@ class NearbyShopRepository extends BaseRepository
         $merIds = array_filter(array_unique(array_column($listArr, 'mer_id')));
         $merTagsMap = $this->batchFetchMerTags($merIds);
 
+        // 批量预取评价数，避免 N+1 查询
+        $replyCountMap = $this->batchFetchReplyCounts($merIds);
+
         // 格式化列表数据
         $formattedList = [];
         foreach ($list as $item) {
-            $formattedList[] = $this->formatListItem($item, $where, $categories, $merTagsMap);
+            $formattedList[] = $this->formatListItem($item, $where, $categories, $merTagsMap, $replyCountMap);
         }
 
         return ['count' => $count, 'list' => $formattedList];
@@ -372,7 +375,7 @@ class NearbyShopRepository extends BaseRepository
      * @param array $where 查询条件（含经纬度）
      * @param array $categories 批量预取的分类缓存 [id => [...]]
      */
-    protected function formatListItem($item, array $where = [], array $categories = [], array $merTagsMap = [])
+    protected function formatListItem($item, array $where = [], array $categories = [], array $merTagsMap = [], array $replyCountMap = [])
     {
         $data = is_array($item) ? $item : $item->toArray();
 
@@ -411,8 +414,8 @@ class NearbyShopRepository extends BaseRepository
         // 评分星数
         $data['star'] = round($data['product_score'] ?? 5, 1);
 
-        // 评价数
-        $data['reply_count'] = $data['care_count'] ?? 0;
+        // 评价数（从批量预取的 reply 表统计中取）
+        $data['reply_count'] = $replyCountMap[$merId] ?? 0;
 
         // 人均消费
         $data['avg_price'] = $data['nearby_avg_price'] ?? 0;
@@ -424,6 +427,26 @@ class NearbyShopRepository extends BaseRepository
      * 将 nearby_tags 字符串转为标签名数组
      * 兼容旧字符串 key 和新数字 label_id
      */
+    /**
+     * 批量预取多个商户的评价数，返回 [mer_id => count]
+     */
+    protected function batchFetchReplyCounts(array $merIds): array
+    {
+        if (empty($merIds)) return [];
+        $rows = \app\common\model\store\product\ProductReply::getDB()
+            ->whereIn('mer_id', $merIds)
+            ->where('is_del', 0)
+            ->field('mer_id, COUNT(*) as cnt')
+            ->group('mer_id')
+            ->select()
+            ->toArray();
+        $map = [];
+        foreach ($rows as $row) {
+            $map[(int)$row['mer_id']] = (int)$row['cnt'];
+        }
+        return $map;
+    }
+
     /**
      * 批量预取多个商户的已生效标签，返回 [mer_id => [label_name, ...]]
      */

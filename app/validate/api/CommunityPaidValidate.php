@@ -24,6 +24,8 @@ class CommunityPaidValidate extends Validate
         'paid_content|付费内容' => 'require',
         'price|解锁价格' => 'require|float|>=:0.01|<=:999.00',
         'trial_ratio|试读比例' => 'integer|>=:0|<=:100',
+        'video_paid_mode|付费模式' => 'integer|in:1,2',
+        'video_trial_duration|试看时长' => 'float|>=:0',
     ];
 
     protected $message = [
@@ -31,5 +33,9 @@ class CommunityPaidValidate extends Validate
         'price.float' => '价格必须为数字',
         'price.>=' => '价格不能低于0.01元',
         'price.<=' => '解锁价格不能超过999.00元',
+    ];
+
+    protected $scene = [
+        'video' => ['price', 'video_paid_mode'],
     ];
 }

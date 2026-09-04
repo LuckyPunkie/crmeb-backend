@@ -1093,7 +1093,22 @@ class ProductRepository extends BaseRepository
         // }
         $data['mer_cate_id'] = $mer_cat;
         foreach ($data['attr'] as $k => $v) {
-            $data['attr'][$k] = ['value' => $v['attr_name'], 'detail' => $v['attr_values']];
+            $detail = [];
+            foreach ((array)($v['attr_values'] ?? []) as $item) {
+                if (is_array($item)) {
+                    $detail[] = [
+                        'value' => $item['value'] ?? '',
+                        'image' => $item['image'] ?? ($item['pic'] ?? ''),
+                    ];
+                } else {
+                    $detail[] = ['value' => (string)$item, 'image' => ''];
+                }
+            }
+            $data['attr'][$k] = [
+                'value' => $v['attr_name'] ?? '',
+                'detail' => $detail,
+                'add_pic' => (int)($v['add_pic'] ?? 0),
+            ];
         }
         $attrValue = (in_array($data['product_type'], [3, 4])) ? $data['oldAttrValue'] : $data['attrValue'];
         unset($data['oldAttrValue'], $data['attrValue']);
@@ -3354,6 +3369,11 @@ class ProductRepository extends BaseRepository
         // 判断是否为礼包商品并且商家礼包数量是否超过限制
         if ($data['is_gift_bag'] && !$this->checkMerchantBagNumber($merId))
             throw new ValidateException('礼包数量超过数量限制');
+
+        // 编辑页仅提交了 SKU 列表、未带 attr 时，从 attrValue 还原规格定义
+        if (!empty($data['spec_type']) && empty($data['attr']) && !empty($data['attrValue'])) {
+            $data['attr'] = $this->rebuildAttrFromAttrValue($data['attrValue']);
+        }
 
         if (isset($data['type']) && $data['type'] == 1 && $data['extend']) {
             $key = ['email', 'text', 'number', 'date', 'time', 'idCard', 'mobile', 'image'];

@@ -25,6 +25,7 @@ class UserProfileRepository extends BaseRepository
         $allowed = [
             'height', 'weight', 'birth_month', 'zodiac',
             'education', 'education_type', 'job_title',
+            'wechat_id', 'wechat_unlock_price',
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
             'annual_income', 'car_count', 'house_count', 'total_assets',
             'relationship_status', 'dating_purpose',

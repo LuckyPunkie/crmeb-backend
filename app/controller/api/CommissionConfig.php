@@ -20,8 +20,9 @@ class CommissionConfig extends BaseController
     {
         $config = $this->repository->getConfig();
         return app('json')->success([
-            'red_rate'  => (float)$config['red']['rate'],
-            'paid_rate' => (float)$config['paid']['rate'],
+            'red_rate'   => (float)$config['red']['rate'],
+            'paid_rate'  => (float)$config['paid']['rate'],
+            'video_rate' => (float)($config['video']['rate'] ?? 0),
         ]);
     }
 }
