@@ -126,7 +126,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
     }
 
     /**
-     * 扫码收款成功：推送商家 PC + APP，触发「瓜几收款XX.XX元」语音播报
+     * 扫码收款成功：推送商家 PC + APP，触发「奶萌收款XX.XX元」语音播报
      */
     protected function notifyScanPayVoice($order)
     {
@@ -142,7 +142,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
         if ($amountSpeak === '') {
             $amountSpeak = '0';
         }
-        $voiceText = '瓜几收款' . $amountSpeak . '元';
+        $voiceText = '奶萌收款' . $amountSpeak . '元';
         $payload = [
             'title' => '收款到账',
             'message' => $voiceText,

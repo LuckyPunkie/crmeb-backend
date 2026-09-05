@@ -128,7 +128,7 @@ class ScanOrderJump extends BaseController
             ? '<div class="card">'
             . '<div class="name">' . ($merName ?: '商家') . '</div>'
             . ($tableLabel ? '<div class="pos">位置：' . $tableLabel . '</div>' : '')
-            . '<div class="tip">请使用微信扫一扫打开小程序下单；或打开瓜几 APP 扫码。</div>'
+            . '<div class="tip">请使用微信扫一扫打开小程序下单；或打开奶萌 APP 扫码。</div>'
             . ($appScheme ? '<a class="btn" href="' . $appScheme . '">打开 APP 下单</a>' : '')
             . ($download ? '<a class="link" href="' . $download . '">下载 APP</a>' : '')
             . ($hint ? '<div class="hint">' . $hint . '</div>' : '')

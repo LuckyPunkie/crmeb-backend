@@ -453,23 +453,17 @@ class Auth extends BaseController
         if ($sms_limit && $limit > $sms_limit) {
             return app('json')->fail('请求太频繁请稍后再试');
         }
-        // 调试模式：不调一号通，固定验证码 1234（正式环境务必关闭 APP_DEBUG）
-        if (env('APP_DEBUG', false)) {
-            $sms_code = '1234';
+        try {
+            $sms_code = str_pad(random_int(1, 9999), 4, 0, STR_PAD_LEFT);
             $sms_time = systemConfig('sms_time') ? systemConfig('sms_time') : 30;
-        } else {
-            try {
-                $sms_code = str_pad(random_int(1, 9999), 4, 0, STR_PAD_LEFT);
-                $sms_time = systemConfig('sms_time') ? systemConfig('sms_time') : 30;
-                SmsService::create()->send($data['phone'], 'VERIFICATION_CODE', ['code' => $sms_code, 'time' => $sms_time]);
-            } catch (Exception $e) {
-                return app('json')->fail($e->getMessage());
-            }
+            SmsService::create()->send($data['phone'], 'VERIFICATION_CODE', ['code' => $sms_code, 'time' => $sms_time]);
+        } catch (Exception $e) {
+            return app('json')->fail($e->getMessage());
         }
         $sms_key = app()->make(SmsService::class)->sendSmsKey($data['phone'], $data['type']);
         Cache::set($sms_key, $sms_code, $sms_time * 60);
         Cache::set($sms_limit_key, $limit + 1, 60);
-        return app('json')->success(env('APP_DEBUG', false) ? '调试模式：验证码 1234' : '短信发送成功');
+        return app('json')->success('短信发送成功');
     }
 
 

@@ -172,16 +172,16 @@ class ScanPay extends BaseController
                     . '<div class="tip">请<strong>长按上方小程序码</strong>进入到店买单页付款。</div>'
                     . '</div>';
             } else {
-                $action = '<div class="tip">请使用微信扫一扫，或打开瓜几 APP 扫码买单。</div>';
+                $action = '<div class="tip">请使用微信扫一扫，或打开奶萌 APP 扫码买单。</div>';
             }
         } elseif ($ok && $env === 'alipay') {
-            $action = '<div class="tip">支付宝收款小程序尚未开通。请使用微信扫码或打开瓜几 APP 扫码买单。</div>';
+            $action = '<div class="tip">支付宝收款小程序尚未开通。请使用微信扫码或打开奶萌 APP 扫码买单。</div>';
         } elseif ($ok && ($env === 'app' || $env === 'other')) {
             if ($appScheme) {
                 $action = '<a class="btn" id="openApp" href="' . $appScheme . '">打开 APP 买单</a>'
-                    . '<div class="tip">若未自动打开，请安装瓜几 APP 后重试。</div>';
+                    . '<div class="tip">若未自动打开，请安装奶萌 APP 后重试。</div>';
             } else {
-                $action = '<div class="tip">请使用瓜几 APP「附近好店 → 扫码」识别本收款码；或使用微信扫一扫。</div>';
+                $action = '<div class="tip">请使用奶萌 APP「附近好店 → 扫码」识别本收款码；或使用微信扫一扫。</div>';
             }
             if ($downloadUrl) {
                 $action .= '<a class="btn ghost" href="' . $downloadUrl . '">下载 APP</a>';

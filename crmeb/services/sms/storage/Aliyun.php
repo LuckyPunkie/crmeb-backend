@@ -19,7 +19,7 @@ use AlibabaCloud\Tea\Exception\TeaError;
 use AlibabaCloud\Tea\Utils\Utils;
 use Darabonba\OpenApi\Models\Config as AliConfig;
 use AlibabaCloud\SDK\Dysmsapi\V20170525\Models\SendSmsRequest;
-use AlibabaCloud\Tea\Utils\Utils\RuntimeOptions;
+use AlibabaCloud\Dara\Models\RuntimeOptions;
 use think\exception\ValidateException;
 use think\facade\Config;
 

@@ -64,9 +64,13 @@ class CommunityPaidContent extends BaseController
         if (empty(strip_tags($data['paid_content']))) throw new ValidateException('付费内容不能为空');
 
         // 创建 community 记录
+        $title = trim((string)($data['title'] ?? ''));
+        if ($title === '') {
+            $title = mb_substr((string)$data['free_content'], 0, 30) ?: '付费内容';
+        }
         $communityData = [
             'uid' => $uid,
-            'title' => $data['title'],
+            'title' => $title,
             'content' => $data['free_content'],
             'is_type' => $this->communityRepository::COMMUNIT_TYPE_FONT,
             'community_type' => 2,
