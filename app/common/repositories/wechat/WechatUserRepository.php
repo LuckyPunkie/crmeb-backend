@@ -19,6 +19,7 @@ use crmeb\services\wechat\MiniProgram;
 use app\common\dao\wechat\WechatUserDao;
 use crmeb\services\wechat\WechatResponse;
 use crmeb\services\wechat\OfficialAccount;
+use crmeb\services\wechat\config\OpenAppConfig;
 use app\common\repositories\article\ArticleRepository;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\user\UserRepository;
@@ -36,6 +37,7 @@ use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Queue;
+use EasyWeChat\OfficialAccount\Application as OfficialAccountApplication;
 use think\facade\Route;
 
 /**
@@ -592,10 +594,62 @@ class WechatUserRepository extends BaseRepository
         return $userInfo;
     }
 
+    /**
+     * App 微信登录：onlyAuthorize 模式下用 code 换用户信息（移动应用 OAuth）
+     */
+    public function getAppAuthByCode(string $code): array
+    {
+        if (!$code) {
+            throw new ValidateException('授权失败,参数有误');
+        }
+        try {
+            $config = app()->make(OpenAppConfig::class)->all();
+            if (empty($config['app_id']) || empty($config['secret'])) {
+                throw new ValidateException('请先配置开放平台APP的AppID和AppSecret');
+            }
+            $oauth = (new OfficialAccountApplication($config))->getOAuth();
+            $socialiteUser = $oauth->userFromCode($code);
+            $raw = $socialiteUser->getRaw();
+        } catch (ValidateException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('app wechat code auth: ' . $e->getMessage());
+            throw new ValidateException('微信授权失败: ' . $e->getMessage());
+        }
+        if (isset($raw['errcode']) && (int)$raw['errcode'] !== 0) {
+            throw new ValidateException('微信授权无效: ' . ($raw['errmsg'] ?? 'unknown'));
+        }
+        if (empty($raw['openid'])) {
+            throw new ValidateException('openid获取失败');
+        }
+        return $raw;
+    }
+
     public function getOAuth($accessToken, $openid)
     {
+        return $this->fetchOAuthUserInfo($accessToken, $openid, false);
+    }
+
+    /**
+     * App 微信登录：使用开放平台移动应用 AppID/AppSecret
+     */
+    public function getAppOAuth($accessToken, $openid)
+    {
+        return $this->fetchOAuthUserInfo($accessToken, $openid, true);
+    }
+
+    private function fetchOAuthUserInfo($accessToken, $openid, bool $useOpenApp)
+    {
         try {
-            $oauth = OfficialAccount::instance()->application()->getOAuth();
+            if ($useOpenApp) {
+                $config = app()->make(OpenAppConfig::class)->all();
+                if (empty($config['app_id']) || empty($config['secret'])) {
+                    throw new ValidateException('请先配置开放平台APP的AppID和AppSecret');
+                }
+                $oauth = (new OfficialAccountApplication($config))->getOAuth();
+            } else {
+                $oauth = OfficialAccount::instance()->application()->getOAuth();
+            }
             if (method_exists($oauth, 'scopes')) {
                 $oauth->scopes(['snsapi_userinfo']);
             }

@@ -578,8 +578,9 @@ class Auth extends BaseController
                 throw new ValidateException('授权失败[001]');
             return $user;
         } else if ($auth['type'] === 'app_wechat') {
-            $wechatInfo = $make->getOAuth($code, $data['openid']);
-            $user = app()->make(WechatUserRepository::class)->syncAppUser($wechatInfo['unionid'], $wechatInfo, 'App', $createUser);
+            $wechatInfo = $make->getAppAuthByCode($code);
+            $unionId = $wechatInfo['unionid'] ?? $wechatInfo['openid'];
+            $user = app()->make(WechatUserRepository::class)->syncAppUser($unionId, $wechatInfo, 'App', $createUser);
             if (!$user)
                 throw new ValidateException('授权失败[001]');
             return $user;
