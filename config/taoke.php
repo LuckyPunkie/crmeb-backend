@@ -36,6 +36,7 @@ return [
         'unionid' => env('taoke.jd_unionid', ''),
         'pid' => env('taoke.jd_pid', ''),
         'access_token' => env('taoke.jd_access_token', ''),
+        'api_url' => 'https://api.jd.com/routerjson',
     ],
 
     // ==================== 拼多多联盟配置 ====================
@@ -43,6 +44,35 @@ return [
         'client_id' => env('taoke.pdd_client_id', ''),
         'client_secret' => env('taoke.pdd_client_secret', ''),
         'pid' => env('taoke.pdd_pid', ''),
+        'media_id' => env('taoke.pdd_media_id', ''),
+        'api_url' => 'https://gw-api.pinduoduo.com/api/router',
+    ],
+
+    // ==================== 快手联盟配置 ====================
+    'kuaishou' => [
+        'appkey' => env('taoke.kuaishou_appkey', ''),
+        'secret' => env('taoke.kuaishou_secret', ''),
+        'pid' => env('taoke.kuaishou_pid', ''),
+        'api_url' => 'https://openapi.kwaixiaodian.com',
+    ],
+
+    // ==================== 抖音穿山甲 CPS 配置 ====================
+    'pangle' => [
+        'app_id' => env('taoke.pangle_app_id', ''),
+        'secure_key' => env('taoke.pangle_secure_key', ''),
+        'role_id' => env('taoke.pangle_role_id', ''),
+        'api_url' => env('taoke.pangle_api_url', 'https://ecom.pangolin-sdk-toutiao.com'),
+    ],
+
+    // ==================== 平台数据源开关 ====================
+    // official = 走各平台官方直连（新方案）
+    // legacy   = 走订单侠 / 聚推客（旧方案，保留回退）
+    'driver' => [
+        'taobao'   => env('taoke.driver_taobao', 'legacy'),
+        'jd'       => env('taoke.driver_jd', 'legacy'),
+        'pdd'      => env('taoke.driver_pdd', 'legacy'),
+        'douyin'   => env('taoke.driver_douyin', 'pangle'),
+        'kuaishou' => env('taoke.driver_kuaishou', 'official'),
     ],
 
     // ==================== 分佣配置 ====================
