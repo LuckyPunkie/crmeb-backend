@@ -34,7 +34,9 @@ return [
         'appkey' => env('taoke.jd_appkey', ''),
         'secret' => env('taoke.jd_secret', ''),
         'unionid' => env('taoke.jd_unionid', ''),
-        'pid' => env('taoke.jd_pid', ''),
+        'site_id' => env('taoke.jd_site_id', ''),         // 媒体ID第2段, promotion.common.get 的 siteId
+        'pid' => env('taoke.jd_pid', ''),                 // 推广位ID第3段
+        'full_pid' => env('taoke.jd_full_pid', ''),       // 完整 unionId_siteId_positionId, 商品发现类接口的 pid 参数
         'access_token' => env('taoke.jd_access_token', ''),
         'api_url' => 'https://api.jd.com/routerjson',
     ],

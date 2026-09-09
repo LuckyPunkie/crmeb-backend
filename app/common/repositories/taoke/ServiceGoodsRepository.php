@@ -3,6 +3,7 @@
 namespace app\common\repositories\taoke;
 
 use crmeb\services\taoke\DingDanXiaService;
+use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
 use think\facade\Log;
 
@@ -13,11 +14,21 @@ class ServiceGoodsRepository
 {
     protected DingDanXiaService $dingdanxia;
     protected JuTuiKeService $jutuike;
+    protected JdOfficialService $jdOfficial;
 
-    public function __construct(DingDanXiaService $dingdanxia, JuTuiKeService $jutuike)
-    {
+    public function __construct(
+        DingDanXiaService $dingdanxia,
+        JuTuiKeService $jutuike,
+        JdOfficialService $jdOfficial
+    ) {
         $this->dingdanxia = $dingdanxia;
         $this->jutuike = $jutuike;
+        $this->jdOfficial = $jdOfficial;
+    }
+
+    protected function isJdOfficial(): bool
+    {
+        return config('taoke.driver.jd') === 'official';
     }
 
     /**
@@ -88,6 +99,10 @@ class ServiceGoodsRepository
                 case 'taobao':
                     return $this->normalizeTaobao($this->dingdanxia->taobaoGoods($page, $limit));
                 case 'jd':
+                    if ($this->isJdOfficial()) {
+                        return $this->normalizeJd($this->jdOfficial->fetchFeed($page, $limit, (int) $cate));
+                    }
+                    // [官方直连切换 2026-09-09] 原订单侠/聚推客调用（driver_jd=legacy 时生效）：
                     $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
                     if (!empty($list)) {
                         return $list;
@@ -114,6 +129,10 @@ class ServiceGoodsRepository
                 case 'taobao':
                     return $this->normalizeTaobao($this->dingdanxia->taobaoGoodsSearch($page, $limit, $keyword));
                 case 'jd':
+                    if ($this->isJdOfficial()) {
+                        return $this->normalizeJd($this->jdOfficial->fetchSearch($keyword, $page, $limit));
+                    }
+                    // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
                     return $this->normalizeJd($this->dingdanxia->jdGoodsSearch($keyword, $page, $limit));
                 case 'pdd':
                     $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $limit);
@@ -221,7 +240,7 @@ class ServiceGoodsRepository
                 'title' => $val['skuName'] ?? ($val['goodsName'] ?? ''),
                 'store_name' => $val['skuName'] ?? ($val['goodsName'] ?? ''),
                 'image' => $image,
-                'sales' => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
+                'sales' => (int) ($val['inOrderCount30Days'] ?? ($val['inOrderCount30DaysSku'] ?? ($val['comments'] ?? 0))),
                 'price' => $priceInfo['lowestCouponPrice'] ?? ($priceInfo['price'] ?? ($val['price'] ?? '0.00')),
                 'ot_price' => $priceInfo['price'] ?? '0.00',
                 'is_hot' => $val['isHot'] ?? 0,

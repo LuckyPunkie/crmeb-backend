@@ -18,7 +18,9 @@ class JdOfficialService extends BaseServices
     protected $appKey;
     protected $appSecret;
     protected $unionId;
-    protected $pid;
+    protected $siteId;      // 媒体ID (pid 第2段, promotion.common.get 的 siteId)
+    protected $pid;         // 推广位ID (第3段, 如 3108306777)
+    protected $fullPid;     // 完整pid字符串 "unionId_siteId_positionId"
 
     const JSON_PARAM_KEY = '360buy_param_json';
 
@@ -34,7 +36,15 @@ class JdOfficialService extends BaseServices
         $this->appKey    = (string) config('taoke.jd.appkey');
         $this->appSecret = (string) config('taoke.jd.secret');
         $this->unionId   = (string) config('taoke.jd.unionid');
+        $this->siteId    = (string) config('taoke.jd.site_id');
         $this->pid       = (string) config('taoke.jd.pid');
+        $this->fullPid   = (string) config('taoke.jd.full_pid');
+        if ($this->fullPid !== '' && $this->siteId === '') {
+            $parts = explode('_', $this->fullPid);
+            if (count($parts) >= 2) {
+                $this->siteId = $parts[1];
+            }
+        }
     }
 
     /**
@@ -58,32 +68,109 @@ class JdOfficialService extends BaseServices
     /**
      * 京粉精选/物料库
      * method: jd.union.open.goods.jingfen.query
+     * 注意：业务入参键名为 goodsReq（不是 goodsReqDTO），pid 为三段式 unionId_siteId_positionId
      */
     public function goodsJingfen(int $eliteId = 1, int $page = 1, int $pageSize = 20): array
     {
-        $data = [
-            'goodsReqDTO' => [
-                'eliteId'   => $eliteId,
-                'pageIndex' => $page,
-                'pageSize'  => $pageSize,
-            ],
+        $req = [
+            'eliteId'   => $eliteId,
+            'pageIndex' => $page,
+            'pageSize'  => $pageSize,
         ];
-        return $this->call('jd.union.open.goods.jingfen.query', $data);
+        if ($this->fullPid !== '') {
+            $req['pid'] = $this->fullPid;
+        }
+        return $this->call('jd.union.open.goods.jingfen.query', ['goodsReq' => $req]);
     }
 
     /**
      * 商品详情（大字段）
      * method: jd.union.open.goods.bigfield.query
+     * @param int $sceneId 场景ID：1=常规推广，2=微信/QQ推广，其他视账号权限
      */
-    public function goodsBigfield(array $skuIds, array $returnFields = []): array
+    public function goodsBigfield(array $skuIds, int $sceneId = 1, array $returnFields = []): array
     {
+        // JD 要求 sceneId 放顶层，也在 goodsReq 里冗余一份
         $data = [
+            'sceneId' => $sceneId,
             'goodsReq' => [
                 'skuIds' => array_values($skuIds),
+                'sceneId' => $sceneId,
                 'returnFields' => $returnFields ?: ['skuName', 'imageInfo', 'shopInfo'],
             ],
         ];
         return $this->call('jd.union.open.goods.bigfield.query', $data);
+    }
+
+    /**
+     * 通过 skuId 查询推广商品基本信息（轻量版详情）
+     * method: jd.union.open.goods.promotiongoodsinfo.query
+     */
+    public function goodsPromotionInfo(array $skuIds): array
+    {
+        $ids = implode(',', array_map('strval', array_values($skuIds)));
+        return $this->call('jd.union.open.goods.promotiongoodsinfo.query', [
+            'skuIds' => $ids,
+        ]);
+    }
+
+    /**
+     * 个性化商品推荐 / 频道物料
+     * method: jd.union.open.goods.material.query
+     * @param int $eliteId 频道ID：1=精选爆款 2=好券商品 3=京东超市 4=配送到家 10=秒杀 22=女神 25=PLUS 30=高佣榜单
+     */
+    public function goodsMaterial(int $eliteId = 2, int $page = 1, int $pageSize = 20, array $extra = []): array
+    {
+        $req = array_merge([
+            'eliteId'  => $eliteId,
+            'pageIndex' => $page,
+            'pageSize' => $pageSize,
+        ], $extra);
+        if ($this->fullPid !== '' && !isset($req['pid'])) {
+            $req['pid'] = $this->fullPid;
+        }
+        return $this->call('jd.union.open.goods.material.query', ['goodsReq' => $req]);
+    }
+
+    /**
+     * 热销榜商品
+     * method: jd.union.open.goods.rank.query
+     * @param int $rankType 1=实时热销榜 2=同类热销榜
+     */
+    public function goodsRank(int $rankType = 1, int $page = 1, int $pageSize = 20): array
+    {
+        $req = [
+            'rankType' => $rankType,
+            'pageIndex' => $page,
+            'pageSize' => $pageSize,
+        ];
+        $pidStr = $this->fullPid ?: $this->pid;
+        if ($pidStr !== '') {
+            $req['pid'] = $pidStr;
+        }
+        return $this->call('jd.union.open.goods.rank.query', ['rankReq' => $req]);
+    }
+
+    /**
+     * 工具商专用转链（当主账号是导购媒体、promotion.common.get 拒绝时用）
+     * method: jd.union.open.selling.promotion.get
+     */
+    public function sellingPromotion(string $materialId, string $subUnionId = ''): array
+    {
+        $req = [
+            'materialId' => $materialId,
+        ];
+        if ($this->unionId !== '') {
+            $req['unionId'] = (int) $this->unionId;
+        }
+        $pidStr = $this->fullPid ?: $this->pid;
+        if ($pidStr !== '') {
+            $req['pid'] = $pidStr;
+        }
+        if ($subUnionId !== '') {
+            $req['subUnionId'] = $subUnionId;
+        }
+        return $this->call('jd.union.open.selling.promotion.get', ['promotionCodeReq' => $req]);
     }
 
     /**
@@ -97,7 +184,7 @@ class JdOfficialService extends BaseServices
     {
         $promotionCodeReq = [
             'materialId' => $materialId,
-            'siteId'     => $positionId ?: $this->pid,
+            'siteId'     => $positionId ?: ($this->siteId ?: $this->pid),
         ];
         if ($this->unionId !== '') {
             $promotionCodeReq['unionId'] = (int) $this->unionId;
@@ -166,6 +253,64 @@ class JdOfficialService extends BaseServices
                 'grade'    => $grade,
             ],
         ]);
+    }
+
+    /**
+     * 解析联盟 API 业务层 payload（code=200 时返回 data 数组）
+     */
+    public function parseBizPayload(array $response): ?array
+    {
+        if (isset($response['error_response'])) {
+            return null;
+        }
+        foreach ($response as $key => $inner) {
+            if (!is_array($inner) || (substr($key, -9) !== '_response' && substr($key, -9) !== '_responce')) {
+                continue;
+            }
+            foreach ($inner as $field => $value) {
+                if (substr($field, -6) !== 'result' && substr($field, -6) !== 'Result') {
+                    continue;
+                }
+                $parsed = is_string($value) ? json_decode($value, true) : $value;
+                if (!is_array($parsed)) {
+                    return null;
+                }
+                $code = (int) ($parsed['code'] ?? 0);
+                if ($code === 200 && isset($parsed['data']) && is_array($parsed['data'])) {
+                    return $parsed['data'];
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 商品列表（京粉精选，轮询 eliteId）
+     */
+    public function fetchFeed(int $page = 1, int $pageSize = 20, int $cate = 0): array
+    {
+        $eliteIds = $cate > 0 ? [(int) $cate] : [22, 2, 1, 3, 10];
+        foreach ($eliteIds as $eliteId) {
+            $rows = $this->parseBizPayload($this->goodsJingfen($eliteId, $page, $pageSize));
+            if (!empty($rows)) {
+                return $rows;
+            }
+        }
+        return [];
+    }
+
+    /**
+     * 关键词搜索（需账号开通 goods.query；未开通时返回空数组）
+     */
+    public function fetchSearch(string $keyword, int $page = 1, int $pageSize = 20): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            return $this->fetchFeed($page, $pageSize);
+        }
+        $rows = $this->parseBizPayload($this->goodsQuery($keyword, $page, $pageSize));
+        return $rows ?? [];
     }
 
     // ==================== 底层 ====================
