@@ -19,6 +19,7 @@ class TaobaoOfficialService extends BaseServices
     protected $appSecret;
     protected $adzoneId;
     protected $pid;
+    protected $session;
 
     public function __construct()
     {
@@ -31,6 +32,7 @@ class TaobaoOfficialService extends BaseServices
         $this->apiUrl    = 'https://eco.taobao.com/router/rest';
         $this->appKey    = (string) config('taoke.taobao.appkey');
         $this->appSecret = (string) config('taoke.taobao.appsecret');
+        $this->session   = (string) config('taoke.taobao.session');
         $this->pid       = (string) config('taoke.taobao.pid');
         $this->adzoneId  = (string) config('taoke.taobao.adzone_id');
 
@@ -99,13 +101,12 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
-     * 关键词搜索 (SDK 里疑似缺失: TbkDgMaterialOptionalRequest)
-     * method: taobao.tbk.dg.material.optional
-     * 用来验证：如果这个能通，说明只是 SDK 生成旧了；不通就是淘客权限没申请
+     * 关键词搜索（需权限包 16516 物料搜索；用 upgrade 版，旧版 optional 已限权）
+     * method: taobao.tbk.dg.material.optional.upgrade
      */
     public function materialOptional(string $q, int $page = 1, int $pageSize = 20): array
     {
-        return $this->call('taobao.tbk.dg.material.optional', [
+        return $this->call('taobao.tbk.dg.material.optional.upgrade', [
             'q'          => $q,
             'page_no'    => $page,
             'page_size'  => $pageSize,
@@ -124,7 +125,7 @@ class TaobaoOfficialService extends BaseServices
             'item_id'   => $numIid,
             'adzone_id' => $adzoneId ?: $this->adzoneId,
             'platform'  => '2',
-        ]);
+        ], true);
     }
 
     /**
@@ -140,7 +141,7 @@ class TaobaoOfficialService extends BaseServices
             'page_no'    => $page,
             'page_size'  => $pageSize,
             'query_type' => $queryType,
-        ]);
+        ], true);
     }
 
     /**
@@ -244,7 +245,7 @@ class TaobaoOfficialService extends BaseServices
             'item_id'   => $itemId,
             'adzone_id' => $this->adzoneId,
             'platform'  => '2',
-        ]);
+        ], true);
     }
 
     protected function hasSummary(array $summary): bool
@@ -275,10 +276,14 @@ class TaobaoOfficialService extends BaseServices
 
     // ==================== 底层 ====================
 
-    protected function call(string $method, array $bizData): array
+    protected function call(string $method, array $bizData, bool $requireSession = false): array
     {
         if ($this->appKey === '' || $this->appSecret === '') {
             throw new \think\exception\ValidateException('淘宝联盟 appKey/appSecret 未配置');
+        }
+        if ($requireSession && $this->session === '') {
+            Log::warning('淘宝联盟API缺少session', ['method' => $method]);
+            return ['error_response' => ['code' => 26, 'msg' => 'Missing session', 'sub_msg' => 'TAOBAO_SESSION 未配置']];
         }
 
         $sysParams = [
@@ -289,6 +294,9 @@ class TaobaoOfficialService extends BaseServices
             'v'           => '2.0',
             'sign_method' => 'md5',
         ];
+        if ($this->session !== '') {
+            $sysParams['session'] = $this->session;
+        }
         $allParams = array_merge($sysParams, $bizData);
         $allParams['sign'] = $this->sign($allParams);
 
