@@ -70,6 +70,20 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
+     * 物料精选推荐（对应订单侠 tbk/material_recommend，爆款 material_id=86589）
+     * method: taobao.tbk.dg.material.recommend
+     */
+    public function materialRecommend(int $materialId = 86589, int $page = 1, int $pageSize = 20): array
+    {
+        return $this->call('taobao.tbk.dg.material.recommend', [
+            'material_id' => $materialId,
+            'page_no'     => $page,
+            'page_size'   => $pageSize,
+            'adzone_id'   => $this->adzoneId,
+        ]);
+    }
+
+    /**
      * 物料库/官方推荐 (SDK 里存在: TbkDgOptimusMaterialRequest)
      * method: taobao.tbk.dg.optimus.material
      * material_id 常用值: 6708 猜你喜欢 / 3756 精选 / 6707 淘抢购
@@ -127,6 +141,136 @@ class TaobaoOfficialService extends BaseServices
             'page_size'  => $pageSize,
             'query_type' => $queryType,
         ]);
+    }
+
+    /**
+     * 从 TOP 响应中提取商品行数组
+     */
+    public function parseRows(array $response): array
+    {
+        if (isset($response['error_response']) || !is_array($response)) {
+            return [];
+        }
+        foreach ($response as $key => $inner) {
+            if (!is_array($inner) || strpos((string) $key, '_response') === false) {
+                continue;
+            }
+            if (isset($inner['result_list']['map_data']) && is_array($inner['result_list']['map_data'])) {
+                return $inner['result_list']['map_data'];
+            }
+            if (isset($inner['results']['n_tbk_item']) && is_array($inner['results']['n_tbk_item'])) {
+                return $inner['results']['n_tbk_item'];
+            }
+            if (isset($inner['results']['u_tbk_item']) && is_array($inner['results']['u_tbk_item'])) {
+                return $inner['results']['u_tbk_item'];
+            }
+            if (isset($inner['result']['data']) && is_array($inner['result']['data'])) {
+                return [$inner['result']['data']];
+            }
+        }
+        return [];
+    }
+
+    /**
+     * 物料推荐列表（轮询 material_id，权限未开时返回空）
+     */
+    public function fetchFeed(int $page = 1, int $pageSize = 20, int $materialId = 0): array
+    {
+        $materialIds = $materialId > 0 ? [(int) $materialId] : [86589, 3756, 6708];
+        foreach ($materialIds as $mid) {
+            $rows = $this->parseRows($this->materialRecommend($mid, $page, $pageSize));
+            if (!empty($rows)) {
+                return $rows;
+            }
+            $rows = $this->parseRows($this->optimusMaterial($mid, $page, $pageSize));
+            if (!empty($rows)) {
+                return $rows;
+            }
+        }
+        return [];
+    }
+
+    /**
+     * 关键词搜索（空词回落物料推荐）
+     */
+    public function fetchSearch(string $keyword, int $page = 1, int $pageSize = 20): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            return $this->fetchFeed($page, $pageSize);
+        }
+        return $this->parseRows($this->materialOptional($keyword, $page, $pageSize));
+    }
+
+    /**
+     * 商品详情：数字 num_iid 走 item.info；加密 item_id 优先 summary，再搜索兜底
+     */
+    public function fetchDetail(string $goodsId, string $title = '', array $summary = []): array
+    {
+        $goodsId = trim($goodsId);
+        if ($goodsId === '') {
+            return [];
+        }
+
+        if ($this->hasSummary($summary)) {
+            return [$this->buildDetailFromSummary($summary, $goodsId)];
+        }
+
+        if (ctype_digit($goodsId)) {
+            $rows = $this->parseRows($this->itemInfo($goodsId));
+            if (!empty($rows)) {
+                return $rows;
+            }
+        }
+
+        $q = trim($title) !== '' ? trim($title) : $goodsId;
+        $rows = $this->fetchSearch($q, 1, 1);
+        if (!empty($rows[0]) && is_array($rows[0])) {
+            if (empty($rows[0]['item_id'])) {
+                $rows[0]['item_id'] = $goodsId;
+            }
+            return [$rows[0]];
+        }
+
+        return [];
+    }
+
+    /**
+     * 高佣转链原始响应
+     */
+    public function fetchPrivilege(string $itemId): array
+    {
+        return $this->call('taobao.tbk.privilege.get', [
+            'item_id'   => $itemId,
+            'adzone_id' => $this->adzoneId,
+            'platform'  => '2',
+        ]);
+    }
+
+    protected function hasSummary(array $summary): bool
+    {
+        return trim((string) ($summary['title'] ?? ($summary['store_name'] ?? ($summary['image'] ?? '')))) !== '';
+    }
+
+    protected function buildDetailFromSummary(array $summary, string $goodsId): array
+    {
+        $image = (string) ($summary['image'] ?? '');
+        if ($image !== '' && strpos($image, '//') === 0) {
+            $image = 'https:' . $image;
+        }
+        return [
+            'item_id' => $goodsId,
+            'item_basic_info' => [
+                'title' => (string) ($summary['title'] ?? ($summary['store_name'] ?? '')),
+                'pict_url' => $image,
+                'volume' => (int) ($summary['sales'] ?? 0),
+                'annual_vol' => (string) ($summary['sales_text'] ?? ($summary['annual_vol'] ?? '')),
+            ],
+            'price_promotion_info' => [
+                'final_promotion_price' => (string) ($summary['price'] ?? '0.00'),
+                'reserve_price' => (string) ($summary['ot_price'] ?? '0.00'),
+            ],
+        ];
     }
 
     // ==================== 底层 ====================

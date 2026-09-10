@@ -5,6 +5,7 @@ namespace app\common\repositories\taoke;
 use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
+use crmeb\services\taoke\TaobaoOfficialService;
 use think\facade\Log;
 
 /**
@@ -15,15 +16,28 @@ class ServiceGoodsRepository
     protected DingDanXiaService $dingdanxia;
     protected JuTuiKeService $jutuike;
     protected JdOfficialService $jdOfficial;
+    protected TaobaoOfficialService $taobaoOfficial;
 
     public function __construct(
         DingDanXiaService $dingdanxia,
         JuTuiKeService $jutuike,
-        JdOfficialService $jdOfficial
+        JdOfficialService $jdOfficial,
+        TaobaoOfficialService $taobaoOfficial
     ) {
         $this->dingdanxia = $dingdanxia;
         $this->jutuike = $jutuike;
         $this->jdOfficial = $jdOfficial;
+        $this->taobaoOfficial = $taobaoOfficial;
+    }
+
+    public function isTaobaoOfficial(): bool
+    {
+        return config('taoke.driver.taobao') === 'official';
+    }
+
+    public function getTaobaoDataSource(): string
+    {
+        return $this->isTaobaoOfficial() ? 'official' : 'legacy';
     }
 
     protected function isJdOfficial(): bool
@@ -49,6 +63,46 @@ class ServiceGoodsRepository
             $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
         }
         return $this->formatJdDetailList($raw);
+    }
+
+    /**
+     * 淘宝商品详情（按 driver 路由）
+     */
+    public function fetchTaobaoDetail(string $goodsId, string $title = '', array $summary = []): array
+    {
+        if ($this->isTaobaoOfficial()) {
+            $rows = $this->taobaoOfficial->fetchDetail($goodsId, $title, $summary);
+            if (!empty($rows[0]) && is_array($rows[0])) {
+                return $rows[0];
+            }
+            // [官方直连切换 2026-09-09] 权限未开或加密 ID 查不到时回退订单侠：
+            return $this->dingdanxia->taobaoGoodsDetail($goodsId, $title);
+        }
+        return $this->dingdanxia->taobaoGoodsDetail($goodsId, $title);
+    }
+
+    /**
+     * 淘宝高佣转链
+     */
+    public function createTaobaoLink(string $goodsId, string $relateId = ''): array
+    {
+        if ($this->isTaobaoOfficial()) {
+            $raw = $this->taobaoOfficial->fetchPrivilege($goodsId);
+            if (isset($raw['error_response'])) {
+                // [官方直连切换 2026-09-09] 原订单侠调用：
+                return $this->dingdanxia->taobaoHighCommission($goodsId, $relateId);
+            }
+            foreach ($raw as $key => $inner) {
+                if (!is_array($inner) || strpos((string) $key, '_response') === false) {
+                    continue;
+                }
+                if (isset($inner['result']) && is_array($inner['result'])) {
+                    return $inner['result'];
+                }
+            }
+            return $this->dingdanxia->taobaoHighCommission($goodsId, $relateId);
+        }
+        return $this->dingdanxia->taobaoHighCommission($goodsId, $relateId);
     }
 
     protected function formatJdDetailList($raw): array
@@ -138,6 +192,13 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
+                    if ($this->isTaobaoOfficial()) {
+                        $list = $this->normalizeTaobao($this->taobaoOfficial->fetchFeed($page, $limit, (int) $cate));
+                        if (!empty($list)) {
+                            return $list;
+                        }
+                        // [官方直连切换 2026-09-09] 原订单侠调用（driver_taobao=legacy 或 official 空结果时）：
+                    }
                     return $this->normalizeTaobao($this->dingdanxia->taobaoGoods($page, $limit));
                 case 'jd':
                     if ($this->isJdOfficial()) {
@@ -168,6 +229,13 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
+                    if ($this->isTaobaoOfficial()) {
+                        $list = $this->normalizeTaobao($this->taobaoOfficial->fetchSearch($keyword, $page, $limit));
+                        if (!empty($list)) {
+                            return $list;
+                        }
+                        // [官方直连切换 2026-09-09] 原订单侠调用：
+                    }
                     return $this->normalizeTaobao($this->dingdanxia->taobaoGoodsSearch($page, $limit, $keyword));
                 case 'jd':
                     if ($this->isJdOfficial()) {
@@ -222,26 +290,36 @@ class ServiceGoodsRepository
         if (!is_array($result)) {
             return $list;
         }
+        $source = $this->getTaobaoDataSource();
         foreach ($result as $val) {
             if (!is_array($val)) {
                 continue;
             }
             $itemBasic = $val['item_basic_info'] ?? [];
             $priceInfo = $val['price_promotion_info'] ?? [];
-            $goodsId = (string)($val['item_id'] ?? '');
+            $goodsId = (string)($val['item_id'] ?? ($val['num_iid'] ?? ''));
             if ($goodsId === '') {
                 continue;
             }
+            $title = (string)($itemBasic['title'] ?? ($val['title'] ?? ''));
+            $image = (string)($itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''));
+            $sales = isset($itemBasic['tk_total_sales'])
+                ? (int)$itemBasic['tk_total_sales']
+                : (int)($itemBasic['volume'] ?? ($val['volume'] ?? 0));
+            $salesText = trim((string)($itemBasic['annual_vol'] ?? ($val['annual_vol'] ?? '')));
+            $price = (string)($priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'));
+            $otPrice = (string)($priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'));
             $list[] = [
                 'platform' => 'taobao',
+                '_source' => $source,
                 'goods_id' => $goodsId,
-                'title' => $itemBasic['title'] ?? '',
-                'image' => $itemBasic['pict_url'] ?? '',
-                'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($itemBasic['volume'] ?? 0),
-                'sales_text' => trim((string)($itemBasic['annual_vol'] ?? '')),
-                'annual_vol' => trim((string)($itemBasic['annual_vol'] ?? '')),
-                'price' => $priceInfo['final_promotion_price'] ?? '0.00',
-                'ot_price' => $priceInfo['reserve_price'] ?? '0.00',
+                'title' => $title,
+                'image' => $image,
+                'sales' => $sales,
+                'sales_text' => $salesText,
+                'annual_vol' => $salesText,
+                'price' => $price,
+                'ot_price' => $otPrice,
             ];
         }
         return $list;

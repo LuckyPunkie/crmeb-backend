@@ -325,53 +325,26 @@ class Goods extends BaseController
      */
     public function taobaoGoods()
     {
-        $page = $this->request->post('page', 1);
-        $limit = $this->request->post('limit', 10);
-        $q = $this->request->post('keyword', '');
-        $cat = $this->request->post('cat', 0);
+        $page = (int)$this->request->post('page', 1);
+        $limit = (int)$this->request->post('limit', 10);
+        $q = (string)$this->request->post('keyword', '');
+        $cat = (int)$this->request->post('cat', 0);
         try {
-            // 空关键词走物料推荐，避免淘宝搜索无词返回空列表
-            if ($q === '' || $q === null) {
-                $result = $this->dingdanxiaService->taobaoGoods((int)$page, (int)$limit);
-            } else {
-                $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit, $q, $cat);
-            }
-             $data = [];
-             foreach ($result as $k=>$val){
-                 // 确保 $val 是数组
-                if (!is_array($val)) {
-                 continue;
-                }
-        
-                $itemBasic = $val['item_basic_info'] ?? [];
-                $priceInfo = $val['price_promotion_info'] ?? [];
-                $salesText = trim((string)($itemBasic['annual_vol'] ?? ''));
-                $sales = isset($itemBasic['tk_total_sales'])
-                    ? (int)$itemBasic['tk_total_sales']
-                    : (int)($itemBasic['volume'] ?? ($val['volume'] ?? 0));
-        
-                $data[] = [
-                    'platform' => 'taobao',
-                    'goods_id' => $val['item_id'] ?? '',
-                    'title' => $itemBasic['title'] ?? ($val['title'] ?? ''),
-                    'image' => $itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''),
-                    'sales' => $sales,
-                    'sales_text' => $salesText,
-                    'annual_vol' => $salesText,
-                    'price' => $priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'),
-                    'ot_price' => $priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'),
-                ];
-            }
-
-            return app('json')->success(['list'=>$data]);
-
+            $list = $this->serviceGoodsRepository->searchPlatform('taobao', $q, $page, $limit, $cat);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getTaobaoDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('淘宝商品列表获取失败', [
                 'keyword' => $q,
                 'page' => $page,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->success(['list' => []]);
+            return app('json')->success([
+                'list' => [],
+                '_source' => $this->serviceGoodsRepository->getTaobaoDataSource(),
+            ]);
         }
     }
     
@@ -424,15 +397,11 @@ class Goods extends BaseController
         }
         $relate_id = '3357576229';
         try {
-            // 调用高佣转链API
-            $result = $this->dingdanxiaService->taobaoHighCommission($goodsId,$relate_id);
-
+            $result = $this->serviceGoodsRepository->createTaobaoLink($goodsId, $relate_id);
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');
             }
-
             return app('json')->success($result);
-
         } catch (\Exception $e) {
             Log::error('生成淘宝推广链接失败', [
                 'goods_id' => $goodsId,
@@ -510,9 +479,18 @@ class Goods extends BaseController
             return app('json')->fail('商品ID不能为空');
         }
         $title = (string)$this->request->post('title', $this->request->post('store_name', ''));
+        $summary = $this->request->post('summary', []);
+        if (is_string($summary)) {
+            $decoded = json_decode($summary, true);
+            $summary = is_array($decoded) ? $decoded : [];
+        }
 
         try {
-            $result = $this->dingdanxiaService->taobaoGoodsDetail($goodsId, $title);
+            $result = $this->serviceGoodsRepository->fetchTaobaoDetail(
+                $goodsId,
+                $title,
+                is_array($summary) ? $summary : []
+            );
             if (isset($result[0]) && is_array($result[0])) {
                 $result = $result[0];
             }
