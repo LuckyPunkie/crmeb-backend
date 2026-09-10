@@ -274,6 +274,55 @@ class TaobaoOfficialService extends BaseServices
         ];
     }
 
+    public function getOAuthCallbackUrl(): string
+    {
+        return (string) (config('taoke.taobao.oauth_callback')
+            ?: 'https://0626tbcs.ohlegend.com/api/taoke/oauth/taobao/callback');
+    }
+
+    /**
+     * 生成 OAuth 授权页 URL（Server-side: response_type=code）
+     */
+    public function buildAuthorizeUrl(string $state = 'taoke'): string
+    {
+        $query = http_build_query([
+            'response_type' => 'code',
+            'client_id'     => $this->appKey,
+            'redirect_uri'  => $this->getOAuthCallbackUrl(),
+            'state'         => $state,
+            'view'          => 'web',
+        ]);
+        return 'https://oauth.taobao.com/authorize?' . $query;
+    }
+
+    /**
+     * 用授权码换取 access_token（即 TAOBAO_SESSION）
+     */
+    public function exchangeAuthorizationCode(string $code): array
+    {
+        $code = trim($code);
+        if ($code === '') {
+            return ['error' => 'empty_code'];
+        }
+        try {
+            $response = $this->httpClient->post('https://oauth.taobao.com/token', [
+                'form_params' => [
+                    'grant_type'    => 'authorization_code',
+                    'code'          => $code,
+                    'client_id'     => $this->appKey,
+                    'client_secret' => $this->appSecret,
+                    'redirect_uri'  => $this->getOAuthCallbackUrl(),
+                ],
+            ]);
+            $raw = (string) $response->getBody();
+            $result = json_decode($raw, true);
+            return is_array($result) ? $result : ['error' => 'invalid_token_response', 'raw' => $raw];
+        } catch (\Throwable $e) {
+            Log::error('淘宝 OAuth 换 token 失败', ['msg' => $e->getMessage()]);
+            return ['error' => $e->getMessage()];
+        }
+    }
+
     // ==================== 底层 ====================
 
     protected function call(string $method, array $bizData, bool $requireSession = false): array

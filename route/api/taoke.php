@@ -20,6 +20,10 @@ Route::group('taoke', function () {
         return json(['msg' => 'taoke routes loaded', 'time' => time()]);
     });
 
+    // 淘宝 OAuth（推广者授权，无需登录）
+    Route::get('oauth/taobao/authorize', 'api.taoke.Oauth/taobaoAuthorize');
+    Route::get('oauth/taobao/callback', 'api.taoke.Oauth/taobaoCallback');
+
     // 商品相关接口（无需强制登录）
     Route::group('goods', function () {
         Route::get('taobao', 'api.taoke.Goods/taobao');

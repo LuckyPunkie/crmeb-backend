@@ -25,6 +25,8 @@ return [
         'session' => env('taoke.taobao_session', ''),
         'pid' => env('taoke.taobao_pid', ''),
         'adzone_id' => env('taoke.taobao_adzone_id', ''),
+        // OAuth 回调（须与开放平台「回调URL」完全一致，且不能为阿里系域名）
+        'oauth_callback' => env('taoke.taobao_oauth_callback', 'https://0626tbcs.ohlegend.com/api/taoke/oauth/taobao/callback'),
         // 订单查询API配置
         'order_query_span' => 330, // 订单查询时间跨度（秒），默认5分30秒
     ],
