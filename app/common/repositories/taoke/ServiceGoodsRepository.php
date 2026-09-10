@@ -31,6 +31,47 @@ class ServiceGoodsRepository
         return config('taoke.driver.jd') === 'official';
     }
 
+    /** 联调标记：京东列表/搜索当前数据源 official | legacy */
+    public function getJdDataSource(): string
+    {
+        return $this->isJdOfficial() ? 'official' : 'legacy';
+    }
+
+    /**
+     * 京东商品详情（按 driver 路由 + 统一 list 结构）
+     */
+    public function fetchJdDetail($itemIds, array $summary = []): array
+    {
+        if ($this->isJdOfficial()) {
+            $raw = $this->jdOfficial->fetchDetail($itemIds, $summary);
+        } else {
+            // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
+            $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+        }
+        return $this->formatJdDetailList($raw);
+    }
+
+    protected function formatJdDetailList($raw): array
+    {
+        if (isset($raw['list']) && is_array($raw['list'])) {
+            $list = $raw['list'];
+        } elseif (is_array($raw) && (isset($raw[0]) || $raw === [])) {
+            $list = $raw;
+        } elseif (is_array($raw) && (isset($raw['skuId']) || isset($raw['itemId']) || isset($raw['skuName']))) {
+            $list = [$raw];
+        } else {
+            $list = [];
+        }
+
+        $source = $this->getJdDataSource();
+        foreach ($list as $i => $item) {
+            if (is_array($item)) {
+                $list[$i]['_source'] = $source;
+            }
+        }
+        return $list;
+    }
+
     /**
      * 推荐：多平台汇总
      */
@@ -236,6 +277,7 @@ class ServiceGoodsRepository
             $clickURL = (string)($promotionInfo['clickURL'] ?? ($promotionInfo['clickUrl'] ?? ''));
             $list[] = [
                 'platform' => 'jd',
+                '_source' => $this->getJdDataSource(),
                 'goods_id' => $goodsId,
                 'title' => $val['skuName'] ?? ($val['goodsName'] ?? ''),
                 'store_name' => $val['skuName'] ?? ($val['goodsName'] ?? ''),

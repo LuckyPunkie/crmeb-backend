@@ -313,6 +313,131 @@ class JdOfficialService extends BaseServices
         return $rows ?? [];
     }
 
+    /**
+     * 商品详情（京粉 itemId 回查 / 数字 skuId 走 bigfield）
+     */
+    public function fetchDetail($itemIds, array $summary = []): array
+    {
+        $ids = is_array($itemIds) ? $itemIds : preg_split('/\s*,\s*/', (string) $itemIds, -1, PREG_SPLIT_NO_EMPTY);
+        $ids = array_values(array_filter(array_map('strval', $ids)));
+        if (empty($ids)) {
+            return [];
+        }
+
+        $targetId = $ids[0];
+
+        // 数字 skuId：走 promotiongoodsinfo / bigfield
+        if (ctype_digit($targetId)) {
+            $rows = $this->parseBizPayload($this->goodsPromotionInfo($ids));
+            if (!empty($rows)) {
+                return $this->normalizeDetailRows($rows);
+            }
+            $fields = ['skuName', 'priceInfo', 'imageInfo', 'categoryInfo', 'detailImages', 'baseBigFieldInfo', 'shopInfo'];
+            foreach ([1, 2] as $sceneId) {
+                $rows = $this->parseBizPayload($this->goodsBigfield($ids, $sceneId, $fields));
+                if (!empty($rows)) {
+                    return $this->normalizeDetailRows($rows);
+                }
+            }
+        }
+
+        // 京粉 itemId 每次请求都会变，回查不可靠；优先用列表页传入的 summary
+        if ($this->hasJdSummary($summary)) {
+            $row = $this->buildDetailFromSummary($summary, $targetId);
+            $found = $this->findJingfenItemByItemId($targetId);
+            if (!empty($found)) {
+                $row = array_replace_recursive($found, $row);
+            }
+            return [$row];
+        }
+
+        $row = $this->findJingfenItemByItemId($targetId);
+        if (!empty($row)) {
+            return [$row];
+        }
+
+        return [];
+    }
+
+    /**
+     * 在京粉各频道分页查找 itemId 匹配的完整商品对象
+     */
+    protected function findJingfenItemByItemId(string $itemId): ?array
+    {
+        $itemId = trim($itemId);
+        if ($itemId === '') {
+            return null;
+        }
+        foreach ([22, 2, 1, 3, 10, 30] as $eliteId) {
+            for ($page = 1; $page <= 5; $page++) {
+                $rows = $this->parseBizPayload($this->goodsJingfen($eliteId, $page, 50));
+                if (empty($rows)) {
+                    break;
+                }
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    if ((string) ($row['itemId'] ?? '') === $itemId) {
+                        return $row;
+                    }
+                }
+                if (count($rows) < 50) {
+                    break;
+                }
+            }
+        }
+        return null;
+    }
+
+    protected function hasJdSummary(array $summary): bool
+    {
+        return trim((string) ($summary['title'] ?? ($summary['store_name'] ?? ($summary['image'] ?? '')))) !== '';
+    }
+
+    protected function buildDetailFromSummary(array $summary, string $itemId): array
+    {
+        $images = [];
+        if (!empty($summary['image'])) {
+            $images[] = ['url' => (string) $summary['image']];
+        }
+        if (!empty($summary['slider_image']) && is_array($summary['slider_image'])) {
+            foreach ($summary['slider_image'] as $url) {
+                if ($url) {
+                    $images[] = ['url' => (string) $url];
+                }
+            }
+        }
+        return [
+            'itemId' => $itemId,
+            'skuName' => (string) ($summary['title'] ?? ($summary['store_name'] ?? '')),
+            'goods_id' => (string) ($summary['goods_id'] ?? $itemId),
+            'imageInfo' => ['imageList' => $images],
+            'priceInfo' => [
+                'price' => $summary['ot_price'] ?? ($summary['price'] ?? 0),
+                'lowestCouponPrice' => $summary['price'] ?? 0,
+            ],
+            'shopInfo' => [
+                'shopName' => $summary['shopName'] ?? '',
+                'shopId' => $summary['shopId'] ?? '',
+                'shopLevel' => $summary['shopLevel'] ?? '',
+            ],
+            'materialUrl' => $summary['materialUrl'] ?? '',
+            'inOrderCount30Days' => $summary['sales'] ?? 0,
+        ];
+    }
+
+    protected function normalizeDetailRows($rows): array
+    {
+        if (!is_array($rows)) {
+            return [];
+        }
+        if (isset($rows['skuId']) || isset($rows['itemId']) || isset($rows['skuName'])) {
+            return [$rows];
+        }
+        return array_values(array_filter($rows, 'is_array'));
+    }
+
     // ==================== 底层 ====================
 
     /**

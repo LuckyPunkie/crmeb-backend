@@ -846,14 +846,20 @@ class Goods extends BaseController
         $keyword = (string)$this->request->post('keyword', '');
         try {
             $list = $this->serviceGoodsRepository->searchPlatform('jd', $keyword, $page, $limit, $cate);
-            return app('json')->success(['list' => $list]);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getJdDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('京东商品列表获取失败', [
                 'page' => $page,
                 'cate' => $cate,
                 'error' => $e->getMessage()
             ]);
-            return app('json')->success(['list' => []]);
+            return app('json')->success([
+                'list' => [],
+                '_source' => $this->serviceGoodsRepository->getJdDataSource(),
+            ]);
         }
     }
     
@@ -863,13 +869,18 @@ class Goods extends BaseController
      */
     public function jdGoodsDetail()
     {
-        $itemIds = $this->request->post('itemIds', 0);
+        $itemIds = $this->request->post('itemIds', $this->request->post('skuIds', 0));
+        $summary = $this->request->post('summary', []);
+        if (is_string($summary)) {
+            $decoded = json_decode($summary, true);
+            $summary = is_array($decoded) ? $decoded : [];
+        }
         try {
-            $result = $this->dingdanxiaService->jdGoodsDetail($itemIds);
-            // var_dump($result);die;
-            return app('json')->success($result);
-
-
+            $list = $this->serviceGoodsRepository->fetchJdDetail($itemIds, is_array($summary) ? $summary : []);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getJdDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('京东商品详情获取失败', [
                 'itemIds' => $itemIds,
