@@ -20,6 +20,10 @@ class TaobaoOfficialService extends BaseServices
     protected $adzoneId;
     protected $pid;
     protected $session;
+    protected $refreshToken;
+
+    /** 过期前多少秒主动 refresh */
+    protected int $sessionRefreshLeeway = 300;
 
     public function __construct()
     {
@@ -32,7 +36,8 @@ class TaobaoOfficialService extends BaseServices
         $this->apiUrl    = 'https://eco.taobao.com/router/rest';
         $this->appKey    = (string) config('taoke.taobao.appkey');
         $this->appSecret = (string) config('taoke.taobao.appsecret');
-        $this->session   = (string) config('taoke.taobao.session');
+        $this->session       = (string) config('taoke.taobao.session');
+        $this->refreshToken  = (string) config('taoke.taobao.refresh_token');
         $this->pid       = (string) config('taoke.taobao.pid');
         $this->adzoneId  = (string) config('taoke.taobao.adzone_id');
 
@@ -72,17 +77,22 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
-     * 物料精选推荐（对应订单侠 tbk/material_recommend，爆款 material_id=86589）
+     * 物料精选升级版（公开接口，响应含 publish_info.click_url 推广链接）
      * method: taobao.tbk.dg.material.recommend
+     * @see https://open.taobao.com/api.htm?docId=64759&docType=2&scopeId=27939
      */
-    public function materialRecommend(int $materialId = 86589, int $page = 1, int $pageSize = 20): array
+    public function materialRecommend(int $materialId = 86589, int $page = 1, int $pageSize = 20, string $itemId = ''): array
     {
-        return $this->call('taobao.tbk.dg.material.recommend', [
+        $biz = [
             'material_id' => $materialId,
             'page_no'     => $page,
             'page_size'   => $pageSize,
             'adzone_id'   => $this->adzoneId,
-        ]);
+        ];
+        if (trim($itemId) !== '') {
+            $biz['item_id'] = trim($itemId);
+        }
+        return $this->call('taobao.tbk.dg.material.recommend', $biz);
     }
 
     /**
@@ -237,7 +247,7 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
-     * 高佣转链原始响应
+     * @deprecated 官方已下线 privilege.get，请用 createPromotionLink()
      */
     public function fetchPrivilege(string $itemId): array
     {
@@ -246,6 +256,149 @@ class TaobaoOfficialService extends BaseServices
             'adzone_id' => $this->adzoneId,
             'platform'  => '2',
         ], true);
+    }
+
+    /**
+     * 官方公开转链：物料搜索/精选升级版返回的 publish_info（无需 privilege / 万能转链权限）
+     */
+    public function createPromotionLink(string $itemId, string $title = ''): array
+    {
+        $itemId = trim($itemId);
+        if ($itemId === '') {
+            return [];
+        }
+        $row = $this->findMaterialRowByItemId($itemId, $title);
+        if ($row === []) {
+            return [];
+        }
+        return $this->buildLinkPayloadFromMaterialRow($row);
+    }
+
+    /**
+     * 按 item_id 在物料升级版结果中定位一行（含 publish_info）
+     */
+    public function findMaterialRowByItemId(string $itemId, string $title = ''): array
+    {
+        $itemId = trim($itemId);
+        if ($itemId === '') {
+            return [];
+        }
+
+        // 与列表默认源一致（86589 等），从当前页物料里直接命中 publish_info
+        for ($page = 1; $page <= 3; $page++) {
+            $rows = $this->fetchFeed($page, 100);
+            $hit = $this->pickMaterialRowByItemId($rows, $itemId);
+            if ($hit !== []) {
+                return $hit;
+            }
+            if (count($rows) < 100) {
+                break;
+            }
+        }
+
+        $queries = array_values(array_unique(array_filter([$itemId, trim($title)])));
+        foreach ($queries as $q) {
+            for ($page = 1; $page <= 2; $page++) {
+                $rows = $this->parseRows($this->materialOptional($q, $page, 50));
+                $hit = $this->pickMaterialRowByItemId($rows, $itemId);
+                if ($hit !== []) {
+                    return $hit;
+                }
+                if (count($rows) < 50) {
+                    break;
+                }
+            }
+        }
+
+        // 相似品物料（文档：material_id=13256 可配合 item_id）
+        $rows = $this->parseRows($this->materialRecommend(13256, 1, 20, $itemId));
+        $hit = $this->pickMaterialRowByItemId($rows, $itemId);
+        if ($hit !== []) {
+            return $hit;
+        }
+
+        foreach ([86589, 3756, 80309] as $materialId) {
+            for ($page = 1; $page <= 2; $page++) {
+                $rows = $this->parseRows($this->materialRecommend($materialId, $page, 50));
+                $hit = $this->pickMaterialRowByItemId($rows, $itemId);
+                if ($hit !== []) {
+                    return $hit;
+                }
+                if (count($rows) < 50) {
+                    break;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    protected function pickMaterialRowByItemId(array $rows, string $itemId): array
+    {
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if ($this->materialRowItemId($row) === $itemId) {
+                return $row;
+            }
+        }
+        return [];
+    }
+
+    protected function materialRowItemId(array $row): string
+    {
+        return (string) ($row['item_id'] ?? '');
+    }
+
+    /**
+     * 与订单侠 id_privilege 返回字段对齐，供 uniapp normalizeTaokeStoreInfo 使用
+     */
+    public function buildLinkPayloadFromMaterialRow(array $row): array
+    {
+        $publish = $row['publish_info'] ?? [];
+        if (!is_array($publish)) {
+            $publish = [];
+        }
+        $click = $this->normalizeTbkUrl((string) ($publish['click_url'] ?? ''));
+        $coupon = $this->normalizeTbkUrl((string) ($publish['coupon_share_url'] ?? ''));
+        $itemUrl = $coupon !== '' ? $coupon : $click;
+        if ($itemUrl === '') {
+            return [];
+        }
+        $basic = is_array($row['item_basic_info'] ?? null) ? $row['item_basic_info'] : [];
+        $incomeRate = (string) ($publish['income_rate'] ?? '');
+        if ($incomeRate === '' && isset($publish['income_info']['commission_rate'])) {
+            $incomeRate = (string) $publish['income_info']['commission_rate'];
+        }
+
+        return [
+            'item_id' => $this->materialRowItemId($row),
+            'item_url' => $itemUrl,
+            'coupon_click_url' => $coupon !== '' ? $coupon : $itemUrl,
+            'max_commission_rate' => $incomeRate,
+            '_source' => 'official',
+            '_link_via' => 'tbk.dg.material.upgrade',
+            'itemInfo' => [
+                'title' => (string) ($basic['title'] ?? ''),
+                'pict_url' => (string) ($basic['pict_url'] ?? ''),
+            ],
+        ];
+    }
+
+    protected function normalizeTbkUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (strpos($url, '//') === 0) {
+            return 'https:' . $url;
+        }
+        if (strpos($url, 'http://') === 0) {
+            return 'https://' . substr($url, 7);
+        }
+        return $url;
     }
 
     protected function hasSummary(array $summary): bool
@@ -304,23 +457,189 @@ class TaobaoOfficialService extends BaseServices
         if ($code === '') {
             return ['error' => 'empty_code'];
         }
+        return $this->requestOAuthToken([
+            'grant_type'    => 'authorization_code',
+            'code'          => $code,
+            'redirect_uri'  => $this->getOAuthCallbackUrl(),
+        ]);
+    }
+
+    /**
+     * 用 refresh_token 续期 access_token
+     */
+    public function refreshAccessToken(bool $force = false): array
+    {
+        $refresh = trim($this->refreshToken);
+        if ($refresh === '') {
+            return ['error' => 'missing_refresh_token'];
+        }
+
+        $lockFile = runtime_path() . 'taobao_token_refresh.lock';
+        $fp = @fopen($lockFile, 'c+');
+        if ($fp === false) {
+            Log::warning('淘宝 refresh_token 无法创建锁文件', ['path' => $lockFile]);
+        } elseif (!flock($fp, LOCK_EX)) {
+            fclose($fp);
+            return ['error' => 'refresh_locked'];
+        }
+
+        try {
+            if (!$force && !$this->isSessionExpired() && $this->session !== '') {
+                return [
+                    'access_token'  => $this->session,
+                    'refresh_token' => $this->refreshToken,
+                    'cached'        => true,
+                ];
+            }
+
+            $result = $this->requestOAuthToken([
+                'grant_type'    => 'refresh_token',
+                'refresh_token' => $refresh,
+            ]);
+            if (!empty($result['access_token'])) {
+                $this->applyOAuthTokenResponse($result);
+            }
+            return $result;
+        } finally {
+            if ($fp !== false) {
+                flock($fp, LOCK_UN);
+                fclose($fp);
+            }
+        }
+    }
+
+    /**
+     * 将 OAuth/refresh 返回写入内存并持久化到 .env
+     */
+    public function applyOAuthTokenResponse(array $token): bool
+    {
+        $accessToken = trim((string) ($token['access_token'] ?? ''));
+        if ($accessToken === '') {
+            return false;
+        }
+
+        $expiresIn = (int) ($token['expires_in'] ?? 86400);
+        $expireAt = time() + max(60, $expiresIn);
+        $refresh = trim((string) ($token['refresh_token'] ?? $this->refreshToken));
+
+        $this->session = $accessToken;
+        if ($refresh !== '') {
+            $this->refreshToken = $refresh;
+        }
+
+        return $this->persistOAuthTokensToEnv($this->session, $this->refreshToken, $expireAt);
+    }
+
+    /**
+     * session 缺失或即将过期时尝试 refresh
+     */
+    public function ensureSession(bool $required = false): bool
+    {
+        if ($this->session !== '' && !$this->isSessionExpired()) {
+            return true;
+        }
+        if ($this->refreshToken === '') {
+            return !$required && $this->session !== '';
+        }
+
+        $result = $this->refreshAccessToken();
+        return !empty($result['access_token']);
+    }
+
+    protected function isSessionExpired(): bool
+    {
+        $expireAt = (int) config('taoke.taobao.session_expire_at');
+        if ($expireAt <= 0) {
+            return false;
+        }
+        return time() >= ($expireAt - $this->sessionRefreshLeeway);
+    }
+
+    protected function isSessionError(array $result): bool
+    {
+        if (!isset($result['error_response']) || !is_array($result['error_response'])) {
+            return false;
+        }
+        $err = $result['error_response'];
+        $code = (int) ($err['code'] ?? 0);
+        $msg = strtolower((string) (($err['msg'] ?? '') . ' ' . ($err['sub_msg'] ?? '')));
+        if (in_array($code, [26, 27], true)) {
+            return true;
+        }
+        return strpos($msg, 'session') !== false
+            || strpos($msg, 'access_token') !== false
+            || strpos($msg, 'invalid-session') !== false;
+    }
+
+    protected function requestOAuthToken(array $formParams): array
+    {
         try {
             $response = $this->httpClient->post('https://oauth.taobao.com/token', [
-                'form_params' => [
-                    'grant_type'    => 'authorization_code',
-                    'code'          => $code,
+                'form_params' => array_merge([
                     'client_id'     => $this->appKey,
                     'client_secret' => $this->appSecret,
-                    'redirect_uri'  => $this->getOAuthCallbackUrl(),
-                ],
+                ], $formParams),
             ]);
             $raw = (string) $response->getBody();
             $result = json_decode($raw, true);
-            return is_array($result) ? $result : ['error' => 'invalid_token_response', 'raw' => $raw];
+            if (!is_array($result)) {
+                return ['error' => 'invalid_token_response', 'raw' => $raw];
+            }
+            if (!empty($result['error'])) {
+                Log::warning('淘宝 OAuth token 请求失败', ['result' => $result]);
+            }
+            return $result;
         } catch (\Throwable $e) {
-            Log::error('淘宝 OAuth 换 token 失败', ['msg' => $e->getMessage()]);
+            Log::error('淘宝 OAuth token 请求异常', ['msg' => $e->getMessage()]);
             return ['error' => $e->getMessage()];
         }
+    }
+
+    protected function persistOAuthTokensToEnv(string $session, string $refreshToken, int $expireAt): bool
+    {
+        $envPath = app()->getRootPath() . '.env';
+        if (!is_file($envPath) || !is_writable($envPath)) {
+            Log::warning('淘宝 OAuth 无法写入 .env', ['path' => $envPath]);
+            return false;
+        }
+
+        $content = file_get_contents($envPath);
+        if ($content === false) {
+            return false;
+        }
+
+        $updates = [
+            'TAOBAO_SESSION'            => $session,
+            'TAOBAO_REFRESH_TOKEN'      => $refreshToken,
+            'TAOBAO_SESSION_EXPIRE_AT'    => (string) $expireAt,
+        ];
+
+        foreach ($updates as $key => $value) {
+            $quoted = '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $value) . '"';
+            $pattern = '/^(' . preg_quote($key, '/') . '\s*=\s*)(?:"[^"]*"|\S*)?\s*$/m';
+            if (preg_match($pattern, $content)) {
+                $content = preg_replace($pattern, '$1' . $quoted, $content, 1);
+            } elseif (preg_match('/(\[TAOKE\][\s\S]*?)(\r?\n\[)/', $content, $m, PREG_OFFSET_CAPTURE)) {
+                $insertPos = $m[1][1] + strlen($m[1][0]);
+                $prefix = ($insertPos > 0 && !in_array(substr($content, $insertPos - 1, 1), ["\n", "\r"], true))
+                    ? "\n"
+                    : '';
+                $insert = $prefix . $key . ' = ' . $quoted . "\n";
+                $content = substr($content, 0, $insertPos) . $insert . substr($content, $insertPos);
+            } else {
+                Log::warning('淘宝 OAuth .env 缺少 [TAOKE] 段，无法写入', ['key' => $key]);
+                return false;
+            }
+        }
+
+        $ok = file_put_contents($envPath, $content) !== false;
+        if ($ok) {
+            Log::info('淘宝 OAuth token 已写入 .env', [
+                'expire_at' => $expireAt,
+                'expire_at_human' => date('Y-m-d H:i:s', $expireAt),
+            ]);
+        }
+        return $ok;
     }
 
     // ==================== 底层 ====================
@@ -330,11 +649,24 @@ class TaobaoOfficialService extends BaseServices
         if ($this->appKey === '' || $this->appSecret === '') {
             throw new \think\exception\ValidateException('淘宝联盟 appKey/appSecret 未配置');
         }
-        if ($requireSession && $this->session === '') {
+
+        if ($requireSession && !$this->ensureSession(true)) {
             Log::warning('淘宝联盟API缺少session', ['method' => $method]);
-            return ['error_response' => ['code' => 26, 'msg' => 'Missing session', 'sub_msg' => 'TAOBAO_SESSION 未配置']];
+            return ['error_response' => ['code' => 26, 'msg' => 'Missing session', 'sub_msg' => 'TAOBAO_SESSION 未配置或 refresh 失败']];
         }
 
+        $result = $this->executeCall($method, $bizData);
+        if ($requireSession && $this->isSessionError($result) && $this->refreshToken !== '') {
+            $refresh = $this->refreshAccessToken();
+            if (!empty($refresh['access_token'])) {
+                $result = $this->executeCall($method, $bizData);
+            }
+        }
+        return $result;
+    }
+
+    protected function executeCall(string $method, array $bizData): array
+    {
         $sysParams = [
             'method'      => $method,
             'app_key'     => $this->appKey,

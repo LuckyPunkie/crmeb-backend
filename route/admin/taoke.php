@@ -28,6 +28,18 @@ Route::group(function () {
         ->name('serviceTabConfigDelete')
         ->option(['_alias' => '删除服务页Tab配置', '_auth' => true, '_path' => '/serviceBrandTab/index']);
 
+    Route::get('official_service_tab_config', 'admin.taoke.OfficialServiceTabConfig/index')
+        ->name('officialServiceTabConfigIndex')
+        ->option(['_alias' => '平台直连Tab配置列表', '_auth' => false, '_path' => '/serviceOfficialTab/index']);
+
+    Route::post('official_service_tab_config/save', 'admin.taoke.OfficialServiceTabConfig/save')
+        ->name('officialServiceTabConfigSave')
+        ->option(['_alias' => '保存平台直连Tab配置', '_auth' => true, '_path' => '/serviceOfficialTab/index']);
+
+    Route::post('official_service_tab_config/delete', 'admin.taoke.OfficialServiceTabConfig/delete')
+        ->name('officialServiceTabConfigDelete')
+        ->option(['_alias' => '删除平台直连Tab配置', '_auth' => true, '_path' => '/serviceOfficialTab/index']);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

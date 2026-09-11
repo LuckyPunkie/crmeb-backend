@@ -12,19 +12,31 @@ class ServiceTabConfigDao extends BaseDao
         return ServiceTabConfig::class;
     }
 
-    public function all(): array
+    public function all(string $channel = 'legacy'): array
     {
-        return ServiceTabConfig::getDB()->order('sort DESC, id ASC')->select()->toArray();
+        return ServiceTabConfig::getDB()
+            ->where('channel', $channel)
+            ->order('sort DESC, id ASC')
+            ->select()
+            ->toArray();
     }
 
-    public function enabled(): array
+    public function enabled(string $channel = 'legacy'): array
     {
-        return ServiceTabConfig::getDB()->where('status', 1)->order('sort DESC, id ASC')->select()->toArray();
+        return ServiceTabConfig::getDB()
+            ->where('channel', $channel)
+            ->where('status', 1)
+            ->order('sort DESC, id ASC')
+            ->select()
+            ->toArray();
     }
 
-    public function findByKey(string $key)
+    public function findByKey(string $key, string $channel = 'legacy')
     {
-        return ServiceTabConfig::getDB()->where('tab_key', $key)->find();
+        return ServiceTabConfig::getDB()
+            ->where('tab_key', $key)
+            ->where('channel', $channel)
+            ->find();
     }
 
     public function findById(int $id)

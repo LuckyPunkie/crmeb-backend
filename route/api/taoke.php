@@ -23,6 +23,12 @@ Route::group('taoke', function () {
     // 淘宝 OAuth（推广者授权，无需登录）
     Route::get('oauth/taobao/authorize', 'api.taoke.Oauth/taobaoAuthorize');
     Route::get('oauth/taobao/callback', 'api.taoke.Oauth/taobaoCallback');
+    Route::get('oauth/taobao/refresh', 'api.taoke.Oauth/taobaoRefresh');
+
+    // 快手 OAuth（快赚客授权，无需登录）
+    Route::get('oauth/kuaishou/authorize', 'api.taoke.Oauth/kuaishouAuthorize');
+    Route::get('oauth/kuaishou/callback', 'api.taoke.Oauth/kuaishouCallback');
+    Route::get('oauth/kuaishou/refresh', 'api.taoke.Oauth/kuaishouRefresh');
 
     // 商品相关接口（无需强制登录）
     Route::group('goods', function () {
@@ -41,10 +47,13 @@ Route::group('taoke', function () {
         Route::post('create_taobao_link', 'api.taoke.Goods/createTaobaoLink');
         
         Route::post('pdd_goods', 'api.taoke.Goods/pddGoods');
+        // 快手仅官方直连：见 route/api/taoke_official.php
         Route::post('pdd_goods_detail', 'api.taoke.Goods/pddGoodsDetail');
         Route::post('create_pdd_pid', 'api.taoke.Goods/createPddPid');
         Route::post('create_pdd_link', 'api.taoke.Goods/createPddLink');
         Route::post('create_pdd_url', 'api.taoke.Goods/createPddUrl');
+        Route::post('pdd_authority_status', 'api.taoke.Goods/pddAuthorityStatus');
+        Route::post('create_pdd_authority_url', 'api.taoke.Goods/createPddAuthorityUrl');
         
         Route::post('jd_goods', 'api.taoke.Goods/jdGoods');
         Route::post('jd_goods_detail', 'api.taoke.Goods/jdGoodsDetail');

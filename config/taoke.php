@@ -23,6 +23,9 @@ return [
         'appkey' => env('taoke.taobao_appkey', ''),
         'appsecret' => env('taoke.taobao_appsecret', ''),
         'session' => env('taoke.taobao_session', ''),
+        'refresh_token' => env('taoke.taobao_refresh_token', ''),
+        // access_token 过期 Unix 时间戳（OAuth 回调或 refresh 时自动写入 .env）
+        'session_expire_at' => (int) env('taoke.taobao_session_expire_at', 0),
         'pid' => env('taoke.taobao_pid', ''),
         'adzone_id' => env('taoke.taobao_adzone_id', ''),
         // OAuth 回调（须与开放平台「回调URL」完全一致，且不能为阿里系域名）
@@ -49,6 +52,10 @@ return [
         'client_secret' => env('taoke.pdd_client_secret', ''),
         'pid' => env('taoke.pdd_pid', ''),
         'media_id' => env('taoke.pdd_media_id', ''),
+        // 平台默认备案 custom_parameters（列表/转链）
+        'default_custom_parameters' => env('taoke.pdd_default_custom_parameters', 'naimeng01'),
+        // 无关键词推荐流默认 activity_tags（多多进宝活动标签 id）
+        'default_activity_tag' => (int) env('taoke.pdd_default_activity_tag', 4),
         'api_url' => 'https://gw-api.pinduoduo.com/api/router',
     ],
 
@@ -56,8 +63,15 @@ return [
     'kuaishou' => [
         'appkey' => env('taoke.kuaishou_appkey', ''),
         'secret' => env('taoke.kuaishou_secret', ''),
+        'sign_secret' => env('taoke.kuaishou_sign_secret', ''),
+        'message_secret' => env('taoke.kuaishou_message_secret', ''),
+        'access_token' => env('taoke.kuaishou_access_token', ''),
+        'refresh_token' => env('taoke.kuaishou_refresh_token', ''),
+        'access_token_expire_at' => (int) env('taoke.kuaishou_access_token_expire_at', 0),
         'pid' => env('taoke.kuaishou_pid', ''),
         'api_url' => 'https://openapi.kwaixiaodian.com',
+        'oauth_callback' => env('taoke.kuaishou_oauth_callback', 'https://0626tbcs.ohlegend.com/api/taoke/oauth/kuaishou/callback'),
+        'oauth_scope' => env('taoke.kuaishou_oauth_scope', 'merchant_distribution'),
     ],
 
     // ==================== 抖音穿山甲 CPS 配置 ====================
@@ -69,14 +83,14 @@ return [
     ],
 
     // ==================== 平台数据源开关 ====================
-    // official = 走各平台官方直连（新方案）
-    // legacy   = 走订单侠 / 聚推客（旧方案，保留回退）
+    // official / legacy 由 API 路径决定：/taoke/goods=legacy，/taoke/official/goods=official
+    // 下列 env 仅兼容旧脚本/CLI，用户端请用双路由而非改 .env 切换现网
     'driver' => [
         'taobao'   => env('taoke.driver_taobao', 'legacy'),
         'jd'       => env('taoke.driver_jd', 'legacy'),
         'pdd'      => env('taoke.driver_pdd', 'legacy'),
         'douyin'   => env('taoke.driver_douyin', 'pangle'),
-        'kuaishou' => env('taoke.driver_kuaishou', 'official'),
+        'kuaishou' => env('taoke.driver_kuaishou', 'legacy'),
     ],
 
     // ==================== 分佣配置 ====================

@@ -84,22 +84,45 @@ class JdOfficialService extends BaseServices
     }
 
     /**
-     * 商品详情（大字段）
+     * 商品详情大字段（官方商详）
      * method: jd.union.open.goods.bigfield.query
-     * @param int $sceneId 场景ID：1=常规推广，2=微信/QQ推广，其他视账号权限
+     * sceneId=1 → goodsReq.itemIds（联盟 itemId，最多 10）
+     * sceneId=2 → goodsReq.skuIds（需单独申请权限，最多 10）
+     * goodsReq.fields 见联盟文档（勿用 returnFields）
      */
-    public function goodsBigfield(array $skuIds, int $sceneId = 1, array $returnFields = []): array
+    public function goodsBigfield(int $sceneId, array $itemIds = [], array $skuIds = [], array $fields = []): array
     {
-        // JD 要求 sceneId 放顶层，也在 goodsReq 里冗余一份
+        $sceneId = $sceneId === 2 ? 2 : 1;
+        $fields = $fields ?: $this->bigfieldDocFields();
+        $goodsReq = [
+            'sceneId' => $sceneId,
+            'fields' => array_values($fields),
+        ];
+        if ($sceneId === 2) {
+            $nums = [];
+            foreach ($skuIds as $id) {
+                $id = (string) $id;
+                if ($id !== '' && ctype_digit($id)) {
+                    $nums[] = (int) $id;
+                }
+            }
+            $goodsReq['skuIds'] = array_slice(array_values(array_unique($nums)), 0, 10);
+        } else {
+            $goodsReq['itemIds'] = array_slice(array_values(array_unique(array_map('strval', $itemIds))), 0, 10);
+        }
         $data = [
             'sceneId' => $sceneId,
-            'goodsReq' => [
-                'skuIds' => array_values($skuIds),
-                'sceneId' => $sceneId,
-                'returnFields' => $returnFields ?: ['skuName', 'imageInfo', 'shopInfo'],
-            ],
+            'goodsReq' => $goodsReq,
         ];
         return $this->call('jd.union.open.goods.bigfield.query', $data);
+    }
+
+    /**
+     * @return string[]
+     */
+    protected function bigfieldDocFields(): array
+    {
+        return ['categoryInfo', 'imageInfo', 'baseBigFieldInfo', 'detailImages', 'shopInfo'];
     }
 
     /**
@@ -314,9 +337,9 @@ class JdOfficialService extends BaseServices
     }
 
     /**
-     * 商品详情（京粉 itemId 回查 / 数字 skuId 走 bigfield）
+     * 商品详情：联盟 bigfield（主）+ summary 价图兜底 + spuid/sku sceneId=2
      */
-    public function fetchDetail($itemIds, array $summary = []): array
+    public function fetchDetail($itemIds, array $summary = [], array $hints = []): array
     {
         $ids = is_array($itemIds) ? $itemIds : preg_split('/\s*,\s*/', (string) $itemIds, -1, PREG_SPLIT_NO_EMPTY);
         $ids = array_values(array_filter(array_map('strval', $ids)));
@@ -325,38 +348,143 @@ class JdOfficialService extends BaseServices
         }
 
         $targetId = $ids[0];
+        $hints = is_array($hints) ? $hints : [];
+        $fields = $this->bigfieldDocFields();
 
-        // 数字 skuId：走 promotiongoodsinfo / bigfield
-        if (ctype_digit($targetId)) {
-            $rows = $this->parseBizPayload($this->goodsPromotionInfo($ids));
-            if (!empty($rows)) {
-                return $this->normalizeDetailRows($rows);
+        $row = [];
+        if ($this->hasJdSummary($summary)) {
+            $row = $this->buildDetailFromSummary($summary, $targetId);
+        }
+
+        // 文档：sceneId=1 + itemIds 查商详大字段
+        $bigByItem = $this->parseBizPayload($this->goodsBigfield(1, [$targetId], [], $fields));
+        if (!empty($bigByItem)) {
+            $merged = $this->normalizeDetailRows($bigByItem);
+            if (!empty($merged[0]) && is_array($merged[0])) {
+                $row = $row === [] ? $merged[0] : array_replace_recursive($row, $merged[0]);
             }
-            $fields = ['skuName', 'priceInfo', 'imageInfo', 'categoryInfo', 'detailImages', 'baseBigFieldInfo', 'shopInfo'];
-            foreach ([1, 2] as $sceneId) {
-                $rows = $this->parseBizPayload($this->goodsBigfield($ids, $sceneId, $fields));
-                if (!empty($rows)) {
-                    return $this->normalizeDetailRows($rows);
+        }
+
+        // 纯数字 id 再试 sceneId=2 + skuIds（需账号开权限）
+        if (ctype_digit($targetId)) {
+            $promoRows = $this->parseBizPayload($this->goodsPromotionInfo($ids));
+            if (!empty($promoRows)) {
+                $norm = $this->normalizeDetailRows($promoRows);
+                if (!empty($norm[0])) {
+                    $row = $row === [] ? $norm[0] : array_replace_recursive($row, $norm[0]);
+                }
+            }
+            $bigBySku = $this->parseBizPayload($this->goodsBigfield(2, [], [$targetId], $fields));
+            if (!empty($bigBySku)) {
+                $merged = $this->normalizeDetailRows($bigBySku);
+                if (!empty($merged[0])) {
+                    $row = $row === [] ? $merged[0] : array_replace_recursive($row, $merged[0]);
                 }
             }
         }
 
-        // 京粉 itemId 每次请求都会变，回查不可靠；优先用列表页传入的 summary
-        if ($this->hasJdSummary($summary)) {
-            $row = $this->buildDetailFromSummary($summary, $targetId);
+        if ($row === [] || !$this->jdDetailRowHasBigfield($row)) {
+            $fromSku = $this->fetchDetailBySkuHints($hints, $targetId);
+            if ($fromSku !== []) {
+                $row = $row === [] ? $fromSku[0] : array_replace_recursive($row, $fromSku[0]);
+            }
+        }
+
+        if ($row === []) {
             $found = $this->findJingfenItemByItemId($targetId);
             if (!empty($found)) {
-                $row = array_replace_recursive($found, $row);
+                $row = $found;
             }
-            return [$row];
         }
 
-        $row = $this->findJingfenItemByItemId($targetId);
-        if (!empty($row)) {
-            return [$row];
+        if ($row === []) {
+            return [];
         }
 
+        $row['itemId'] = $row['itemId'] ?? $targetId;
+        return [$this->enrichJdDetailRow($row)];
+    }
+
+    protected function jdDetailRowHasBigfield(array $row): bool
+    {
+        if (!empty($row['detailImages']) || !empty($row['baseBigFieldInfo'])) {
+            return true;
+        }
+        if (!empty($row['imageInfo']['imageList']) && is_array($row['imageInfo']['imageList'])) {
+            return count($row['imageInfo']['imageList']) > 1;
+        }
+        return false;
+    }
+
+    /**
+     * 列表已带 spuid/skuId 时，京粉 itemId 反查失败则用联盟 bigfield（非订单侠）
+     */
+    protected function fetchDetailBySkuHints(array $hints, string $itemId): array
+    {
+        $skuCandidates = [];
+        foreach (['skuId', 'spuid', 'mainSkuId', 'productId'] as $key) {
+            $val = (string) ($hints[$key] ?? '');
+            if ($val !== '' && ctype_digit($val)) {
+                $skuCandidates[$val] = true;
+            }
+        }
+        if ($skuCandidates === []) {
+            return [];
+        }
+        $fields = $this->bigfieldDocFields();
+        foreach (array_keys($skuCandidates) as $skuId) {
+            $row = ['itemId' => $itemId, 'goods_id' => $itemId, 'skuId' => $skuId, 'spuid' => $skuId];
+            $promoRows = $this->parseBizPayload($this->goodsPromotionInfo([$skuId]));
+            if (!empty($promoRows[0]) && is_array($promoRows[0])) {
+                $row = array_replace_recursive($row, $promoRows[0]);
+            }
+            $bigRows = $this->parseBizPayload($this->goodsBigfield(2, [], [$skuId], $fields));
+            if (!empty($bigRows[0]) && is_array($bigRows[0])) {
+                $row = array_replace_recursive($row, $bigRows[0]);
+                $row['itemId'] = $itemId;
+                return [$this->enrichJdDetailRow($row)];
+            }
+            $bigItem = $this->parseBizPayload($this->goodsBigfield(1, [$itemId], [], $fields));
+            if (!empty($bigItem[0]) && is_array($bigItem[0])) {
+                $row = array_replace_recursive($row, $bigItem[0]);
+                $row['itemId'] = $itemId;
+                return [$this->enrichJdDetailRow($row)];
+            }
+            if (!empty($row['skuName']) || !empty($row['imageInfo'])) {
+                return [$this->enrichJdDetailRow($row)];
+            }
+        }
         return [];
+    }
+
+    /**
+     * 用 skuId / spuid 尝试 bigfield、promotiongoodsinfo，补 detailImages、baseBigFieldInfo 等
+     */
+    protected function enrichJdDetailRow(array $row): array
+    {
+        $skuCandidates = [];
+        foreach (['skuId', 'mainSkuId', 'spuid', 'productId'] as $key) {
+            $val = $row[$key] ?? '';
+            if ($val !== '' && $val !== null && ctype_digit((string) $val)) {
+                $skuCandidates[(string) $val] = true;
+            }
+        }
+        if ($skuCandidates === []) {
+            return $row;
+        }
+        $fields = $this->bigfieldDocFields();
+        foreach (array_keys($skuCandidates) as $skuId) {
+            $promoRows = $this->parseBizPayload($this->goodsPromotionInfo([$skuId]));
+            if (!empty($promoRows[0]) && is_array($promoRows[0])) {
+                $row = array_replace_recursive($row, $promoRows[0]);
+            }
+            $bigRows = $this->parseBizPayload($this->goodsBigfield(2, [], [$skuId], $fields));
+            if (!empty($bigRows[0]) && is_array($bigRows[0])) {
+                $row = array_replace_recursive($row, $bigRows[0]);
+                break;
+            }
+        }
+        return $row;
     }
 
     /**
@@ -408,10 +536,26 @@ class JdOfficialService extends BaseServices
                 }
             }
         }
+        if (!empty($summary['slider_image']) && is_array($summary['slider_image'])) {
+            foreach ($summary['slider_image'] as $url) {
+                if ($url) {
+                    $images[] = ['url' => (string) $url];
+                }
+            }
+        }
+        if (!empty($summary['imageInfo']['imageList']) && is_array($summary['imageInfo']['imageList'])) {
+            foreach ($summary['imageInfo']['imageList'] as $img) {
+                $url = is_array($img) ? (string) ($img['url'] ?? '') : (string) $img;
+                if ($url !== '') {
+                    $images[] = ['url' => $url];
+                }
+            }
+        }
         return [
             'itemId' => $itemId,
             'skuName' => (string) ($summary['title'] ?? ($summary['store_name'] ?? '')),
             'goods_id' => (string) ($summary['goods_id'] ?? $itemId),
+            'spuid' => $summary['spuid'] ?? '',
             'imageInfo' => ['imageList' => $images],
             'priceInfo' => [
                 'price' => $summary['ot_price'] ?? ($summary['price'] ?? 0),

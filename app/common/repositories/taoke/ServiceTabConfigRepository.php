@@ -11,50 +11,69 @@ class ServiceTabConfigRepository extends BaseRepository
     const TYPE_BUILTIN = 1;
     const TYPE_CUSTOM  = 2;
 
+    const CHANNEL_LEGACY   = 'legacy';
+    const CHANNEL_OFFICIAL = 'official';
+
     public function __construct(ServiceTabConfigDao $dao)
     {
         $this->dao = $dao;
     }
 
-    public function listAll(): array
+    public function listAll(string $channel = self::CHANNEL_LEGACY): array
     {
-        return array_map([$this, 'format'], $this->dao->all());
+        $channel = $this->normalizeChannel($channel);
+        return array_map([$this, 'format'], $this->dao->all($channel));
     }
 
-    public function listEnabled(): array
+    public function listEnabled(string $channel = self::CHANNEL_LEGACY): array
     {
-        return array_map([$this, 'format'], $this->dao->enabled());
+        $channel = $this->normalizeChannel($channel);
+        return array_map([$this, 'format'], $this->dao->enabled($channel));
     }
 
-    public function findCustomByKey(string $tabKey): ?array
+    public function findCustomByKey(string $tabKey, string $channel = self::CHANNEL_LEGACY): ?array
     {
-        $row = $this->dao->findByKey($tabKey);
-        if (!$row) return null;
+        $channel = $this->normalizeChannel($channel);
+        $row = $this->dao->findByKey($tabKey, $channel);
+        if (!$row) {
+            return null;
+        }
         $arr = is_array($row) ? $row : $row->toArray();
-        if ((int)$arr['tab_type'] !== self::TYPE_CUSTOM) return null;
+        if ((int) $arr['tab_type'] !== self::TYPE_CUSTOM) {
+            return null;
+        }
         return $this->format($arr);
     }
 
-    public function saveConfig(array $data): array
+    public function saveConfig(array $data, string $channel = self::CHANNEL_LEGACY): array
     {
-        $id     = (int)($data['id'] ?? 0);
-        $name   = trim((string)($data['name'] ?? ''));
-        $sort   = (int)($data['sort'] ?? 0);
-        $status = (int)($data['status'] ?? 1) ? 1 : 0;
-        $tabKey = trim((string)($data['tab_key'] ?? ''));
+        $channel = $this->normalizeChannel($channel);
+        $id     = (int) ($data['id'] ?? 0);
+        $name   = trim((string) ($data['name'] ?? ''));
+        $sort   = (int) ($data['sort'] ?? 0);
+        $status = (int) ($data['status'] ?? 1) ? 1 : 0;
+        $tabKey = trim((string) ($data['tab_key'] ?? ''));
         $brands = $data['brands'] ?? [];
 
-        if ($name === '') throw new ValidateException('请填写显示名');
-        if (mb_strlen($name) > 20) throw new ValidateException('显示名不能超过20个字');
+        if ($name === '') {
+            throw new ValidateException('请填写显示名');
+        }
+        if (mb_strlen($name) > 20) {
+            throw new ValidateException('显示名不能超过20个字');
+        }
 
         $existingRaw = $id > 0 ? $this->dao->findById($id) : null;
-        if ($id > 0 && !$existingRaw) throw new ValidateException('记录不存在');
+        if ($id > 0 && !$existingRaw) {
+            throw new ValidateException('记录不存在');
+        }
         $existing = $existingRaw ? (is_array($existingRaw) ? $existingRaw : $existingRaw->toArray()) : null;
+        if ($existing && (string) ($existing['channel'] ?? self::CHANNEL_LEGACY) !== $channel) {
+            throw new ValidateException('配置通道不匹配');
+        }
 
         $cleanBrands = $this->cleanBrands(is_array($brands) ? $brands : []);
 
-        // 内置行：可改 name/status/sort/brands（brands 允许为空，为空则不显示筛选标签）
-        if ($existing && (int)$existing['tab_type'] === self::TYPE_BUILTIN) {
+        if ($existing && (int) $existing['tab_type'] === self::TYPE_BUILTIN) {
             $this->dao->updateById($id, [
                 'name'   => $name,
                 'status' => $status,
@@ -65,8 +84,9 @@ class ServiceTabConfigRepository extends BaseRepository
             return $this->format(is_array($row) ? $row : $row->toArray());
         }
 
-        // 自定义行：brands 必填
-        if (empty($cleanBrands)) throw new ValidateException('请至少添加一个品牌');
+        if (empty($cleanBrands)) {
+            throw new ValidateException('请至少添加一个品牌');
+        }
 
         if ($existing) {
             $this->dao->updateById($id, [
@@ -80,11 +100,12 @@ class ServiceTabConfigRepository extends BaseRepository
         }
 
         $newKey = $tabKey !== '' ? $tabKey : ('custom_' . uniqid());
-        if ($this->dao->findByKey($newKey)) {
+        if ($this->dao->findByKey($newKey, $channel)) {
             throw new ValidateException('tab_key 已存在');
         }
 
         $newId = $this->dao->insert([
+            'channel'  => $channel,
             'tab_key'  => $newKey,
             'tab_type' => self::TYPE_CUSTOM,
             'name'     => $name,
@@ -96,43 +117,67 @@ class ServiceTabConfigRepository extends BaseRepository
         return $this->format(is_array($row) ? $row : $row->toArray());
     }
 
-    public function deleteConfig(int $id): void
+    public function deleteConfig(int $id, string $channel = self::CHANNEL_LEGACY): void
     {
+        $channel = $this->normalizeChannel($channel);
         $rowRaw = $this->dao->findById($id);
-        if (!$rowRaw) throw new ValidateException('记录不存在');
+        if (!$rowRaw) {
+            throw new ValidateException('记录不存在');
+        }
         $row = is_array($rowRaw) ? $rowRaw : $rowRaw->toArray();
-        if ((int)$row['tab_type'] === self::TYPE_BUILTIN) {
+        if ((string) ($row['channel'] ?? self::CHANNEL_LEGACY) !== $channel) {
+            throw new ValidateException('配置通道不匹配');
+        }
+        if ((int) $row['tab_type'] === self::TYPE_BUILTIN) {
             throw new ValidateException('内置平台不能删除，如需隐藏请关闭开关');
         }
         $this->dao->deleteById($id);
+    }
+
+    protected function normalizeChannel(string $channel): string
+    {
+        return $channel === self::CHANNEL_OFFICIAL ? self::CHANNEL_OFFICIAL : self::CHANNEL_LEGACY;
     }
 
     protected function cleanBrands(array $brands): array
     {
         $out = [];
         foreach ($brands as $b) {
-            $b = trim((string)$b);
-            if ($b === '') continue;
-            if (mb_strlen($b) > 30) throw new ValidateException('品牌名称不能超过30个字');
-            if (!in_array($b, $out, true)) $out[] = $b;
+            $b = trim((string) $b);
+            if ($b === '') {
+                continue;
+            }
+            if (mb_strlen($b) > 30) {
+                throw new ValidateException('品牌名称不能超过30个字');
+            }
+            if (!in_array($b, $out, true)) {
+                $out[] = $b;
+            }
         }
-        if (count($out) > 50) throw new ValidateException('品牌最多50个');
+        if (count($out) > 50) {
+            throw new ValidateException('品牌最多50个');
+        }
         return $out;
     }
 
     protected function format(array $row): array
     {
         $brands = $row['brands'] ?? null;
-        if (is_string($brands)) $brands = json_decode($brands, true) ?: [];
-        if (!is_array($brands)) $brands = [];
+        if (is_string($brands)) {
+            $brands = json_decode($brands, true) ?: [];
+        }
+        if (!is_array($brands)) {
+            $brands = [];
+        }
         return [
-            'id'       => (int)$row['id'],
-            'tab_key'  => (string)$row['tab_key'],
-            'tab_type' => (int)$row['tab_type'],
-            'name'     => (string)$row['name'],
+            'id'       => (int) $row['id'],
+            'channel'  => (string) ($row['channel'] ?? self::CHANNEL_LEGACY),
+            'tab_key'  => (string) $row['tab_key'],
+            'tab_type' => (int) $row['tab_type'],
+            'name'     => (string) $row['name'],
             'brands'   => array_values($brands),
-            'status'   => (int)$row['status'],
-            'sort'     => (int)$row['sort'],
+            'status'   => (int) $row['status'],
+            'sort'     => (int) $row['sort'],
         ];
     }
 }

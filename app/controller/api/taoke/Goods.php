@@ -9,6 +9,7 @@ use app\common\repositories\taoke\ServiceTabConfigRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JuTuiKeService;
+use crmeb\services\taoke\PddOfficialService;
 use think\App;
 use think\facade\Log;
 
@@ -17,6 +18,9 @@ use think\facade\Log;
  */
 class Goods extends BaseController
 {
+    /** legacy：/api/taoke/goods/* 固定订单侠通道（与 .env driver 无关） */
+    protected string $goodsDriverChannel = 'legacy';
+
     /**
      * @var JuTuiKeService
      */
@@ -47,10 +51,13 @@ class Goods extends BaseController
      */
     protected $serviceTabConfigRepository;
 
+    protected PddOfficialService $pddOfficial;
+
     public function __construct(
         App $app,
         JuTuiKeService $jutuikeService,
         DingDanXiaService $dingdanxiaService,
+        PddOfficialService $pddOfficial,
         CommissionRepository $commissionRepository,
         ServiceGoodsRepository $serviceGoodsRepository,
         ServiceBrandTabRepository $serviceBrandTabRepository,
@@ -59,8 +66,9 @@ class Goods extends BaseController
         parent::__construct($app);
         $this->jutuikeService = $jutuikeService;
         $this->dingdanxiaService = $dingdanxiaService;
+        $this->pddOfficial = $pddOfficial;
         $this->commissionRepository = $commissionRepository;
-        $this->serviceGoodsRepository = $serviceGoodsRepository;
+        $this->serviceGoodsRepository = $serviceGoodsRepository->withDriverChannel($this->goodsDriverChannel);
         $this->serviceBrandTabRepository = $serviceBrandTabRepository;
         $this->serviceTabConfigRepository = $serviceTabConfigRepository;
     }
@@ -81,15 +89,10 @@ class Goods extends BaseController
             ];
         } elseif ($type == 'pdd') {
             $data = $this->getPddCategoryTags();
+        } elseif ($type == 'kuaishou') {
+            $data = $this->getKuaishouCategoryTags();
         } elseif ($type == 'jd') {
-            // jd/material_query 的 eliteId：1猜你喜欢、2实时热销、3大额券、4-9.9包邮、13270国补
-            $data = [
-                ['id' => 1, 'text' => '猜你喜欢'],
-                ['id' => 2, 'text' => '实时热销'],
-                ['id' => 3, 'text' => '大额券'],
-                ['id' => 4, 'text' => '9.9包邮'],
-                ['id' => 13270, 'text' => '国家补贴'],
-            ];
+            $data = $this->getJdCategoryTags();
         } elseif ($type == 'douyin') {
             $data = [
                 ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
@@ -122,16 +125,20 @@ class Goods extends BaseController
     }
 
     /**
-     * 服务页平台 Tab 配置（内置 + 自定义品牌，来自 service_tab_config 表）
+     * 现网/订单侠 Tab（channel=legacy）
      * GET /api/taoke/goods/service_tabs
      */
     public function serviceTabs()
     {
-        $tabs = $this->serviceTabConfigRepository->listEnabled();
-        // 兼容旧字段 brand_tab：取第一条自定义 tab
+        return $this->buildServiceTabsPayload(ServiceTabConfigRepository::CHANNEL_LEGACY);
+    }
+
+    protected function buildServiceTabsPayload(string $channel)
+    {
+        $tabs = $this->serviceTabConfigRepository->listEnabled($channel);
         $legacyBrand = ['enabled' => false, 'name' => '', 'brands' => []];
         foreach ($tabs as $t) {
-            if ((int)$t['tab_type'] === 2 && !empty($t['brands'])) {
+            if ((int) $t['tab_type'] === 2 && !empty($t['brands'])) {
                 $legacyBrand = [
                     'enabled' => true,
                     'name'    => $t['name'],
@@ -144,6 +151,7 @@ class Goods extends BaseController
         return app('json')->success([
             'tabs'      => $tabs,
             'brand_tab' => $legacyBrand,
+            'channel'   => $channel,
         ]);
     }
 
@@ -158,7 +166,7 @@ class Goods extends BaseController
         $platform = (string)$this->request->param('platform', '');
         $keyword = (string)$this->request->param('keyword', '');
         // 兼容旧调用：platform 传了非平台名时当作关键词（如价格筛选）
-        $knownPlatforms = ['taobao', 'jd', 'pdd', 'wph', 'douyin'];
+        $knownPlatforms = ['taobao', 'jd', 'pdd', 'kuaishou', 'wph', 'douyin'];
         if ($keyword === '' && $platform !== '' && !in_array(strtolower($platform), $knownPlatforms, true)) {
             $keyword = $platform;
             $platform = '';
@@ -391,13 +399,20 @@ class Goods extends BaseController
     public function createTaobaoLink()
     {
         $goodsId = $this->request->post('goods_id', '');
+        $title = (string) $this->request->post('title', $this->request->post('store_name', ''));
 
         if (empty($goodsId)) {
             return app('json')->fail('商品ID不能为空');
         }
         $relate_id = '3357576229';
+        $hints = [
+            'item_url' => (string) $this->request->post('item_url', ''),
+            'taoke_item_url' => (string) $this->request->post('taoke_item_url', ''),
+            'coupon_click_url' => (string) $this->request->post('coupon_click_url', ''),
+            'taoke_coupon_click_url' => (string) $this->request->post('taoke_coupon_click_url', ''),
+        ];
         try {
-            $result = $this->serviceGoodsRepository->createTaobaoLink($goodsId, $relate_id);
+            $result = $this->serviceGoodsRepository->createTaobaoLink($goodsId, $relate_id, $title, $hints);
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');
             }
@@ -416,16 +431,96 @@ class Goods extends BaseController
     /**
      * 拼多多分类标签（订单侠 activity_tags，失败则兜底）
      */
+    protected function getKuaishouCategoryTags(): array
+    {
+        $priceTags = $this->getKuaishouPriceTags();
+        $fallback = [
+            ['id' => 99, 'text' => '首页'],
+            ['id' => 1, 'text' => '女装女鞋'],
+            ['id' => 3, 'text' => '美食生鲜'],
+        ];
+        try {
+            $data = $this->serviceGoodsRepository->getKuaishouChannelTags();
+            return array_merge($priceTags, $data ?: $fallback);
+        } catch (\Throwable $e) {
+            Log::error('快手选品频道获取失败', ['error' => $e->getMessage()]);
+            return array_merge($priceTags, $fallback);
+        }
+    }
+
+    /**
+     * 快手价格 pill → 官方 rangeList（PRICE 单位为分）
+     */
+    protected function getKuaishouPriceTags(): array
+    {
+        return [
+            ['id' => 'ks_p99', 'text' => '9.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 990],
+            ['id' => 'ks_p199', 'text' => '19.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 1990],
+            ['id' => 'ks_p299', 'text' => '29.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 2990],
+            ['id' => 'ks_p399', 'text' => '39.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 3990],
+        ];
+    }
+
+    /**
+     * 京东 Tab：价格 pill + 京粉 eliteId（material/jingfen cate）
+     */
+    protected function getJdCategoryTags(): array
+    {
+        $priceTags = [
+            ['id' => 'jd_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+            ['id' => 'jd_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+            ['id' => 'jd_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+            ['id' => 'jd_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
+        ];
+        // jd union jingfen/material eliteId
+        $eliteTags = [
+            ['id' => 1, 'text' => '猜你喜欢'],
+            ['id' => 2, 'text' => '实时热销'],
+            ['id' => 3, 'text' => '大额券'],
+            ['id' => 13270, 'text' => '国家补贴'],
+        ];
+        return array_merge($priceTags, $eliteTags);
+    }
+
+    protected function buildKuaishouRangeListFromRequest(): array
+    {
+        $to = $this->request->post('price_to', null);
+        if ($to === null || $to === '') {
+            return [];
+        }
+        $rangeId = (string) $this->request->post('price_range_id', 'PRICE');
+        if ($rangeId === '') {
+            $rangeId = 'PRICE';
+        }
+        return [[
+            'rangeId' => $rangeId,
+            'rangeFrom' => (int) $this->request->post('price_from', 0),
+            'rangeTo' => (int) $to,
+        ]];
+    }
+
     protected function getPddCategoryTags(): array
     {
-        $fallback = [
+        // 带 keyword：走 pdd.ddk.goods.search；仅 id：走 activity_tags（多多进宝活动标）
+        $priceTags = [
+            ['id' => 'p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+            ['id' => 'p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+            ['id' => 'p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+            ['id' => 'p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
+        ];
+        $activityTags = [
             ['id' => 4, 'text' => '秒杀'],
             ['id' => 7, 'text' => '百亿补贴'],
             ['id' => 31, 'text' => '品牌黑标'],
             ['id' => 24, 'text' => '品牌高佣'],
             ['id' => 10564, 'text' => '精选爆品'],
         ];
+        $fallback = array_merge($priceTags, $activityTags);
+        if (config('taoke.driver.pdd') === 'official') {
+            return $fallback;
+        }
         try {
+            // [官方直连切换 2026-09-10] 原订单侠：$this->dingdanxiaService->pdd_tags();
             $raw = $this->dingdanxiaService->pdd_tags();
             if (!is_array($raw) || !$raw) {
                 return $fallback;
@@ -446,7 +541,8 @@ class Goods extends BaseController
                     'text' => $text,
                 ];
             }
-            return $data ?: $fallback;
+            // 价格 pill 固定在前，订单侠活动标接在后面
+            return array_merge($priceTags, $data ?: $activityTags);
         } catch (\Throwable $e) {
             Log::error('拼多多分类标签获取失败', ['error' => $e->getMessage()]);
             return $fallback;
@@ -645,7 +741,10 @@ class Goods extends BaseController
         $keyword = (string)$this->request->post('keyword', '');
         try {
             $list = $this->serviceGoodsRepository->searchPlatform('pdd', $keyword, $page, $limit, $cate);
-            return app('json')->success(['list' => $list]);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getPddDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('拼多多商品列表获取失败', [
                 'page' => $page,
@@ -653,6 +752,111 @@ class Goods extends BaseController
                 'error' => $e->getMessage()
             ]);
             return app('json')->success(['list' => []]);
+        }
+    }
+
+    /**
+     * 快手商品列表 / 搜索
+     * POST /api/taoke/goods/kuaishou_goods
+     */
+    public function kuaishouGoods()
+    {
+        $page = (int) $this->request->post('page_no', $this->request->post('page', 1));
+        $limit = (int) $this->request->post('page_size', $this->request->post('limit', 20));
+        $cate = (int) $this->request->post('cate', 0);
+        $keyword = (string) $this->request->post('keyword', '');
+        $rangeList = $this->buildKuaishouRangeListFromRequest();
+        try {
+            $list = $this->serviceGoodsRepository->searchPlatform('kuaishou', $keyword, $page, $limit, $cate, $rangeList);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getKuaishouDataSource(),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('快手商品列表获取失败', ['error' => $e->getMessage()]);
+            return app('json')->success(['list' => []]);
+        }
+    }
+
+    /**
+     * 快手商品详情
+     * POST /api/taoke/goods/kuaishou_goods_detail
+     */
+    public function kuaishouGoodsDetail()
+    {
+        $goodsId = (string) $this->request->post('goods_id', $this->request->post('itemIds', ''));
+        $useSummaryRaw = $this->request->post('use_summary', 1);
+        $useSummary = !in_array($useSummaryRaw, [0, '0', false, 'false', 'off', 'no'], true);
+        $summary = [];
+        if ($useSummary) {
+            $summary = $this->request->post('summary', []);
+            if (is_string($summary)) {
+                $decoded = json_decode($summary, true);
+                $summary = is_array($decoded) ? $decoded : [];
+            }
+        }
+        try {
+            $bundle = $this->serviceGoodsRepository->fetchKuaishouDetailWithMeta(
+                $goodsId,
+                is_array($summary) ? $summary : []
+            );
+            $result = $bundle['detail'];
+            if ($result === []) {
+                return app('json')->fail('商品详情获取失败');
+            }
+            $meta = $bundle['meta'];
+            if (!$useSummary) {
+                $meta['summary_used'] = false;
+                $meta['summary_skipped'] = true;
+                $meta['pipeline'][] = 'debug: use_summary=false，仅官方 detail/list 还原';
+            }
+            return app('json')->success([
+                'detail' => $result,
+                '_source' => $this->serviceGoodsRepository->getKuaishouDataSource(),
+                '_meta' => $meta,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('快手商品详情获取失败', ['goods_id' => $goodsId, 'error' => $e->getMessage()]);
+            return app('json')->fail('商品详情获取失败');
+        }
+    }
+
+    /**
+     * 快手推广链接
+     * POST /api/taoke/goods/create_kuaishou_link
+     */
+    public function createKuaishouLink()
+    {
+        $goodsId = (string) $this->request->post('goods_id', '');
+        if ($goodsId === '') {
+            return app('json')->fail('商品不能为空');
+        }
+        $context = [
+            'linkType' => (int) $this->request->post('link_type', 101),
+            'linkCarrierId' => (string) $this->request->post('link_carrier_id', ''),
+            'comments' => (string) $this->request->post('comments', ''),
+            'externalId' => (string) $this->request->post('external_id', ''),
+            'customParameters' => (string) $this->request->post('custom_parameters', ''),
+            'genPoster' => (bool) $this->request->post('gen_poster', false),
+            'customContent' => (string) $this->request->post('custom_content', ''),
+        ];
+        try {
+            $result = $this->serviceGoodsRepository->createKuaishouPromotion($goodsId, $context);
+            if (empty($result)) {
+                return app('json')->fail('生成推广链接失败');
+            }
+            if (isset($result['result']) && (int) $result['result'] !== 1) {
+                $msg = (string) ($result['sub_msg'] ?? ($result['error_msg'] ?? '生成推广链接失败'));
+                $code = (string) ($result['sub_code'] ?? '');
+                if ($code === '1800601') {
+                    $msg .= '（请检查 cpsPid、linkCarrierId、comments 是否均已传入）';
+                }
+                return app('json')->fail($msg);
+            }
+            return app('json')->success($result);
+        } catch (\Exception $e) {
+            Log::error('快手推广链接生成失败', ['goods_id' => $goodsId, 'error' => $e->getMessage()]);
+            return app('json')->fail('生成推广链接失败');
         }
     }
     
@@ -663,11 +867,25 @@ class Goods extends BaseController
     public function pddGoodsDetail()
     {
         $goods_sign = $this->request->post('goods_sign', '');
+        $useSummaryRaw = $this->request->post('use_summary', 1);
+        $useSummary = !in_array($useSummaryRaw, [0, '0', false, 'false', 'off', 'no'], true);
         try {
-            $result = $this->dingdanxiaService->pddGoodsDetail($goods_sign);
-            return app('json')->success($result);
-
-
+            $bundle = $this->serviceGoodsRepository->fetchPddDetailWithMeta($goods_sign);
+            $result = $bundle['detail'];
+            if ($result === []) {
+                return app('json')->fail('商品详情获取失败');
+            }
+            $meta = $bundle['meta'];
+            if (!$useSummary) {
+                $meta['summary_used'] = false;
+                $meta['summary_skipped'] = true;
+                $meta['pipeline'][] = 'debug: use_summary=false，前端不合并列表 summary';
+            }
+            return app('json')->success([
+                'detail' => is_array($result) ? $result : ['raw' => $result],
+                '_source' => $this->serviceGoodsRepository->getPddDataSource(),
+                '_meta' => $meta,
+            ]);
         } catch (\Exception $e) {
             Log::error('商品详情获取失败', [
                 'itemIds' => $goods_sign,
@@ -684,26 +902,21 @@ class Goods extends BaseController
     public function createPddLink()
     {
         $goods_sign = $this->request->post('goods_sign', '');
-        //$uid = $this->request->uid() ?? 0;
-        $uid = 1;
-        if (!$uid) {
-            return app('json')->fail('请先登录');
-        }
 
         if (empty($goods_sign)) {
             return app('json')->fail('商品不能为空');
         }
-        // 获取用户
-        $user = \app\common\model\user\User::find($uid);
-        if (!$user) {
-            return app('json')->fail('用户不存在');
+
+        [$pid, $pdd_custom_parameters] = $this->resolvePddPromotionParams();
+        if ($pid === '') {
+            return app('json')->fail('缺少拼多多 PID，请配置 PDD_PID 或登录后完成推手备案');
         }
-        $pid = $user->pdd_pid;
-        $pdd_custom_parameters = $user->pdd_custom_params;
+        if ($pdd_custom_parameters === '') {
+            $pdd_custom_parameters = $this->pddOfficial->getDefaultCustomParameters() ?: 'naimeng01';
+        }
+
         try {
-            // 调用高佣转链API
-            $result = $this->dingdanxiaService->pddHighCommission($goods_sign,$pid,$pdd_custom_parameters);
-            
+            $result = $this->serviceGoodsRepository->createPddPromotion($goods_sign, $pid, $pdd_custom_parameters);
 
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');
@@ -765,10 +978,11 @@ class Goods extends BaseController
             if (empty($pid)) {
                 return app('json')->fail('生成推广位失败');
             }
-            //有了pid去生成授权链接
-            $result = $this->dingdanxiaService->pddPromUrlGenerate($pid,$pdd_custom_parameters);
-
-
+            //有了pid去生成授权备案链接
+            $result = $this->createPddAuthorityUrlInternal($pid, $pdd_custom_parameters);
+            if (!empty($result['error'])) {
+                return app('json')->fail((string) $result['error']);
+            }
             return app('json')->success($result);
 
         } catch (\Exception $e) {
@@ -779,6 +993,163 @@ class Goods extends BaseController
             return app('json')->fail('生成推广链接失败'.$e->getMessage());
         }
     }
+
+    /**
+     * 查询拼多多 PID 是否已授权备案（bind=1 已备案）
+     * POST /api/taoke/goods/pdd_authority_status
+     */
+    public function pddAuthorityStatus()
+    {
+        [$pid, $customParameters] = $this->resolvePddAuthorityParams();
+        if ($pid === '') {
+            return app('json')->fail('缺少拼多多 PID，请配置 PDD_PID 或登录后使用用户 PID');
+        }
+
+        try {
+            $raw = $this->pddOfficial->memberAuthorityQuery($pid, $customParameters);
+            if (isset($raw['error_response'])) {
+                return app('json')->fail($raw['error_response']['sub_msg'] ?? $raw['error_response']['error_msg'] ?? '查询失败');
+            }
+            $bind = (int) ($raw['authority_query_response']['bind'] ?? 0);
+            return app('json')->success([
+                'bind' => $bind,
+                'filed' => $bind === 1,
+                'pid' => $pid,
+                'custom_parameters' => $customParameters,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('拼多多备案状态查询失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('查询失败，请稍后重试');
+        }
+    }
+
+    /**
+     * 生成拼多多授权备案链接（给经理/推手打开并确认）
+     * POST /api/taoke/goods/create_pdd_authority_url
+     */
+    public function createPddAuthorityUrl()
+    {
+        [$pid, $customParameters] = $this->resolvePddAuthorityParams();
+        if ($pid === '') {
+            return app('json')->fail('缺少拼多多 PID');
+        }
+        if ($customParameters === '') {
+            return app('json')->fail('缺少 custom_parameters');
+        }
+
+        try {
+            $data = $this->createPddAuthorityUrlInternal($pid, $customParameters);
+            if (!empty($data['error'])) {
+                return app('json')->fail((string) $data['error']);
+            }
+            return app('json')->success($data);
+        } catch (\Exception $e) {
+            Log::error('拼多多授权备案链接生成失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('生成失败，请稍后重试');
+        }
+    }
+
+    /**
+     * @return array|string JSON fail response 或 success 数据
+     */
+    protected function createPddAuthorityUrlInternal(string $pid, string $customParameters)
+    {
+        // [官方直连切换 2026-09-10] 原订单侠：$this->dingdanxiaService->pddPromUrlGenerate($pid, $customParameters);
+        $raw = $this->pddOfficial->generateAuthorityPromUrl($pid, $customParameters);
+        if (isset($raw['error_response'])) {
+            $msg = $raw['error_response']['sub_msg'] ?? $raw['error_response']['error_msg'] ?? '生成失败';
+            return ['error' => $msg];
+        }
+
+        $list = $raw['rp_promotion_url_generate_response']['url_list'] ?? [];
+        $first = is_array($list) && isset($list[0]) ? $list[0] : [];
+        $mobileUrl = (string) ($first['mobile_url'] ?? '');
+        $url = (string) ($first['url'] ?? $mobileUrl);
+
+        if ($url === '' && $mobileUrl === '') {
+            return ['error' => '未获取到授权备案链接'];
+        }
+
+        return [
+            'pid' => $pid,
+            'custom_parameters' => $customParameters,
+            'authority_url' => $url,
+            'mobile_url' => $mobileUrl,
+            'tip' => '请用推手账号打开 mobile_url，在拼多多页面点击确认授权；完成后 bind=1',
+        ];
+    }
+
+    /**
+     * 登录用户优先用 user.pdd_pid；否则用 .env 平台 PID
+     *
+     * @return array{0:string,1:string} [pid, custom_parameters]
+     */
+    protected function resolvePddAuthorityParams(): array
+    {
+        $pid = (string) $this->request->post('pid', '');
+        $customParameters = (string) $this->request->post('custom_parameters', '');
+
+        $uid = 0;
+        if ($this->request->isLogin()) {
+            $uid = (int) $this->request->uid();
+        }
+        if ($uid > 0) {
+            $user = \app\common\model\user\User::find($uid);
+            if ($user) {
+                if ($pid === '' && !empty($user->pdd_pid)) {
+                    $pid = (string) $user->pdd_pid;
+                }
+                if ($customParameters === '' && !empty($user->pdd_custom_params)) {
+                    $customParameters = (string) $user->pdd_custom_params;
+                }
+            }
+        }
+
+        if ($pid === '') {
+            $pid = $this->pddOfficial->getDefaultPid();
+        }
+        if ($customParameters === '') {
+            $customParameters = (string) $this->request->post('pdd_custom_parameters', 'naimeng01');
+        }
+
+        return [$pid, $customParameters];
+    }
+
+    /**
+     * 转链用 PID / custom_parameters：登录用户优先，否则 .env 平台 PID
+     *
+     * @return array{0:string,1:string}
+     */
+    protected function resolvePddPromotionParams(): array
+    {
+        $pid = (string) $this->request->post('pid', '');
+        $customParameters = (string) $this->request->post('custom_parameters', '');
+
+        if ($this->request->isLogin()) {
+            $user = \app\common\model\user\User::find((int) $this->request->uid());
+            if ($user) {
+                if ($pid === '' && !empty($user->pdd_pid)) {
+                    $pid = (string) $user->pdd_pid;
+                }
+                if ($customParameters === '' && !empty($user->pdd_custom_params)) {
+                    $customParameters = (string) $user->pdd_custom_params;
+                }
+            }
+        }
+
+        if ($pid === '') {
+            $pid = $this->pddOfficial->getDefaultPid();
+        }
+        if ($customParameters === '') {
+            $customParameters = (string) $this->request->post('pdd_custom_parameters', '');
+        }
+        if ($customParameters === '') {
+            $customParameters = $this->pddOfficial->getDefaultCustomParameters();
+        }
+
+        return [$pid, $customParameters];
+    }
+
      /**
      * 域名绑定拼多多推广链接
      * POST /api/taoke/goods/create_taobao_link
@@ -848,16 +1219,38 @@ class Goods extends BaseController
     public function jdGoodsDetail()
     {
         $itemIds = $this->request->post('itemIds', $this->request->post('skuIds', 0));
-        $summary = $this->request->post('summary', []);
-        if (is_string($summary)) {
-            $decoded = json_decode($summary, true);
-            $summary = is_array($decoded) ? $decoded : [];
+        $hints = array_filter([
+            'spuid' => (string) $this->request->post('spuid', ''),
+            'skuId' => (string) $this->request->post('skuId', $this->request->post('sku_id', '')),
+            'materialUrl' => (string) $this->request->post('materialUrl', ''),
+        ], static fn ($v) => $v !== '');
+        $useSummaryRaw = $this->request->post('use_summary', 1);
+        $useSummary = !in_array($useSummaryRaw, [0, '0', false, 'false', 'off', 'no'], true);
+        $summary = [];
+        if ($useSummary) {
+            $summary = $this->request->post('summary', []);
+            if (!is_array($summary) || $summary === []) {
+                $itemRaw = $this->request->post('item', '');
+                if (is_string($itemRaw) && $itemRaw !== '') {
+                    $decoded = json_decode($itemRaw, true);
+                    if (is_array($decoded)) {
+                        $summary = $decoded;
+                    }
+                }
+            }
         }
         try {
-            $list = $this->serviceGoodsRepository->fetchJdDetail($itemIds, is_array($summary) ? $summary : []);
+            $bundle = $this->serviceGoodsRepository->fetchJdDetailWithMeta($itemIds, $summary, $hints);
+            $meta = $bundle['meta'];
+            if (!$useSummary) {
+                $meta['summary_used'] = false;
+                $meta['summary_skipped'] = true;
+                $meta['pipeline'][] = 'debug: use_summary=false，仅 bigfield/hints/京粉兜底';
+            }
             return app('json')->success([
-                'list' => $list,
+                'list' => $bundle['list'],
                 '_source' => $this->serviceGoodsRepository->getJdDataSource(),
+                '_meta' => $meta,
             ]);
         } catch (\Exception $e) {
             Log::error('京东商品详情获取失败', [
