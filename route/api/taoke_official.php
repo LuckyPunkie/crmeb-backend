@@ -31,7 +31,11 @@ Route::group('taoke/official', function () {
         Route::post('kuaishou_goods_detail', 'api.taoke.OfficialGoods/kuaishouGoodsDetail');
         Route::post('create_kuaishou_link', 'api.taoke.OfficialGoods/createKuaishouLink');
 
+        Route::post('wph_goods', 'api.taoke.OfficialGoods/wphGoods');
+
         Route::post('category', 'api.taoke.OfficialGoods/category');
+        Route::post('aggregate_recommend', 'api.taoke.OfficialGoods/aggregateRecommend');
+        Route::post('brand_goods', 'api.taoke.OfficialGoods/brandGoods');
         Route::get('service_tabs', 'api.taoke.OfficialGoods/serviceTabs');
     })->middleware(UserTokenMiddleware::class, false);
 });

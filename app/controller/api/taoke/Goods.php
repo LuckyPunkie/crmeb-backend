@@ -72,7 +72,8 @@ class Goods extends BaseController
         $this->serviceBrandTabRepository = $serviceBrandTabRepository;
         $this->serviceTabConfigRepository = $serviceTabConfigRepository;
     }
-    
+
+    /** 推荐/品牌混排：固定各平台官方 TOP，不走 legacy 订单侠 */
     /*
     标签分类
     */
@@ -80,7 +81,9 @@ class Goods extends BaseController
     public function category() {
         $type =  $this->request->post('type', 'taobao'); 
         $data = [];
-        if ($type == 'taobao' || $type == 'wph') {
+        if ($type == 'taobao') {
+            $data = $this->getTaobaoCategoryTags();
+        } elseif ($type == 'wph') {
             $data = [
                 ['id' => 1, 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
                 ['id' => 2, 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
@@ -102,13 +105,8 @@ class Goods extends BaseController
                 ['id' => 5, 'text' => '食品零食', 'keyword' => '零食'],
             ];
         } elseif ($type == 'recommend') {
-            // 与淘宝一致的价格筛选
-            $data = [
-                ['id' => 1, 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
-                ['id' => 2, 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
-                ['id' => 3, 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
-                ['id' => 4, 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
-            ];
+            // 推荐 Tab 仅跨平台价格筛选，不带各平台类目
+            $data = $this->getTaobaoPriceTags();
         } elseif ($type == 'brand') {
             $config = $this->serviceBrandTabRepository->getPublicConfig();
             foreach ($config['brands'] as $idx => $brand) {
@@ -156,8 +154,9 @@ class Goods extends BaseController
     }
 
     /**
-     * 推荐：全平台商品汇总
+     * 推荐：全平台商品汇总（legacy 通道，订单侠/聚推客）
      * POST /api/taoke/goods/aggregate_recommend
+     * 官方直连：POST /api/taoke/official/goods/aggregate_recommend → OfficialGoods
      */
     public function aggregateRecommend()
     {
@@ -181,7 +180,12 @@ class Goods extends BaseController
             } else {
                 $list = $this->serviceGoodsRepository->aggregateRecommend($page, $limit, $platform);
             }
-            return app('json')->success(['list' => $list]);
+            $payload = ['list' => $list];
+            if ($this->goodsDriverChannel === 'official') {
+                $payload['_source'] = 'official';
+                $payload['channel'] = 'official';
+            }
+            return app('json')->success($payload);
         } catch (\Exception $e) {
             Log::error('服务页推荐汇总失败', ['error' => $e->getMessage()]);
             return app('json')->fail('获取推荐商品失败');
@@ -189,8 +193,9 @@ class Goods extends BaseController
     }
 
     /**
-     * 品牌类：按品牌名检索全平台商品
+     * 品牌类：按品牌名检索全平台商品（legacy）
      * POST /api/taoke/goods/brand_goods
+     * 官方直连：POST /api/taoke/official/goods/brand_goods → OfficialGoods
      */
     public function brandGoods()
     {
@@ -203,7 +208,12 @@ class Goods extends BaseController
         if ($keyword !== '') {
             try {
                 $list = $this->serviceGoodsRepository->searchByBrand($keyword, $page, $limit);
-                return app('json')->success(['list' => $list]);
+                $payload = ['list' => $list];
+                if ($this->goodsDriverChannel === 'official') {
+                    $payload['_source'] = 'official';
+                    $payload['channel'] = 'official';
+                }
+                return app('json')->success($payload);
             } catch (\Exception $e) {
                 Log::error('服务页品牌商品失败', ['keyword' => $keyword, 'error' => $e->getMessage()]);
                 return app('json')->fail('获取品牌商品失败');
@@ -216,7 +226,12 @@ class Goods extends BaseController
             if ($custom && !empty($custom['brands'])) {
                 try {
                     $list = $this->serviceGoodsRepository->searchByBrands($custom['brands'], $page, $limit);
-                    return app('json')->success(['list' => $list]);
+                    $payload = ['list' => $list];
+                    if ($this->goodsDriverChannel === 'official') {
+                        $payload['_source'] = 'official';
+                        $payload['channel'] = 'official';
+                    }
+                    return app('json')->success($payload);
                 } catch (\Exception $e) {
                     Log::error('服务页品牌多关键词聚合失败', ['tab_key' => $tabKey, 'error' => $e->getMessage()]);
                     return app('json')->fail('获取品牌商品失败');
@@ -232,7 +247,12 @@ class Goods extends BaseController
         }
         try {
             $list = $this->serviceGoodsRepository->searchByBrand($fallback, $page, $limit);
-            return app('json')->success(['list' => $list]);
+            $payload = ['list' => $list];
+            if ($this->goodsDriverChannel === 'official') {
+                $payload['_source'] = 'official';
+                $payload['channel'] = 'official';
+            }
+            return app('json')->success($payload);
         } catch (\Exception $e) {
             Log::error('服务页品牌兜底失败', ['error' => $e->getMessage()]);
             return app('json')->fail('获取品牌商品失败');
@@ -263,14 +283,14 @@ class Goods extends BaseController
      */
     public function taobao()
     {
-        $page = $this->request->param('page_no', 1);
-        $limit = $this->request->param('page_size', 20);
+        $page = (int) $this->request->param('page_no', 1);
+        $limit = (int) $this->request->param('page_size', 20);
         try {
-           // $result = $this->dingdanxiaService->taobaoOrderQuery($page, $limit,$start_time,$end_time);
-            $result = $this->dingdanxiaService->taobaoGoods($page, $limit);
-
-            return app('json')->success($result);
-
+            $list = $this->serviceGoodsRepository->searchPlatform('taobao', '', $page, $limit, 0);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getTaobaoDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('淘宝商品列表获取失败', [
                 'page' => $page,
@@ -285,38 +305,16 @@ class Goods extends BaseController
      */
     public function taobaoSearch()
     {
-        $page = $this->request->param('page', 1);
-        $limit = $this->request->param('limit', 10);
-        $q = $this->request->param('keyword', '');
-        $cat = $this->request->param('cat', 0);
+        $page = (int) $this->request->param('page', 1);
+        $limit = (int) $this->request->param('limit', 10);
+        $q = (string) $this->request->param('keyword', '');
+        $cat = (int) $this->request->param('cat', 0);
         try {
-            if ($q === '' || $q === null) {
-                $result = $this->dingdanxiaService->taobaoGoods((int)$page, (int)$limit);
-            } else {
-                $result = $this->dingdanxiaService->taobaoGoodsSearch($page, $limit, $q, $cat);
-            }
-            $data = [];
-            foreach ($result as $k => $val) {
-                // 确保 $val 是数组
-                if (!is_array($val)) {
-                    continue;
-                }
-
-                $itemBasic = $val['item_basic_info'] ?? [];
-                $priceInfo = $val['price_promotion_info'] ?? [];
-
-                $data[] = [
-                    'goods_id' => $val['item_id'] ?? '',
-                    'title' => $itemBasic['title'] ?? ($val['title'] ?? ''),
-                    'image' => $itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''),
-                    'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($val['volume'] ?? 0),
-                    'price' => $priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'),
-                    'ot_price' => $priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'),
-                ];
-            }
-
-            return app('json')->success(['list' => $data]);
-
+            $list = $this->serviceGoodsRepository->searchPlatform('taobao', $q, $page, $limit, $cat);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getTaobaoDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('淘宝商品搜索失败', [
                 'keyword' => $q,
@@ -427,6 +425,36 @@ class Goods extends BaseController
     }
 
 
+
+    /**
+     * 服务页通用价格 pill（推荐 Tab 仅用此项）
+     *
+     * @return list<array{id: string, text: string, keyword: string}>
+     */
+    protected function getTaobaoPriceTags(): array
+    {
+        return [
+            ['id' => 'tb_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+            ['id' => 'tb_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+            ['id' => 'tb_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+            ['id' => 'tb_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
+        ];
+    }
+
+    /**
+     * 淘宝 Tab：价格 pill + 联盟后台类目（itemcats.get）
+     */
+    protected function getTaobaoCategoryTags(): array
+    {
+        $priceTags = $this->getTaobaoPriceTags();
+        try {
+            $cats = $this->serviceGoodsRepository->getTaobaoCategoryTags();
+            return array_merge($priceTags, $cats ?: []);
+        } catch (\Throwable $e) {
+            Log::error('淘宝类目标签获取失败', ['error' => $e->getMessage()]);
+            return $priceTags;
+        }
+    }
 
     /**
      * 拼多多分类标签（订单侠 activity_tags，失败则兜底）
@@ -574,26 +602,47 @@ class Goods extends BaseController
         if ($goodsId === '') {
             return app('json')->fail('商品ID不能为空');
         }
+        $useSummaryRaw = $this->request->post('use_summary', 1);
+        $useSummary = !in_array($useSummaryRaw, [0, '0', false, 'false', 'off', 'no'], true);
+
         $title = (string)$this->request->post('title', $this->request->post('store_name', ''));
-        $summary = $this->request->post('summary', []);
-        if (is_string($summary)) {
-            $decoded = json_decode($summary, true);
-            $summary = is_array($decoded) ? $decoded : [];
+        $summary = [];
+        if ($useSummary) {
+            $summary = $this->request->post('summary', []);
+            if (is_string($summary)) {
+                $decoded = json_decode($summary, true);
+                $summary = is_array($decoded) ? $decoded : [];
+            }
+            if (!is_array($summary)) {
+                $summary = [];
+            }
+            $summary = $this->mergeTaobaoDetailSummaryFromRequest($summary, $goodsId, $title);
         }
 
         try {
-            $result = $this->serviceGoodsRepository->fetchTaobaoDetail(
+            $bundle = $this->serviceGoodsRepository->fetchTaobaoDetailWithMeta(
                 $goodsId,
-                $title,
-                is_array($summary) ? $summary : []
+                $useSummary ? $title : '',
+                $summary
             );
+            $result = $bundle['detail'];
             if (isset($result[0]) && is_array($result[0])) {
                 $result = $result[0];
             }
             if (!$result || !is_array($result)) {
                 return app('json')->fail('商品详情为空');
             }
-            return app('json')->success($result);
+            $meta = $bundle['meta'];
+            if (!$useSummary) {
+                $meta['summary_used'] = false;
+                $meta['summary_skipped'] = true;
+                $meta['pipeline'][] = 'debug: use_summary=false，前端不合并列表 summary';
+            }
+            return app('json')->success([
+                'detail' => $result,
+                '_source' => $this->serviceGoodsRepository->getTaobaoDataSource(),
+                '_meta' => $meta,
+            ]);
         } catch (\Exception $e) {
             Log::error('获取淘宝商品详情失败', [
                 'goods_id' => $goodsId,
@@ -601,6 +650,53 @@ class Goods extends BaseController
             ]);
             return app('json')->fail('获取商品详情失败');
         }
+    }
+
+    /**
+     * 详情 POST 未带 summary 时，用列表已知的标题/图/价补全（官方加密 item_id 场景）
+     */
+    protected function mergeTaobaoDetailSummaryFromRequest(array $summary, string $goodsId, string $title): array
+    {
+        $pick = function (array $keys) {
+            foreach ($keys as $key) {
+                $val = trim((string) $this->request->post($key, ''));
+                if ($val !== '') {
+                    return $val;
+                }
+            }
+            return '';
+        };
+
+        $merged = $summary;
+        if ($goodsId !== '') {
+            $merged['goods_id'] = $merged['goods_id'] ?? $goodsId;
+            $merged['item_id'] = $merged['item_id'] ?? $goodsId;
+        }
+        if ($title !== '') {
+            $merged['title'] = $merged['title'] ?? $title;
+            $merged['store_name'] = $merged['store_name'] ?? $title;
+        }
+        foreach ([
+            'image' => ['image', 'goods_pic', 'pict_url'],
+            'price' => ['price', 'final_promotion_price'],
+            'ot_price' => ['ot_price', 'reserve_price'],
+            'sales_text' => ['sales_text', 'annual_vol'],
+            'taoke_item_url' => ['taoke_item_url', 'item_url'],
+            'taoke_coupon_click_url' => ['taoke_coupon_click_url', 'coupon_click_url'],
+        ] as $field => $keys) {
+            if (!empty($merged[$field])) {
+                continue;
+            }
+            $val = $pick($keys);
+            if ($val !== '') {
+                $merged[$field] = $val;
+            }
+        }
+        if (empty($merged['sales']) && $this->request->post('sales', '') !== '') {
+            $merged['sales'] = (int) $this->request->post('sales', 0);
+        }
+
+        return $merged;
     }
 
      /**
@@ -1371,30 +1467,22 @@ class Goods extends BaseController
      */
     public function wphGoods()
     {
-        $page = $this->request->post('page_no', 1);
-        $limit = $this->request->post('page_size', 20);
-        $keyword = $this->request->post('keyword', '');
-        if (empty($keyword)) {
+        $page = (int) $this->request->post('page_no', $this->request->post('page', 1));
+        $limit = (int) $this->request->post('page_size', $this->request->post('limit', 20));
+        $keyword = (string) $this->request->post('keyword', '');
+        if ($keyword === '') {
             $keyword = '热销';
         }
         try {
-            $result = $this->dingdanxiaService->wphGoods($keyword,$page, $limit);
-            $data = [];
-            foreach ($result as $k => $val) {
-                 $data[] = [
-                    'goods_id' => $val['goodsId'] ?? '0',
-                    'title' => $val['goodsName'] ?? '',
-                    'image' => $val['goodsMainPicture'] ?? '',
-                    'sales' => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
-                    'price' => $val['vipPrice'] ?? '0.00',
-                    'ot_price' => $val['marketPrice'] ?? '0.00',
-                    'is_hot' =>  '0',
-                ];
+            $list = $this->serviceGoodsRepository->searchPlatform('wph', $keyword, $page, $limit);
+            $payload = [
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getWphDataSource(),
+            ];
+            if ($this->goodsDriverChannel === 'official') {
+                $payload['channel'] = 'official';
             }
-
-            return app('json')->success(['list'=>$data]);
-
-
+            return app('json')->success($payload);
         } catch (\Exception $e) {
             Log::error('唯品商品列表获取失败', [
                 'keyword' => $keyword,

@@ -324,6 +324,42 @@ class JdOfficialService extends BaseServices
     }
 
     /**
+     * 多频道京粉合并召回（goods.query 未开通时，供价格 pill 本地分档过滤）
+     */
+    public function fetchFeedPool(int $pageIndex = 1, int $maxItems = 80): array
+    {
+        $maxItems = max(20, min(150, $maxItems));
+        $eliteIds = [22, 2, 1, 3, 10, 30];
+        $merged = [];
+        $seen = [];
+        foreach ($eliteIds as $eliteId) {
+            if (count($merged) >= $maxItems) {
+                break;
+            }
+            $pageSize = min(50, $maxItems - count($merged));
+            $rows = $this->parseBizPayload($this->goodsJingfen($eliteId, $pageIndex, $pageSize));
+            if (empty($rows)) {
+                continue;
+            }
+            foreach ($rows as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $id = (string) ($row['itemId'] ?? ($row['skuId'] ?? ''));
+                if ($id === '' || isset($seen[$id])) {
+                    continue;
+                }
+                $seen[$id] = true;
+                $merged[] = $row;
+                if (count($merged) >= $maxItems) {
+                    break 2;
+                }
+            }
+        }
+        return $merged;
+    }
+
+    /**
      * 关键词搜索（需账号开通 goods.query；未开通时返回空数组）
      */
     public function fetchSearch(string $keyword, int $page = 1, int $pageSize = 20): array

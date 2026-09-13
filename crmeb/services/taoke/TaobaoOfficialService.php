@@ -4,6 +4,7 @@ namespace crmeb\services\taoke;
 
 use crmeb\basic\BaseServices;
 use GuzzleHttp\Client;
+use think\facade\Cache;
 use think\facade\Log;
 
 /**
@@ -114,15 +115,110 @@ class TaobaoOfficialService extends BaseServices
      * 关键词搜索（需权限包 16516 物料搜索；用 upgrade 版，旧版 optional 已限权）
      * method: taobao.tbk.dg.material.optional.upgrade
      */
-    public function materialOptional(string $q, int $page = 1, int $pageSize = 20): array
+    public function materialOptional(string $q, int $page = 1, int $pageSize = 20, string $cat = ''): array
     {
-        return $this->call('taobao.tbk.dg.material.optional.upgrade', [
-            'q'          => $q,
+        $biz = [
             'page_no'    => $page,
             'page_size'  => $pageSize,
             'adzone_id'  => $this->adzoneId,
             'platform'   => '2',
-        ]);
+        ];
+        $q = trim($q);
+        if ($q !== '') {
+            $biz['q'] = $q;
+        }
+        $cat = trim($cat);
+        if ($cat !== '') {
+            $biz['cat'] = $cat;
+        }
+        return $this->call('taobao.tbk.dg.material.optional.upgrade', $biz);
+    }
+
+    /**
+     * 淘宝商品后台类目（一级），供 Tab 筛选；cid 用于 optional.upgrade 的 cat 参数
+     * method: taobao.itemcats.get
+     */
+    public function itemCatsGet(int $parentCid = 0): array
+    {
+        // 公开类目接口，勿带推广者 session（过期 session 会导致 Invalid session）
+        return $this->call('taobao.itemcats.get', [
+            'parent_cid' => $parentCid,
+            'fields'     => 'cid,parent_cid,name,is_parent',
+        ], false, true);
+    }
+
+    /**
+     * @return array<int, array{id: int|string, text: string}>
+     */
+    public function fetchTopCategoryTags(int $limit = 16): array
+    {
+        $limit = max(4, min(24, $limit));
+        $cacheKey = 'taoke_taobao_itemcats_top_' . $limit;
+        $cached = Cache::get($cacheKey);
+        if (is_array($cached) && $cached !== []) {
+            return $cached;
+        }
+
+        $tags = $this->parseItemCatTags($this->itemCatsGet(0), $limit);
+        if ($tags === []) {
+            $tags = $this->fallbackTopCategoryTags();
+        }
+        if ($tags !== []) {
+            Cache::set($cacheKey, $tags, 86400);
+        }
+        return $tags;
+    }
+
+    /**
+     * @return array<int, array{id: int, text: string}>
+     */
+    protected function fallbackTopCategoryTags(): array
+    {
+        return [
+            ['id' => 16, 'text' => '女装/女士精品'],
+            ['id' => 30, 'text' => '男装'],
+            ['id' => 50006843, 'text' => '女鞋'],
+            ['id' => 50011740, 'text' => '男装/男鞋'],
+            ['id' => 1101, 'text' => '笔记本电脑'],
+            ['id' => 1512, 'text' => '手机'],
+            ['id' => 50008163, 'text' => '床上用品'],
+            ['id' => 50013886, 'text' => '户外/登山'],
+            ['id' => 50010788, 'text' => '彩妆/香水'],
+            ['id' => 50002766, 'text' => '零食/坚果'],
+            ['id' => 122952001, 'text' => '餐饮具'],
+            ['id' => 25, 'text' => '玩具/童车'],
+        ];
+    }
+
+    /**
+     * @return array<int, array{id: int, text: string}>
+     */
+    protected function parseItemCatTags(array $response, int $limit): array
+    {
+        $root = $response['itemcats_get_response'] ?? $response;
+        $itemCats = $root['item_cats']['item_cat'] ?? ($root['item_cats'] ?? []);
+        if (!is_array($itemCats)) {
+            return [];
+        }
+        if (isset($itemCats['cid'])) {
+            $itemCats = [$itemCats];
+        }
+        $tags = [];
+        foreach ($itemCats as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $cid = (int) ($row['cid'] ?? 0);
+            $name = trim((string) ($row['name'] ?? ''));
+            if ($cid <= 0 || $name === '') {
+                continue;
+            }
+            $tags[] = ['id' => $cid, 'text' => $name];
+            if (count($tags) >= $limit) {
+                break;
+            }
+        }
+        return $tags;
     }
 
     /**
@@ -202,48 +298,107 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
-     * 关键词搜索（空词回落物料推荐）
+     * 关键词 / 后台类目筛选（空词且无类目则物料推荐榜）
      */
-    public function fetchSearch(string $keyword, int $page = 1, int $pageSize = 20): array
+    public function fetchSearch(string $keyword, int $page = 1, int $pageSize = 20, int $catId = 0): array
     {
         $keyword = trim($keyword);
-        if ($keyword === '') {
+        $cat = $catId > 0 ? (string) $catId : '';
+        if ($keyword === '' && $cat === '') {
             return $this->fetchFeed($page, $pageSize);
         }
-        return $this->parseRows($this->materialOptional($keyword, $page, $pageSize));
+        if ($keyword === '' && $cat !== '') {
+            return $this->parseRows($this->materialOptional('', $page, $pageSize, $cat));
+        }
+        return $this->parseRows($this->materialOptional($keyword, $page, $pageSize, $cat));
     }
 
     /**
      * 商品详情：数字 num_iid 走 item.info；加密 item_id 优先 summary，再搜索兜底
+     *
+     * @return array<int, array<string, mixed>>
      */
     public function fetchDetail(string $goodsId, string $title = '', array $summary = []): array
     {
+        return $this->fetchDetailWithMeta($goodsId, $title, $summary)['rows'];
+    }
+
+    /**
+     * @return array{rows: array<int, array<string, mixed>>, meta: array<string, mixed>}
+     */
+    public function fetchDetailWithMeta(string $goodsId, string $title = '', array $summary = []): array
+    {
         $goodsId = trim($goodsId);
+        $meta = [
+            'goods_id'            => $goodsId,
+            'gateway'             => $this->apiUrl,
+            'platform_only'       => true,
+            'summary_used'        => false,
+            'detail_from'         => '',
+            'top_method'          => '',
+            'pipeline'            => [],
+            'official_fetch_empty' => false,
+            'note'                => 'detail 字段为淘宝 TOP 响应归一化；platform_only=true 表示非客户端 summary 拼装、非订单侠。',
+        ];
+
         if ($goodsId === '') {
-            return [];
+            $meta['official_fetch_empty'] = true;
+            $meta['pipeline'][] = 'abort: empty goods_id';
+            return ['rows' => [], 'meta' => $meta];
         }
 
         if ($this->hasSummary($summary)) {
-            return [$this->buildDetailFromSummary($summary, $goodsId)];
+            $meta['summary_used'] = true;
+            $meta['platform_only'] = false;
+            $meta['detail_from'] = 'summary.client';
+            $meta['top_method'] = '';
+            $meta['pipeline'][] = 'buildDetailFromSummary（POST summary，非 TOP 直出）';
+            $row = $this->buildDetailFromSummary($summary, $goodsId);
+            return ['rows' => [$row], 'meta' => $meta];
         }
 
-        if (ctype_digit($goodsId)) {
-            $rows = $this->parseRows($this->itemInfo($goodsId));
-            if (!empty($rows)) {
-                return $rows;
-            }
+        $meta['pipeline'][] = 'TaobaoOfficialService::itemInfo num_iids=' . $goodsId;
+        $infoRows = $this->parseRows($this->itemInfo($goodsId));
+        if (!empty($infoRows)) {
+            $meta['detail_from'] = 'taobao.tbk.item.info.get';
+            $meta['top_method'] = 'taobao.tbk.item.info.get';
+            $meta['pipeline'][] = 'hit: tbk.item.info.get';
+            return ['rows' => $this->wrapItemInfoDetailRows($infoRows, $goodsId), 'meta' => $meta];
         }
+        $meta['pipeline'][] = 'miss: tbk.item.info.get';
+
+        $meta['pipeline'][] = 'findMaterialRowByItemId(material.recommend / optional.upgrade)';
+        $materialRow = $this->findMaterialRowByItemId($goodsId, $title);
+        if ($materialRow !== []) {
+            $via = (string) ($materialRow['_detail_via'] ?? 'taobao.tbk.dg.material.upgrade');
+            $meta['detail_from'] = $via;
+            $meta['top_method'] = $via;
+            $meta['pipeline'][] = 'hit: ' . $via;
+            if (!isset($materialRow['_source'])) {
+                $materialRow['_source'] = 'official';
+            }
+            return ['rows' => [$materialRow], 'meta' => $meta];
+        }
+        $meta['pipeline'][] = 'miss: material row by item_id';
 
         $q = trim($title) !== '' ? trim($title) : $goodsId;
+        $meta['pipeline'][] = 'fetchSearch q=' . mb_substr($q, 0, 48);
         $rows = $this->fetchSearch($q, 1, 1);
         if (!empty($rows[0]) && is_array($rows[0])) {
             if (empty($rows[0]['item_id'])) {
                 $rows[0]['item_id'] = $goodsId;
             }
-            return [$rows[0]];
+            $meta['detail_from'] = 'taobao.tbk.dg.material.optional.upgrade';
+            $meta['top_method'] = 'taobao.tbk.dg.material.optional.upgrade';
+            $meta['pipeline'][] = 'hit: material.optional.upgrade search';
+            $rows[0]['_source'] = $rows[0]['_source'] ?? 'official';
+            $rows[0]['_detail_via'] = $rows[0]['_detail_via'] ?? 'tbk.dg.material.optional.upgrade';
+            return ['rows' => [$rows[0]], 'meta' => $meta];
         }
 
-        return [];
+        $meta['official_fetch_empty'] = true;
+        $meta['pipeline'][] = 'all official paths empty';
+        return ['rows' => [], 'meta' => $meta];
     }
 
     /**
@@ -272,6 +427,92 @@ class TaobaoOfficialService extends BaseServices
             return [];
         }
         return $this->buildLinkPayloadFromMaterialRow($row);
+    }
+
+    /**
+     * 详情 item.info 返回的 item_url（常为 uland/edetail），物料查不到 publish_info 时兜底
+     */
+    public function createLinkFromItemInfo(string $itemId): array
+    {
+        $itemId = trim($itemId);
+        if ($itemId === '') {
+            return [];
+        }
+        $rows = $this->parseRows($this->itemInfo($itemId));
+        if (empty($rows[0]) || !is_array($rows[0])) {
+            return [];
+        }
+        $row = $rows[0];
+        $url = $this->normalizeTbkUrl((string) ($row['item_url'] ?? ''));
+        if ($url === '') {
+            return [];
+        }
+        $title = (string) ($row['title'] ?? '');
+        $payload = [
+            'item_id'          => $itemId,
+            'item_url'         => $url,
+            'coupon_click_url' => $url,
+            '_source'          => 'official',
+            '_link_via'        => 'tbk.item.info.get.item_url',
+        ];
+        return $this->attachTpwdToLinkPayload($payload, $title);
+    }
+
+    /**
+     * 推广链接在微信/淘宝内需用淘口令打开；对 s.click / uland 等 URL 调 tpwd.create
+     */
+    public function attachTpwdToLinkPayload(array $payload, string $title = ''): array
+    {
+        if ($payload === []) {
+            return [];
+        }
+        if (!empty($payload['tpwd']) || !empty($payload['item_tpwd']) || !empty($payload['taoke_item_tpwd'])) {
+            return $payload;
+        }
+        $url = trim((string) ($payload['coupon_click_url'] ?? ($payload['item_url'] ?? '')));
+        if ($url === '') {
+            return $payload;
+        }
+        $text = trim($title);
+        if ($text === '') {
+            $text = trim((string) ($payload['itemInfo']['title'] ?? ''));
+        }
+        if ($text === '') {
+            $text = '查看详情';
+        }
+        if (function_exists('mb_substr')) {
+            $text = mb_substr($text, 0, 20);
+        } else {
+            $text = substr($text, 0, 20);
+        }
+        $model = $this->parseTpwdModel($this->tpwdCreate($text, $url));
+        if ($model === '') {
+            return $payload;
+        }
+        $payload['tpwd'] = $model;
+        $payload['item_tpwd'] = $model;
+        $payload['taoke_item_tpwd'] = $model;
+        $payload['_tpwd_via'] = 'taobao.tbk.tpwd.create';
+        return $payload;
+    }
+
+    protected function parseTpwdModel(array $response): string
+    {
+        if (isset($response['error_response']) || !is_array($response)) {
+            return '';
+        }
+        foreach ($response as $key => $inner) {
+            if (!is_array($inner) || strpos((string) $key, '_response') === false) {
+                continue;
+            }
+            if (isset($inner['data']['model'])) {
+                return (string) $inner['data']['model'];
+            }
+            if (isset($inner['model'])) {
+                return (string) $inner['model'];
+            }
+        }
+        return '';
     }
 
     /**
@@ -401,9 +642,50 @@ class TaobaoOfficialService extends BaseServices
         return $url;
     }
 
-    protected function hasSummary(array $summary): bool
+    public function hasSummary(array $summary): bool
     {
         return trim((string) ($summary['title'] ?? ($summary['store_name'] ?? ($summary['image'] ?? '')))) !== '';
+    }
+
+    /**
+     * taobao.tbk.item.info.get 旧版 n_tbk_item → 与物料升级版接近的结构，供 uniapp normalize
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function wrapItemInfoDetailRows(array $rows, string $requestedId): array
+    {
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $numIid = (string) ($row['num_iid'] ?? ($row['input_num_iid'] ?? ''));
+            $itemId = trim($requestedId) !== '' ? trim($requestedId) : $numIid;
+            $small = $row['small_images']['string'] ?? $row['small_images'] ?? [];
+            if (!is_array($small)) {
+                $small = [];
+            }
+            $out[] = [
+                'item_id'          => $itemId,
+                'num_iid'          => $numIid,
+                'item_basic_info'  => [
+                    'title'        => (string) ($row['title'] ?? ''),
+                    'pict_url'     => (string) ($row['pict_url'] ?? ''),
+                    'small_images' => ['string' => $small],
+                    'nick'         => (string) ($row['nick'] ?? ''),
+                    'volume'       => (int) ($row['volume'] ?? 0),
+                ],
+                'price_promotion_info' => [
+                    'final_promotion_price' => (string) ($row['zk_final_price'] ?? ($row['reserve_price'] ?? '')),
+                    'reserve_price'         => (string) ($row['reserve_price'] ?? ''),
+                ],
+                'item_url'     => (string) ($row['item_url'] ?? ''),
+                '_source'      => 'official',
+                '_detail_via'  => 'tbk.item.info.get',
+            ];
+        }
+        return $out;
     }
 
     protected function buildDetailFromSummary(array $summary, string $goodsId): array
@@ -424,6 +706,8 @@ class TaobaoOfficialService extends BaseServices
                 'final_promotion_price' => (string) ($summary['price'] ?? '0.00'),
                 'reserve_price' => (string) ($summary['ot_price'] ?? '0.00'),
             ],
+            '_source' => 'official',
+            '_detail_via' => 'summary.client',
         ];
     }
 
@@ -644,7 +928,7 @@ class TaobaoOfficialService extends BaseServices
 
     // ==================== 底层 ====================
 
-    protected function call(string $method, array $bizData, bool $requireSession = false): array
+    protected function call(string $method, array $bizData, bool $requireSession = false, bool $omitSession = false): array
     {
         if ($this->appKey === '' || $this->appSecret === '') {
             throw new \think\exception\ValidateException('淘宝联盟 appKey/appSecret 未配置');
@@ -655,17 +939,17 @@ class TaobaoOfficialService extends BaseServices
             return ['error_response' => ['code' => 26, 'msg' => 'Missing session', 'sub_msg' => 'TAOBAO_SESSION 未配置或 refresh 失败']];
         }
 
-        $result = $this->executeCall($method, $bizData);
+        $result = $this->executeCall($method, $bizData, $omitSession);
         if ($requireSession && $this->isSessionError($result) && $this->refreshToken !== '') {
             $refresh = $this->refreshAccessToken();
             if (!empty($refresh['access_token'])) {
-                $result = $this->executeCall($method, $bizData);
+                $result = $this->executeCall($method, $bizData, $omitSession);
             }
         }
         return $result;
     }
 
-    protected function executeCall(string $method, array $bizData): array
+    protected function executeCall(string $method, array $bizData, bool $omitSession = false): array
     {
         $sysParams = [
             'method'      => $method,
@@ -675,7 +959,7 @@ class TaobaoOfficialService extends BaseServices
             'v'           => '2.0',
             'sign_method' => 'md5',
         ];
-        if ($this->session !== '') {
+        if (!$omitSession && $this->session !== '') {
             $sysParams['session'] = $this->session;
         }
         $allParams = array_merge($sysParams, $bizData);

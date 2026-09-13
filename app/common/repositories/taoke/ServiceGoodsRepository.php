@@ -59,6 +59,17 @@ class ServiceGoodsRepository
         return $this->driverChannel !== 'official';
     }
 
+    /** official 路由：列表/搜索禁止订单侠、聚推客聚合 */
+    protected function blocksLegacyAggregator(): bool
+    {
+        return $this->driverChannel === 'official';
+    }
+
+    public function getWphDataSource(): string
+    {
+        return $this->blocksLegacyAggregator() ? 'official' : 'legacy';
+    }
+
     /**
      * official 列表：透传平台 API 原字段，仅补 platform / _source 便于混排去重与前端识别
      *
@@ -97,7 +108,8 @@ class ServiceGoodsRepository
 
     public function isTaobaoOfficial(): bool
     {
-        return $this->useOfficialFor('taobao');
+        // 淘宝固定走联盟 TOP（/taoke/official/goods 与物料/详情/转链一致），不调用订单侠
+        return true;
     }
 
     public function getTaobaoDataSource(): string
@@ -186,6 +198,19 @@ class ServiceGoodsRepository
     /**
      * 拼多多高佣转链
      */
+    /**
+     * 淘宝一级后台类目（TOP itemcats.get），用于 Tab cat 参数
+     *
+     * @return array<int, array{id: int|string, text: string}>
+     */
+    public function getTaobaoCategoryTags(): array
+    {
+        if (!$this->isTaobaoOfficial()) {
+            return [];
+        }
+        return $this->taobaoOfficial->fetchTopCategoryTags();
+    }
+
     public function getKuaishouChannelTags(): array
     {
         if (!$this->isKuaishouOfficial()) {
@@ -634,18 +659,48 @@ class ServiceGoodsRepository
      */
     public function fetchTaobaoDetail(string $goodsId, string $title = '', array $summary = []): array
     {
+        return $this->fetchTaobaoDetailWithMeta($goodsId, $title, $summary)['detail'];
+    }
+
+    /**
+     * @return array{detail: array<string, mixed>, meta: array<string, mixed>}
+     */
+    public function fetchTaobaoDetailWithMeta(string $goodsId, string $title = '', array $summary = []): array
+    {
+        $goodsId = trim($goodsId);
+        $summary = is_array($summary) ? $summary : [];
+        $meta = [
+            'goods_id' => $goodsId,
+            'driver' => $this->getTaobaoDataSource(),
+            'summary_used' => $summary !== [] && $this->taobaoOfficial->hasSummary($summary),
+            'pipeline' => [],
+            'legacy_full_fallback' => false,
+            'official_fetch_empty' => false,
+            'detail_from' => '',
+            'top_method' => '',
+            'gateway' => 'https://eco.taobao.com/router/rest',
+            'platform_only' => true,
+            'note' => 'official 通道禁止订单侠时，detail 仅来自 TOP；platform_only=false 表示 summary 或 legacy。',
+        ];
+
         if ($this->isTaobaoOfficial()) {
-            $rows = $this->taobaoOfficial->fetchDetail($goodsId, $title, $summary);
-            if (!empty($rows[0]) && is_array($rows[0])) {
-                return $rows[0];
+            $bundle = $this->taobaoOfficial->fetchDetailWithMeta($goodsId, $title, $summary);
+            $meta = array_merge($meta, $bundle['meta']);
+            $meta['driver'] = 'official';
+            $row = $bundle['rows'][0] ?? [];
+            if (is_array($row) && $row !== []) {
+                $meta['detail_from'] = $meta['detail_from'] ?: (string) ($row['_detail_via'] ?? '');
+                $meta['platform_only'] = ($meta['summary_used'] ?? false) ? false : (bool) ($meta['platform_only'] ?? true);
+                return ['detail' => $row, 'meta' => $meta];
             }
-            if (!$this->allowLegacyFallback()) {
-                return [];
-            }
-            // [官方直连切换 2026-09-09] 权限未开或加密 ID 查不到时回退订单侠：
-            return $this->dingdanxia->taobaoGoodsDetail($goodsId, $title);
+            $meta['official_fetch_empty'] = true;
+            $meta['pipeline'][] = '淘宝官方 TOP 无结果（不调用订单侠）';
+            return ['detail' => [], 'meta' => $meta];
         }
-        return $this->dingdanxia->taobaoGoodsDetail($goodsId, $title);
+
+        $meta['official_fetch_empty'] = true;
+        $meta['pipeline'][] = '淘宝仅官方 TOP（不调用订单侠）';
+        return ['detail' => [], 'meta' => $meta];
     }
 
     /**
@@ -656,19 +711,19 @@ class ServiceGoodsRepository
         if ($this->isTaobaoOfficial()) {
             $cached = $this->buildTaobaoLinkFromHints($goodsId, $hints);
             if ($cached !== []) {
-                return $cached;
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($cached, $title);
             }
             $link = $this->taobaoOfficial->createPromotionLink($goodsId, $title);
             if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
-                return $link;
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
             }
-            if (!$this->allowLegacyFallback()) {
-                return [];
+            $link = $this->taobaoOfficial->createLinkFromItemInfo($goodsId);
+            if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
             }
-            // [官方直连] privilege.get / general.link.convert 已不可用；物料接口仍无链接时再回退订单侠
-            return $this->dingdanxia->taobaoHighCommission($goodsId, $relateId);
+            return [];
         }
-        return $this->dingdanxia->taobaoHighCommission($goodsId, $relateId);
+        return [];
     }
 
     /** 列表/详情已带物料升级版 publish_info 链接时直接复用，避免二次请求拿不到同一商品 */
@@ -733,20 +788,72 @@ class ServiceGoodsRepository
     }
 
     /**
+     * 混排涉及的平台（official 不含抖音：暂无联盟直连，避免掺订单侠）
+     *
+     * @return list<string>
+     */
+    protected function crossPlatformKeys(string $platformFilter = ''): array
+    {
+        $all = $this->driverChannel === 'official'
+            ? ['taobao', 'jd', 'pdd', 'kuaishou']
+            : ['taobao', 'jd', 'pdd', 'kuaishou', 'douyin'];
+        $platformFilter = strtolower(trim($platformFilter));
+        if ($platformFilter !== '') {
+            return in_array($platformFilter, $all, true) ? [$platformFilter] : [];
+        }
+        return $all;
+    }
+
+    /**
+     * 多平台列表交错混排，避免 concat 后 array_slice 只保留前两个平台
+     *
+     * @param array<int, array<int, array<string, mixed>>> $buckets
+     */
+    protected function interleavePlatformBuckets(array $buckets): array
+    {
+        $out = [];
+        $maxLen = 0;
+        foreach ($buckets as $bucket) {
+            if (!is_array($bucket)) {
+                continue;
+            }
+            $maxLen = max($maxLen, count($bucket));
+        }
+        for ($i = 0; $i < $maxLen; $i++) {
+            foreach ($buckets as $bucket) {
+                if (isset($bucket[$i]) && is_array($bucket[$i])) {
+                    $out[] = $bucket[$i];
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<string> $platforms
+     */
+    protected function perPlatformLimitForMix(int $limit, array $platforms): int
+    {
+        $n = count($platforms);
+        if ($n <= 0) {
+            return $limit;
+        }
+        return max(1, (int) ceil($limit / $n));
+    }
+
+    /**
      * 推荐：多平台汇总
      */
     public function aggregateRecommend(int $page = 1, int $limit = 20, string $platform = ''): array
     {
-        $platform = strtolower(trim($platform));
-        $per = max(4, (int)ceil($limit / 2));
-        $list = [];
-
-        $platforms = $platform !== '' ? [$platform] : ['taobao', 'jd', 'pdd', 'kuaishou', 'douyin'];
+        $platforms = $this->crossPlatformKeys($platform);
+        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        $buckets = [];
         foreach ($platforms as $item) {
-            $list = array_merge($list, $this->safePlatformFeed($item, $page, $per));
+            $buckets[] = $this->safePlatformFeed($item, $page, $per);
         }
 
-        return array_slice($this->uniqueList($list), 0, $limit);
+        return array_slice($this->uniqueList($this->interleavePlatformBuckets($buckets)), 0, $limit);
     }
 
     /**
@@ -758,12 +865,13 @@ class ServiceGoodsRepository
         if ($keyword === '') {
             return [];
         }
-        $per = max(4, (int)ceil($limit / 2));
-        $list = [];
-        foreach (['taobao', 'jd', 'pdd', 'kuaishou', 'douyin'] as $platform) {
-            $list = array_merge($list, $this->safePlatformSearch($platform, $keyword, $page, $per));
+        $platforms = $this->crossPlatformKeys('');
+        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        $buckets = [];
+        foreach ($platforms as $platform) {
+            $buckets[] = $this->safePlatformSearch($platform, $keyword, $page, $per);
         }
-        return array_slice($this->uniqueList($list), 0, $limit);
+        return array_slice($this->uniqueList($this->interleavePlatformBuckets($buckets)), 0, $limit);
     }
 
     /**
@@ -798,20 +906,9 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
-                    if ($this->isTaobaoOfficial()) {
-                        $list = $this->tagOfficialPlatformList(
-                            $this->taobaoOfficial->fetchFeed($page, $limit, (int) $cate),
-                            'taobao'
-                        );
-                        if (!empty($list)) {
-                            return $list;
-                        }
-                        if (!$this->allowLegacyFallback()) {
-                            return [];
-                        }
-                        // [官方直连切换 2026-09-09] 原订单侠调用（driver_taobao=legacy 或 official 空结果时）：
-                    }
-                    return $this->normalizeTaobao($this->dingdanxia->taobaoGoods($page, $limit));
+                    return $this->normalizeTaobao(
+                        $this->taobaoOfficial->fetchSearch('', $page, $limit, (int) $cate)
+                    );
                 case 'jd':
                     if ($this->isJdOfficial()) {
                         $list = $this->normalizeJd(
@@ -853,8 +950,13 @@ class ServiceGoodsRepository
                         );
                     }
                     return [];
+                case 'wph':
+                    if ($this->blocksLegacyAggregator()) {
+                        return [];
+                    }
+                    return $this->normalizeWph($this->dingdanxia->wphGoods('热销', $page, $limit));
                 case 'douyin':
-                    return $this->fetchDouyinList($keyword, $page, $limit);
+                    return $this->fetchDouyinList('', $page, $limit);
                 default:
                     return [];
             }
@@ -869,47 +971,61 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
-                    if ($this->isTaobaoOfficial()) {
-                        $list = $this->tagOfficialPlatformList(
-                            $this->taobaoOfficial->fetchSearch($keyword, $page, $limit),
-                            'taobao'
-                        );
-                        if (!empty($list)) {
-                            return $list;
-                        }
-                        if (!$this->allowLegacyFallback()) {
-                            return [];
-                        }
-                        // [官方直连切换 2026-09-09] 原订单侠调用：
-                    }
-                    return $this->normalizeTaobao($this->dingdanxia->taobaoGoodsSearch($page, $limit, $keyword));
+                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
+                    $rows = $this->taobaoOfficial->fetchSearch($keyword, $page, $fetchLimit, (int) $cate);
+                    $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'taobao');
+                    return $this->normalizeTaobao(array_slice($rows, 0, $limit));
                 case 'jd':
+                    $tierLabel = $this->resolvePriceTierLabel($keyword);
+                    $fetchLimit = $tierLabel !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
                     if ($this->isJdOfficial()) {
-                        return $this->normalizeJd(
-                            $this->jdOfficial->fetchSearch($keyword, $page, $limit)
+                        $raw = $this->jdOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        // 线上账号 goods.query 常未开通；价格 pill 改京粉池 + 券后价分档
+                        if ($raw === [] && $tierLabel !== null) {
+                            $poolSize = min(150, max(80, $fetchLimit * 5));
+                            $raw = $this->jdOfficial->fetchFeedPool($page, $poolSize);
+                        }
+                        $list = $this->normalizeJd($raw);
+                    } else {
+                        // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
+                        $list = $this->normalizeJd(
+                            $this->dingdanxia->jdGoodsSearch($keyword, $page, $fetchLimit)
                         );
                     }
-                    // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
-                    return $this->normalizeJd($this->dingdanxia->jdGoodsSearch($keyword, $page, $limit));
+                    $list = $this->filterItemsByPriceKeyword($list, $keyword, 'jd');
+                    return array_slice($list, 0, $limit);
                 case 'pdd':
+                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
                     if ($this->isPddOfficial()) {
-                        $rows = $this->pddOfficial->fetchSearch($keyword, $page, $limit);
-                        $rows = $this->filterPddOfficialListByPriceKeyword($rows, $keyword);
-                        return $this->normalizePdd($rows);
+                        $rows = $this->pddOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'pdd');
+                        return $this->normalizePdd(array_slice($rows, 0, $limit));
                     }
-                    $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $limit);
-                    return $this->normalizePddSearch($raw);
+                    $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $fetchLimit);
+                    $list = $this->normalizePddSearch($raw);
+                    $list = $this->filterItemsByPriceKeyword($list, $keyword, 'pdd');
+                    return array_slice($list, 0, $limit);
                 case 'kuaishou':
                     if ($this->isKuaishouOfficial()) {
                         $channelId = (int) $cate;
-                        return $this->normalizeKuaishou(
+                        $list = $this->normalizeKuaishou(
                             $this->kuaishouOfficial->fetchSearch($keyword, $page, $limit, $channelId, $rangeList)
                         );
+                        return $this->filterItemsByPriceKeyword($list, $keyword, 'kuaishou');
                     }
                     return [];
                 case 'douyin':
                     return $this->fetchDouyinList($keyword, $page, $limit);
                 case 'wph':
+                    if ($this->blocksLegacyAggregator()) {
+                        return [];
+                    }
                     return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
                 default:
                     return [];
@@ -962,8 +1078,8 @@ class ServiceGoodsRepository
             if ($goodsId === '') {
                 continue;
             }
-            $title = (string)($itemBasic['title'] ?? ($val['title'] ?? ''));
-            $image = (string)($itemBasic['pict_url'] ?? ($val['pict_url'] ?? ''));
+            $title = (string)($itemBasic['title'] ?? ($itemBasic['short_title'] ?? ($val['title'] ?? '')));
+            $image = $this->normalizeTbkAffiliateUrl((string)($itemBasic['pict_url'] ?? ($itemBasic['white_image'] ?? ($val['pict_url'] ?? ''))));
             $sales = isset($itemBasic['tk_total_sales'])
                 ? (int)$itemBasic['tk_total_sales']
                 : (int)($itemBasic['volume'] ?? ($val['volume'] ?? 0));
@@ -977,7 +1093,9 @@ class ServiceGoodsRepository
                 'platform' => 'taobao',
                 '_source' => $source,
                 'goods_id' => $goodsId,
+                'item_id' => $goodsId,
                 'title' => $title,
+                'store_name' => $title,
                 'image' => $image,
                 'sales' => $sales,
                 'sales_text' => $salesText,
@@ -1071,50 +1189,138 @@ class ServiceGoodsRepository
         return $list;
     }
 
+    /** @return list<string> */
+    protected function priceTierLabelsAsc(): array
+    {
+        return ['9.9', '19.9', '29.9', '39.9'];
+    }
+
     /**
-     * 价格筛选 pill（9.9/19.9 等）：搜索词粗召回后再按券后价（分）收窄
+     * 从 pill 文案解析档位（长串优先，避免 29.9 命中 9.9）
      */
-    protected function filterPddOfficialListByPriceKeyword(array $list, string $keyword): array
+    protected function resolvePriceTierLabel(string $keyword): ?string
     {
         $keyword = trim($keyword);
-        if ($keyword === '' || empty($list)) {
-            return $list;
+        if ($keyword === '') {
+            return null;
         }
-        $tiers = [
-            '9.9' => [9.0, 10.49],
-            '19.9' => [18.5, 20.49],
-            '29.9' => [28.5, 30.49],
-            '39.9' => [38.5, 40.49],
-        ];
-        $range = null;
-        foreach ($tiers as $label => $bounds) {
+        foreach (array_reverse($this->priceTierLabelsAsc()) as $label) {
             if (strpos($keyword, $label) !== false) {
-                $range = $bounds;
-                break;
+                return $label;
             }
         }
-        if ($range === null) {
-            return $list;
+        return null;
+    }
+
+    /**
+     * 互斥价格带：等价于「先取 ≤最大档，再逐级从剩余里剥小档」
+     * 9.9 → (0, 9.9]；19.9 → (9.9, 19.9]；29.9 → (19.9, 29.9]；39.9 → (29.9, 39.9]
+     *
+     * @return array{0: float, 1: float, 2: bool}|null min, max, minExclusive
+     */
+    protected function resolvePriceTierBounds(string $keyword): ?array
+    {
+        $label = $this->resolvePriceTierLabel($keyword);
+        if ($label === null) {
+            return null;
         }
-        [$minYuan, $maxYuan] = $range;
-        $filtered = array_values(array_filter($list, function ($item) use ($minYuan, $maxYuan) {
-            if (!is_array($item)) {
-                return false;
-            }
+        $order = $this->priceTierLabelsAsc();
+        $idx = array_search($label, $order, true);
+        if ($idx === false) {
+            return null;
+        }
+        $max = (float) $label;
+        $min = $idx > 0 ? (float) $order[$idx - 1] : 0.0;
+        return [$min, $max, $idx > 0];
+    }
+
+    protected function extractItemPriceYuan(array $item, string $platform = ''): ?float
+    {
+        $platform = strtolower(trim($platform));
+        $priceInfo = is_array($item['price_promotion_info'] ?? null) ? $item['price_promotion_info'] : [];
+        // 只用券后/成交价，不用 ot_price、划线价
+        $candidates = [
+            $priceInfo['final_promotion_price'] ?? null,
+            $priceInfo['promotion_price'] ?? null,
+            $item['final_promotion_price'] ?? null,
+            $item['price'] ?? null,
+            $item['zk_final_price'] ?? null,
+        ];
+        if ($platform === 'pdd' || isset($item['min_group_price']) || isset($item['goods_sign'])) {
             $cent = (int) ($item['min_group_price'] ?? 0);
             if ($cent <= 0) {
                 $cent = (int) ($item['min_normal_price'] ?? 0);
             }
-            if ($cent <= 0 && isset($item['price']) && is_numeric($item['price'])) {
-                $cent = (int) round(((float) $item['price']) * 100);
+            if ($cent > 0) {
+                return $cent / 100;
             }
-            if ($cent <= 0) {
-                return false;
+        }
+        foreach ($candidates as $raw) {
+            if ($raw === null || $raw === '') {
+                continue;
             }
-            $yuan = $cent / 100;
-            return $yuan >= $minYuan && $yuan <= $maxYuan;
-        }));
-        return !empty($filtered) ? $filtered : $list;
+            if (is_numeric($raw)) {
+                $v = (float) $raw;
+                if ($v >= 100 && $platform === 'kuaishou') {
+                    return $v / 100;
+                }
+                return $v;
+            }
+            $s = preg_replace('/[^\d.]/', '', (string) $raw);
+            if ($s !== '' && is_numeric($s)) {
+                return (float) $s;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 价格 pill：关键词粗召回后按券后价区间过滤，并去掉同 key 重复
+     */
+    protected function priceTierMatchesYuan(float $yuan, array $bounds): bool
+    {
+        [$minYuan, $maxYuan, $minExclusive] = $bounds;
+        if ($yuan <= 0 || $yuan > $maxYuan + 0.02) {
+            return false;
+        }
+        if (!$minExclusive) {
+            return $yuan <= $maxYuan + 0.02;
+        }
+        return $yuan > $minYuan + 0.001 && $yuan <= $maxYuan + 0.02;
+    }
+
+    protected function filterItemsByPriceKeyword(array $list, string $keyword, string $platform = ''): array
+    {
+        $bounds = $this->resolvePriceTierBounds($keyword);
+        if ($bounds === null || $list === []) {
+            return $list;
+        }
+        $platform = strtolower(trim($platform));
+        $out = [];
+        $seen = [];
+        foreach ($list as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $yuan = $this->extractItemPriceYuan($item, $platform);
+            if ($yuan === null || !$this->priceTierMatchesYuan($yuan, $bounds)) {
+                continue;
+            }
+            $id = $item['goods_sign']
+                ?? ($item['goods_id']
+                ?? ($item['item_id']
+                ?? ($item['itemId']
+                ?? ($item['num_iid']
+                ?? ($item['skuId'] ?? '')))));
+            $pl = (string) ($item['platform'] ?? $platform);
+            $key = $pl . ':' . (string) $id;
+            if ($key === ':' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $item;
+        }
+        return $out;
     }
 
     protected function normalizePdd($result): array
@@ -1232,6 +1438,9 @@ class ServiceGoodsRepository
 
     protected function fetchDouyinList(string $keyword, int $page, int $limit): array
     {
+        if ($this->blocksLegacyAggregator()) {
+            return [];
+        }
         $keyword = trim($keyword);
         if ($keyword === '') {
             $keyword = '热销';
