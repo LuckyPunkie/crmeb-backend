@@ -154,12 +154,17 @@ class CommunityRepository extends BaseRepository
      * @return array
      * @author Qinii
      */
-    public function getApiList(array $where, int $page, int $limit, $userInfo)
+    public function getApiList(array $where, int $page, int $limit, $userInfo, string $clientPlatform = '', string $appVersion = '')
     {
         $config = systemConfig("community_app_switch");
         if (!isset($where['is_type']) && $config) $where['is_type'] = $config;
         $where['is_del'] = 0;
         $query = $this->dao->search($where);
+
+        if ($clientPlatform !== '') {
+            app()->make(\app\common\repositories\system\AppEntryCommunityFeed::class)
+                ->applyToQuery($query, $clientPlatform, $appVersion);
+        }
 
         // 可见性过滤：自己看自己的帖不限制；看他人或公共流才过滤
         $viewerUid = isset($userInfo) && $userInfo ? (int)$userInfo->uid : 0;

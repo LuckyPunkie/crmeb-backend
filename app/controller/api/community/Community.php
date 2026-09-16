@@ -94,7 +94,13 @@ class Community extends BaseController
             $where['order'] = 'start';
         }
         [$page, $limit] = $this->getPage();
-        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user));
+        [$platform, $appVersion] = $this->communityFeedClientParams();
+        $categoryId = (int)($where['category_id'] ?? 0);
+        if ($categoryId > 0 && app()->make(\app\common\repositories\system\AppEntryCommunityFeed::class)
+            ->isCategoryBlocked($categoryId, $platform, $appVersion)) {
+            return app('json')->success(['count' => 0, 'list' => []]);
+        }
+        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user, $platform, $appVersion));
     }
 
     /**
@@ -155,7 +161,8 @@ class Community extends BaseController
         if ($type) {
             $where['is_type'] = $this->repository::COMMUNIT_TYPE_VIDEO;
         }
-        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user));
+        [$platform, $appVersion] = $this->communityFeedClientParams();
+        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user, $platform, $appVersion));
     }
 
     /**
@@ -177,7 +184,8 @@ class Community extends BaseController
         $community_type = $this->request->param('community_type', '');
         if ($community_type !== '') $where['community_type'] = $community_type;
         [$page, $limit] = $this->getPage();
-        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user));
+        [$platform, $appVersion] = $this->communityFeedClientParams();
+        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user, $platform, $appVersion));
     }
 
     /**
@@ -617,5 +625,19 @@ class Community extends BaseController
         [$page, $limit] = $this->getPage();
         $data = $relevanceRepository->getUserILike($this->user->uid, $page, $limit);
         return app('json')->success($data);
+    }
+
+    /**
+     * App 入口 C1：社区列表/分类与提审端 version 对齐
+     * @return array{0:string,1:string}
+     */
+    protected function communityFeedClientParams(): array
+    {
+        $platform = trim((string)$this->request->param('client_platform', ''));
+        $appVersion = trim((string)$this->request->param('app_version', ''));
+        if (!in_array($platform, ['ios', 'android', 'routine'], true)) {
+            return ['', ''];
+        }
+        return [$platform, $appVersion];
     }
 }

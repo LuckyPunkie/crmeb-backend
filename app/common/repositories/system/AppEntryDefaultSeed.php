@@ -30,7 +30,27 @@ class AppEntryDefaultSeed
         $items = [];
         $gid = 0;
 
-        $flat = function (string $slot, array $rows, int $sortStart = 0) use (&$items) {
+        $withHideFlags = static function (array $row): array {
+            $legacy = !empty($row['hide_when_review']) ? 1 : 0;
+            unset($row['hide_when_review']);
+            $row['hide_when_review_ios'] = isset($row['hide_when_review_ios'])
+                ? (int)(!empty($row['hide_when_review_ios']))
+                : $legacy;
+            $row['hide_when_review_android'] = isset($row['hide_when_review_android'])
+                ? (int)(!empty($row['hide_when_review_android']))
+                : $legacy;
+            $row['hide_when_review_routine'] = isset($row['hide_when_review_routine'])
+                ? (int)(!empty($row['hide_when_review_routine']))
+                : $legacy;
+            $row['hide_when_review'] = (
+                $row['hide_when_review_ios']
+                || $row['hide_when_review_android']
+                || $row['hide_when_review_routine']
+            ) ? 1 : 0;
+            return $row;
+        };
+
+        $flat = function (string $slot, array $rows, int $sortStart = 0) use (&$items, $withHideFlags) {
             $sort = $sortStart;
             foreach ($rows as $row) {
                 $sort += 10;
@@ -38,7 +58,7 @@ class AppEntryDefaultSeed
                     'slot_key' => $slot,
                     'group_id' => null,
                     'sort' => $sort,
-                ], $row);
+                ], $withHideFlags($row));
             }
         };
 
@@ -141,6 +161,9 @@ class AppEntryDefaultSeed
                     'group_id' => $gid,
                     'subtitle' => '',
                     'hide_when_review' => 0,
+                    'hide_when_review_ios' => 0,
+                    'hide_when_review_android' => 0,
+                    'hide_when_review_routine' => 0,
                     'sort' => $iSort,
                 ], $gi);
             }

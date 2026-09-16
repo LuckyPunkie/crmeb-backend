@@ -129,7 +129,7 @@ class CommunityCategoryRepository extends BaseRepository
      * @return array
      * @author Qinii
      */
-    public function getApiList()
+    public function getApiList(string $clientPlatform = '', string $appVersion = '')
     {
         $res = $this->dao->getSearch(['is_show' => 1])
             ->order('sort DESC,category_id DESC')
@@ -141,6 +141,10 @@ class CommunityCategoryRepository extends BaseRepository
             $item['tab_key'] = $keys[$item['category_id']] ?? ($item['tab_key'] ?? '');
         }
         unset($item);
+        if ($clientPlatform !== '') {
+            $list = app()->make(\app\common\repositories\system\AppEntryCommunityFeed::class)
+                ->filterCategoryApiList($list, $clientPlatform, $appVersion);
+        }
         return $list;
     }
 

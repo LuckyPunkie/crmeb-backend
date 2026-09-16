@@ -49,6 +49,8 @@ class CommunityCategory extends BaseController
      */
     public function lst()
     {
-        return app('json')->success($this->repository->getApiList());
+        $platform = trim((string)$this->request->param('client_platform', ''));
+        $appVersion = trim((string)$this->request->param('app_version', ''));
+        return app('json')->success($this->repository->getApiList($platform, $appVersion));
     }
 }
