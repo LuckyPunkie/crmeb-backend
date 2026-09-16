@@ -74,6 +74,14 @@ return [
         'oauth_scope' => env('taoke.kuaishou_oauth_scope', 'merchant_distribution'),
     ],
 
+    // ==================== 唯品会唯享客联盟 ====================
+    'vip' => [
+        'appkey' => env('taoke.vip_appkey', ''),
+        'appsecret' => env('taoke.vip_appsecret', ''),
+        'chan_tag' => env('taoke.vip_chan_tag', 'default_pid'),
+        'api_url' => env('taoke.vip_api_url', 'https://vop.vipapis.com/'),
+    ],
+
     // ==================== 抖音穿山甲 CPS 配置 ====================
     'pangle' => [
         'app_id' => env('taoke.pangle_app_id', ''),
@@ -91,6 +99,7 @@ return [
         'pdd'      => env('taoke.driver_pdd', 'legacy'),
         'douyin'   => env('taoke.driver_douyin', 'pangle'),
         'kuaishou' => env('taoke.driver_kuaishou', 'legacy'),
+        'wph'      => env('taoke.driver_wph', 'legacy'),
     ],
 
     // ==================== 分佣配置 ====================

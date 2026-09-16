@@ -8,6 +8,7 @@ use crmeb\services\taoke\JuTuiKeService;
 use crmeb\services\taoke\KuaishouOfficialService;
 use crmeb\services\taoke\PddOfficialService;
 use crmeb\services\taoke\TaobaoOfficialService;
+use crmeb\services\taoke\VipOfficialService;
 use think\facade\Log;
 
 /**
@@ -24,6 +25,7 @@ class ServiceGoodsRepository
     protected TaobaoOfficialService $taobaoOfficial;
     protected PddOfficialService $pddOfficial;
     protected KuaishouOfficialService $kuaishouOfficial;
+    protected VipOfficialService $vipOfficial;
 
     public function __construct(
         DingDanXiaService $dingdanxia,
@@ -31,7 +33,8 @@ class ServiceGoodsRepository
         JdOfficialService $jdOfficial,
         TaobaoOfficialService $taobaoOfficial,
         PddOfficialService $pddOfficial,
-        KuaishouOfficialService $kuaishouOfficial
+        KuaishouOfficialService $kuaishouOfficial,
+        VipOfficialService $vipOfficial
     ) {
         $this->dingdanxia = $dingdanxia;
         $this->jutuike = $jutuike;
@@ -39,6 +42,7 @@ class ServiceGoodsRepository
         $this->taobaoOfficial = $taobaoOfficial;
         $this->pddOfficial = $pddOfficial;
         $this->kuaishouOfficial = $kuaishouOfficial;
+        $this->vipOfficial = $vipOfficial;
     }
 
     public function withDriverChannel(string $channel): self
@@ -65,9 +69,14 @@ class ServiceGoodsRepository
         return $this->driverChannel === 'official';
     }
 
+    public function isWphOfficial(): bool
+    {
+        return $this->useOfficialFor('wph');
+    }
+
     public function getWphDataSource(): string
     {
-        return $this->blocksLegacyAggregator() ? 'official' : 'legacy';
+        return $this->isWphOfficial() ? 'official' : 'legacy';
     }
 
     /**
@@ -951,9 +960,14 @@ class ServiceGoodsRepository
                     }
                     return [];
                 case 'wph':
+                    if ($this->isWphOfficial()) {
+                        $parsed = $this->vipOfficial->fetchFeed($page, $limit);
+                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                    }
                     if ($this->blocksLegacyAggregator()) {
                         return [];
                     }
+                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
                     return $this->normalizeWph($this->dingdanxia->wphGoods('热销', $page, $limit));
                 case 'douyin':
                     return $this->fetchDouyinList('', $page, $limit);
@@ -1023,9 +1037,14 @@ class ServiceGoodsRepository
                 case 'douyin':
                     return $this->fetchDouyinList($keyword, $page, $limit);
                 case 'wph':
+                    if ($this->isWphOfficial()) {
+                        $parsed = $this->vipOfficial->fetchSearch($keyword ?: '热销', $page, $limit);
+                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                    }
                     if ($this->blocksLegacyAggregator()) {
                         return [];
                     }
+                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
                     return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
                 default:
                     return [];
@@ -1040,25 +1059,83 @@ class ServiceGoodsRepository
         }
     }
 
-    protected function normalizeWph($result): array
+    protected function normalizeWph($result, bool $official = false): array
     {
         if (!is_array($result)) return [];
         $list = [];
         foreach ($result as $val) {
             if (!is_array($val)) continue;
-            $list[] = [
+            $salesText = trim((string) ($val['productSales'] ?? ''));
+            $row = [
                 'platform'   => 'wph',
                 'goods_id'   => (string)($val['goodsId'] ?? ''),
                 'title'      => (string)($val['goodsName'] ?? ''),
                 'store_name' => (string)($val['goodsName'] ?? ''),
-                'image'      => (string)($val['goodsMainPicture'] ?? ''),
+                'image'      => (string)($val['goodsMainPicture'] ?? ($val['goodsThumbUrl'] ?? '')),
                 'price'      => (string)($val['vipPrice'] ?? '0.00'),
                 'ot_price'   => (string)($val['marketPrice'] ?? '0.00'),
                 'sales'      => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
-                'sales_text' => '',
+                'sales_text' => $salesText,
+                'commission_rate' => (string) ($val['commissionRate'] ?? ''),
+                'commission' => (string) ($val['commission'] ?? ''),
             ];
+            if ($official) {
+                $row['_source'] = 'official';
+                if (!empty($val['adCode'])) {
+                    $row['ad_code'] = (string) $val['adCode'];
+                }
+                if (!empty($val['destUrl'])) {
+                    $row['dest_url'] = (string) $val['destUrl'];
+                }
+            }
+            $list[] = $row;
         }
         return $list;
+    }
+
+    /**
+     * @return array{detail: array, meta: array<string, mixed>}
+     */
+    public function fetchVipDetailWithMeta(string $goodsId): array
+    {
+        $goodsId = trim($goodsId);
+        $meta = [
+            'goods_id' => $goodsId,
+            'driver' => $this->getWphDataSource(),
+            'pipeline' => [],
+        ];
+        if ($this->isWphOfficial()) {
+            $meta['pipeline'][] = 'VipOfficialService::fetchDetail';
+            $detail = $this->vipOfficial->fetchDetail($goodsId);
+            if ($detail !== []) {
+                $meta['detail_from'] = 'UnionGoodsV2Service.getByGoodsIdsV2';
+                return ['detail' => $detail, 'meta' => $meta];
+            }
+            return ['detail' => [], 'meta' => $meta];
+        }
+        $meta['pipeline'][] = 'DingDanXiaService::vipGoodsDetail(legacy)';
+        $meta['detail_from'] = 'dingdanxia.vip/item_info';
+        return ['detail' => $this->dingdanxia->vipGoodsDetail((int) $goodsId), 'meta' => $meta];
+    }
+
+    /**
+     * @param array{ad_code?: string, dest_url?: string, stat_param?: string} $context
+     */
+    public function createVipPromotion(string $goodsId, string $openId = '', array $context = []): array
+    {
+        $goodsId = trim($goodsId);
+        if ($goodsId === '') {
+            return [];
+        }
+        if ($this->isWphOfficial()) {
+            return $this->vipOfficial->generateLinkByGoodsId($goodsId, $openId, '', [
+                'adCode' => (string) ($context['ad_code'] ?? ($context['adCode'] ?? '')),
+                'destUrl' => (string) ($context['dest_url'] ?? ($context['destUrl'] ?? '')),
+                'statParam' => (string) ($context['stat_param'] ?? ''),
+            ]);
+        }
+        // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
+        return $this->dingdanxia->vipHighCommission((int) $goodsId);
     }
 
     protected function normalizeTaobao($result): array

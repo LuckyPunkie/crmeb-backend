@@ -32,6 +32,8 @@ Route::group('taoke/official', function () {
         Route::post('create_kuaishou_link', 'api.taoke.OfficialGoods/createKuaishouLink');
 
         Route::post('wph_goods', 'api.taoke.OfficialGoods/wphGoods');
+        Route::post('vip_goods_detail', 'api.taoke.OfficialGoods/vipGoodsDetail');
+        Route::post('create_vip_link', 'api.taoke.OfficialGoods/createVipLink');
 
         Route::post('category', 'api.taoke.OfficialGoods/category');
         Route::post('aggregate_recommend', 'api.taoke.OfficialGoods/aggregateRecommend');

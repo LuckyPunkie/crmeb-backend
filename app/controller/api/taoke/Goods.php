@@ -1498,42 +1498,55 @@ class Goods extends BaseController
      */
     public function vipGoodsDetail()
     {
-        $goods_id = $this->request->post('id', 0);
+        $goodsId = (string) $this->request->post('id', $this->request->post('goods_id', ''));
         try {
-            $result = $this->dingdanxiaService->vipGoodsDetail($goods_id);
-            // var_dump($result);die;
-            return app('json')->success($result);
-
-
+            $bundle = $this->serviceGoodsRepository->fetchVipDetailWithMeta($goodsId);
+            $result = $bundle['detail'];
+            if ($result === [] || !is_array($result)) {
+                return app('json')->fail('商品详情获取失败');
+            }
+            return app('json')->success([
+                'detail' => $result,
+                '_source' => $this->serviceGoodsRepository->getWphDataSource(),
+                '_meta' => $bundle['meta'],
+            ]);
         } catch (\Exception $e) {
             Log::error('商品详情获取失败', [
-                'itemIds' => $goods_id,
+                'itemIds' => $goodsId,
                 'error' => $e->getMessage()
             ]);
             return app('json')->fail('搜索失败，请稍后重试');
         }
     }
-     /**
+
+    /**
      * 生成唯品会推广链接
-     * POST /api/taoke/goods/create_taobao_link
+     * POST /api/taoke/goods/create_vip_link
      */
+    public function createVipLink()
+    {
+        return $this->createvipLink();
+    }
+
     public function createvipLink()
     {
-        $goods_id = $this->request->post('goods_id', '');
+        $goods_id = (string) $this->request->post('goods_id', $this->request->post('id', ''));
 
-        if (empty($goods_id)) {
+        if ($goods_id === '') {
             return app('json')->fail('商品ID不能为空');
         }
         try {
-            // 调用高佣转链API
-            $result = $this->dingdanxiaService->vipHighCommission($goods_id);
+            $openId = $this->resolveVipOpenId();
+            $result = $this->serviceGoodsRepository->createVipPromotion($goods_id, $openId, [
+                'ad_code' => (string) $this->request->post('ad_code', ''),
+                'dest_url' => (string) $this->request->post('url', ''),
+            ]);
 
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');
             }
 
             return app('json')->success($result);
-
         } catch (\Exception $e) {
             Log::error('生成推广链接失败', [
                 'goods_id' => $goods_id,
@@ -1541,5 +1554,20 @@ class Goods extends BaseController
             ]);
             return app('json')->fail('生成推广链接失败');
         }
+    }
+
+    protected function resolveVipOpenId(): string
+    {
+        if ($this->request->isLogin()) {
+            $uid = (int) $this->request->uid();
+            if ($uid > 0) {
+                return (string) $uid;
+            }
+        }
+        $openId = (string) $this->request->post('open_id', '');
+        if ($openId !== '') {
+            return preg_replace('/[^a-zA-Z0-9_]/', '', $openId) ?: 'default_open_id';
+        }
+        return 'default_open_id';
     }
 }
