@@ -2522,7 +2522,7 @@ class UserRepository extends BaseRepository
     public function getCommunityUserList(array $where = [], int $page = 1, int $limit = 10)
     {
         $query = $this->dao->search($where)
-            ->field('uid,nickname,real_name,avatar,sex,birthday,phone,label_id,count_start,count_fans,count_content');
+            ->field('User.uid,User.nickname,User.real_name,User.avatar,User.sex,User.birthday,User.phone,User.label_id,User.count_start,User.count_fans,User.count_content');
 
         if (!empty($where['age_min']) || !empty($where['age_max'])) {
             $ageMin = max(0, intval($where['age_min'] ?? 0));
@@ -2598,7 +2598,13 @@ class UserRepository extends BaseRepository
             $query->whereIn('uid', $profileUids ?: [0]);
         }
 
-        $count = $query->count();
+        // 资料完善度 DESC 排序：user_profile 里 birth_month/height/education/zodiac 任一非空排前面
+        $query->leftJoin('user_profile pfsort', 'pfsort.uid = User.uid')
+            ->removeOption('order')
+            ->orderRaw("CASE WHEN (pfsort.birth_month IS NOT NULL AND pfsort.birth_month <> '') OR pfsort.height > 0 OR pfsort.education > 0 OR pfsort.zodiac > 0 THEN 1 ELSE 0 END DESC")
+            ->order('User.uid', 'desc');
+
+        $count = $query->count('User.uid');
         $list = $query->page($page, $limit)->select()->toArray();
 
         if ($list) {
