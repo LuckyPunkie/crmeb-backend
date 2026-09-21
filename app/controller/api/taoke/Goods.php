@@ -363,7 +363,9 @@ class Goods extends BaseController
         $page = $this->request->post('page_no', 1);
         $limit = $this->request->post('page_size', 20);
         try {
-            $raw = $this->dingdanxiaService->taobaoLiveGoods($page, $limit);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $raw = $this->dingdanxiaService->taobaoLiveGoods($page, $limit);
+            $raw = [];
             $list = [];
             foreach ((array)$raw as $val) {
                 if (!is_array($val)) continue;
@@ -548,8 +550,9 @@ class Goods extends BaseController
             return $fallback;
         }
         try {
-            // [官方直连切换 2026-09-10] 原订单侠：$this->dingdanxiaService->pdd_tags();
-            $raw = $this->dingdanxiaService->pdd_tags();
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $raw = $this->dingdanxiaService->pdd_tags();
+            $raw = [];
             if (!is_array($raw) || !$raw) {
                 return $fallback;
             }
@@ -636,7 +639,9 @@ class Goods extends BaseController
             if (!$useSummary) {
                 $meta['summary_used'] = false;
                 $meta['summary_skipped'] = true;
-                $meta['pipeline'][] = 'debug: use_summary=false，前端不合并列表 summary';
+                // 后端不拼列表 summary；销量文案与推广链由前端 extractTaobaoListHints 本地 merge
+                $meta['pipeline'][] = 'debug: use_summary=false，后端不合并列表 summary；销量/转链由前端 listHints 本地补（item.info 无 annual_vol）';
+                $meta['frontend_list_hints'] = 'sales_text/annual_vol + taoke_item_url/coupon_click_url（URL options.item → extractTaobaoListHints）';
             }
             return app('json')->success([
                 'detail' => $result,
@@ -710,10 +715,10 @@ class Goods extends BaseController
         $start_time = $this->request->post('start_time', '2026-06-29 15:00:00');
         $end_time = $this->request->post('end_time', '2026-06-29 16:00:00');
         try {
-            $result = $this->dingdanxiaService->taobaoOrderQuery($page, $limit, $start_time, $end_time);
-
-            return app('json')->success($result);
-
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->taobaoOrderQuery($page, $limit, $start_time, $end_time);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用，淘宝订单请改官方 order.details.get');
         } catch (\Exception $e) {
             Log::error('淘宝订单查询失败', [
                 'page' => $page,
@@ -904,7 +909,9 @@ class Goods extends BaseController
             if (!$useSummary) {
                 $meta['summary_used'] = false;
                 $meta['summary_skipped'] = true;
-                $meta['pipeline'][] = 'debug: use_summary=false，仅官方 detail/list 还原';
+                // 当前 uniapp KS_DETAIL_SKIP_SUMMARY=true：不 POST/不本地应用列表 summary
+                $meta['pipeline'][] = 'debug: use_summary=false，后端不合并列表 summary；前端当前 SKIP 不应用 options.item（改 false 后 POST summary=选品行并本地 merge）';
+                $meta['frontend_list_hints'] = '可选 URL options.item 官方选品行（goods_id/title/image/price/express 等）；当前 SKIP=true 未启用';
             }
             return app('json')->success([
                 'detail' => $result,
@@ -975,7 +982,9 @@ class Goods extends BaseController
             if (!$useSummary) {
                 $meta['summary_used'] = false;
                 $meta['summary_skipped'] = true;
-                $meta['pipeline'][] = 'debug: use_summary=false，前端不合并列表 summary';
+                // 当前 uniapp PDD_DETAIL_SKIP_SUMMARY=true：不应用 URL item；改 false 时会先 apply 整份列表 summary
+                $meta['pipeline'][] = 'debug: use_summary=false，后端不合并列表 summary；前端当前 SKIP 不应用 options.item（改 false 后会本地 merge 列表价/图/销量等）';
+                $meta['frontend_list_hints'] = '可选 URL options.item 整份 summary（goods_sign/title/image/price/sales_tip/video 等）；当前 SKIP=true 未启用';
             }
             return app('json')->success([
                 'detail' => is_array($result) ? $result : ['raw' => $result],
@@ -1053,23 +1062,19 @@ class Goods extends BaseController
             if (!empty($user->pdd_pid)) {
                 $pid = $user->pdd_pid;
             } else {
-                // 生成推广位
-                $result = $this->dingdanxiaService->createPddPid();
-                if (empty($result)) {
-                    return app('json')->fail('生成推广位失败');
-                }
-
-                $pid = $result[0]['p_id'] ?? '';
-                if (empty($pid)) {
-                    return app('json')->fail('生成推广位失败，未获取到PID');
-                }
-
-                // 保存到数据库
-                $user->pdd_pid = $pid;
-                $user->pdd_custom_params = $pdd_custom_parameters;
-                $user->save();
-                
-                
+                // [官方直连切换 2026-09-21] 原订单侠调用：
+                // $result = $this->dingdanxiaService->createPddPid();
+                // if (empty($result)) {
+                //     return app('json')->fail('生成推广位失败');
+                // }
+                // $pid = $result[0]['p_id'] ?? '';
+                // if (empty($pid)) {
+                //     return app('json')->fail('生成推广位失败，未获取到PID');
+                // }
+                // $user->pdd_pid = $pid;
+                // $user->pdd_custom_params = $pdd_custom_parameters;
+                // $user->save();
+                return app('json')->fail('订单侠已停用，请配置平台 PDD_PID 或使用已有用户 PID');
             }
             if (empty($pid)) {
                 return app('json')->fail('生成推广位失败');
@@ -1258,17 +1263,14 @@ class Goods extends BaseController
             return app('json')->fail('商品不能为空');
         }
         try {
-            // 调用高佣转链API
-            //$result = $this->dingdanxiaService->pddHighCommission($goods_sign);
-            $result = $this->dingdanxiaService->pddPromUrlGenerate();
-            
-
-            if (empty($result)) {
-                return app('json')->fail('生成推广链接失败');
-            }
-
-            return app('json')->success($result);
-
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->pddHighCommission($goods_sign);
+            // $result = $this->dingdanxiaService->pddPromUrlGenerate();
+            // if (empty($result)) {
+            //     return app('json')->fail('生成推广链接失败');
+            // }
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用，请走 create_pdd_link 官方转链');
         } catch (\Exception $e) {
             Log::error('生成推广链接失败', [
                 'goods_sign' => $goods_sign,
@@ -1341,7 +1343,9 @@ class Goods extends BaseController
             if (!$useSummary) {
                 $meta['summary_used'] = false;
                 $meta['summary_skipped'] = true;
-                $meta['pipeline'][] = 'debug: use_summary=false，仅 bigfield/hints/京粉兜底';
+                // 后端不收 POST summary；前端仍会本地用列表 URL options.item 补价/销量/店名，且可能带 spuid/materialUrl hints
+                $meta['pipeline'][] = 'debug: use_summary=false，后端不合并列表 summary；前端 mergeJdListSummaryPricing 本地补价/销量/店名；spuid 可作 hints';
+                $meta['frontend_list_hints'] = 'URL options.item→jdListSummary：price/ot_price/sales|sales_text/shopName；另 spuid→请求 hints；购买 materialUrl 来自列表/详情物料链（非订单侠）';
             }
             return app('json')->success([
                 'list' => $bundle['list'],
@@ -1406,30 +1410,28 @@ class Goods extends BaseController
             // if (empty($pid)) {
             //     return app('json')->fail('生成推广位失败');
             // }
-            //有了pid去生成授权链接
-            $result = $this->dingdanxiaService->jdHighCommission($materialUrl,$pid);
-            
-            if (empty($result)) {
-                // 订单侠转链接口不可用时（如服务到期），回退物料/联盟链接，保证仍可跳转购买
-                $fallbackUrl = $this->normalizeJdMaterialUrl($materialUrl);
-                if ($fallbackUrl === '') {
-                    return app('json')->fail('生成推广链接失败，请稍后重试');
-                }
-                Log::warning('京东转链为空，使用物料链接兜底', [
-                    'materialUrl' => $materialUrl,
-                    'fallbackUrl' => $fallbackUrl,
-                ]);
-                return app('json')->success([
-                    'clickURL' => $fallbackUrl,
-                    'clickUrl' => $fallbackUrl,
-                    'shortURL' => $fallbackUrl,
-                    'fallback' => true,
-                ]);
+            // [官方直连切换 2026-09-21] 原订单侠高佣转链已注释（释放账号）：
+            // $result = $this->dingdanxiaService->jdHighCommission($materialUrl,$pid);
+            // if (!empty($result)) {
+            //     return app('json')->success($result);
+            // }
+            // 当前仍可“转链成功”的原因：直接回传前端 POST 的 materialUrl（列表/详情京粉物料链），
+            // 并标记 fallback=true。这不是订单侠，也无高佣/跟单；正式释放订单侠账号前请关掉京东 Tab。
+            $fallbackUrl = $this->normalizeJdMaterialUrl($materialUrl);
+            if ($fallbackUrl === '') {
+                return app('json')->fail('京东转链已停用订单侠，且无可用物料链接');
             }
-
-
-
-            return app('json')->success($result);
+            Log::warning('京东转链跳过订单侠，使用物料链接兜底', [
+                'materialUrl' => $materialUrl,
+                'fallbackUrl' => $fallbackUrl,
+            ]);
+            return app('json')->success([
+                'clickURL' => $fallbackUrl,
+                'clickUrl' => $fallbackUrl,
+                'shortURL' => $fallbackUrl,
+                'fallback' => true,
+                '_note' => '非订单侠：仅回传 materialUrl 物料兜底；无高佣。释放账号前请关京东 Tab。',
+            ]);
 
         } catch (\Exception $e) {
             Log::error('生成推广位失败', [

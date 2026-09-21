@@ -179,7 +179,7 @@ class ServiceGoodsRepository
             'legacy_full_fallback' => false,
             'official_fetch_empty' => false,
             'detail_from' => '',
-            'note' => 'official 通道(OfficialGoods) allowLegacyFallback=false，禁止订单侠；详情走 pdd.ddk.goods.detail(goods_sign)。',
+            'note' => 'official 详情 pdd.ddk.goods.detail(goods_sign)。列表字段经 URL options.item；当前前端 PDD_DETAIL_SKIP_SUMMARY=true 默认不合并。无订单侠。',
         ];
 
         if ($this->isPddOfficial()) {
@@ -191,17 +191,22 @@ class ServiceGoodsRepository
             }
             $meta['official_fetch_empty'] = true;
             if ($this->allowLegacyFallback()) {
-                $meta['pipeline'][] = 'legacy: DingDanXiaService::pddGoodsDetail(仅 legacy 路由)';
-                $meta['legacy_full_fallback'] = true;
-                $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
-                return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
+                // [官方直连切换 2026-09-21] 原订单侠调用：
+                // $meta['pipeline'][] = 'legacy: DingDanXiaService::pddGoodsDetail(仅 legacy 路由)';
+                // $meta['legacy_full_fallback'] = true;
+                // $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
+                // return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
             }
             return ['detail' => [], 'meta' => $meta];
         }
 
-        $meta['pipeline'][] = 'DingDanXiaService::pddGoodsDetail(legacy 路由)';
-        $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
-        return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
+        // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+        // $meta['pipeline'][] = 'DingDanXiaService::pddGoodsDetail(legacy 路由)';
+        // $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
+        // return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
+        $meta['pipeline'][] = 'DingDanXiaService::pddGoodsDetail(已注释)';
+        $meta['detail_from'] = 'disabled.dingdanxia';
+        return ['detail' => [], 'meta' => $meta];
     }
 
     /**
@@ -506,9 +511,13 @@ class ServiceGoodsRepository
             if (!$this->allowLegacyFallback()) {
                 return [];
             }
-            // [官方直连切换 2026-09-10] 原订单侠调用：
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // return $this->dingdanxia->pddHighCommission($goodsSign, $pid, $customParameters);
+            return [];
         }
-        return $this->dingdanxia->pddHighCommission($goodsSign, $pid, $customParameters);
+        // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+        // return $this->dingdanxia->pddHighCommission($goodsSign, $pid, $customParameters);
+        return [];
     }
 
     /**
@@ -537,7 +546,7 @@ class ServiceGoodsRepository
             'legacy_full_fallback' => false,
             'official_fetch_empty' => false,
             'backend_fields_on_list_item' => ['_source', 'goods_id'],
-            'note' => '商详主接口 jd.union.open.goods.bigfield.query：sceneId=1+itemIds、sceneId=2+skuIds(需权限)；列表 summary 补价图；京粉 itemId 不稳定。',
+            'note' => '商详主接口 bigfield；列表 summary 可补价图。use_summary=0 时后端不拼 summary，但前端仍用 options.item 做 mergeJdListSummaryPricing（价/销量/店）+ spuid hints。',
             'jd_item_id_unstable' => true,
         ];
 
@@ -555,24 +564,27 @@ class ServiceGoodsRepository
             }
 
             if ($this->allowLegacyFallback() && $beforeRows === []) {
-                $meta['pipeline'][] = 'legacy: DingDanXiaService::jdGoodsDetail(仅 driver=legacy 或 allowLegacyFallback)';
-                $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
-                $meta['legacy_full_fallback'] = true;
-                $meta['backend_fields_on_list_item'][] = '_detail_fallback';
+                // [官方直连切换 2026-09-21] 原订单侠调用：
+                // $meta['pipeline'][] = 'legacy: DingDanXiaService::jdGoodsDetail(...)';
+                // $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+                // $meta['legacy_full_fallback'] = true;
+                // $meta['backend_fields_on_list_item'][] = '_detail_fallback';
+                $raw = [];
             } elseif ($beforeRows !== [] && $this->allowLegacyFallback()) {
-                $supplemented = false;
-                $raw = $this->supplementJdOfficialDetailMedia($itemIds, $raw, $supplemented);
-                $meta['legacy_media_supplement'] = $supplemented;
-                if ($supplemented) {
-                    $meta['pipeline'][] = 'legacy: supplementJdOfficialDetailMedia';
-                    $meta['backend_fields_on_list_item'][] = '_detail_media';
-                }
+                // [官方直连切换 2026-09-21] 已停用订单侠媒体补全，仅用官方结果
+                // $supplemented = false;
+                // $raw = $this->supplementJdOfficialDetailMedia($itemIds, $raw, $supplemented);
+                // $meta['legacy_media_supplement'] = $supplemented;
+                $raw = $beforeRows;
             } else {
                 $raw = $beforeRows;
             }
         } else {
-            $meta['pipeline'][] = 'DingDanXiaService::jdGoodsDetail(订单侠 jd/item_detail)';
-            $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+            // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+            // $meta['pipeline'][] = 'DingDanXiaService::jdGoodsDetail(订单侠 jd/item_detail)';
+            // $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+            $meta['pipeline'][] = 'DingDanXiaService::jdGoodsDetail(已注释)';
+            $raw = [];
         }
 
         $meta['pipeline'][] = 'formatJdDetailList(+_source)';
@@ -599,28 +611,12 @@ class ServiceGoodsRepository
             return [$row];
         }
         try {
-            $legacyRaw = $this->dingdanxia->jdGoodsDetail($itemIds);
-            $legacyList = $this->normalizeJdDetailRowsForMerge($legacyRaw);
-            $legacy = $legacyList[0] ?? null;
-            if (!is_array($legacy)) {
-                return [$row];
-            }
-            foreach (['detailImages', 'baseBigFieldInfo', 'imageInfo', 'categoryInfo', 'shopInfo', 'promotionInfo'] as $field) {
-                if (empty($row[$field]) && !empty($legacy[$field])) {
-                    $row[$field] = $legacy[$field];
-                }
-            }
-            if (empty($row['materialUrl']) && !empty($legacy['materialUrl'])) {
-                $row['materialUrl'] = $legacy['materialUrl'];
-            }
-            if (empty($row['skuId']) && !empty($legacy['mainSkuId'])) {
-                $row['skuId'] = $legacy['mainSkuId'];
-            }
-            if (empty($row['spuid']) && !empty($legacy['productId'])) {
-                $row['spuid'] = $legacy['productId'];
-            }
-            $row['_detail_media'] = 'legacy_supplement';
-            $supplemented = true;
+            // [官方直连切换 2026-09-21] 原订单侠媒体补全已停用：
+            // $legacyRaw = $this->dingdanxia->jdGoodsDetail($itemIds);
+            // $legacyList = $this->normalizeJdDetailRowsForMerge($legacyRaw);
+            // $legacy = $legacyList[0] ?? null;
+            // ... merge media fields ...
+            return [$row];
         } catch (\Throwable $e) {
             Log::warning('京东官方详情媒体补全失败', ['itemIds' => $itemIds, 'error' => $e->getMessage()]);
         }
@@ -929,14 +925,21 @@ class ServiceGoodsRepository
                         if (!$this->allowLegacyFallback()) {
                             return [];
                         }
-                        // official 空结果时回退 legacy
+                        // [官方直连切换 2026-09-21] 原订单侠/聚推客调用（driver_jd=legacy 时）：
+                        // $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
+                        // if (!empty($list)) {
+                        //     return $list;
+                        // }
+                        // return $this->normalizeJd($this->jutuike->jdSelection($page, $limit));
+                        return [];
                     }
-                    // [官方直连切换 2026-09-09] 原订单侠/聚推客调用（driver_jd=legacy 时生效）：
-                    $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
-                    if (!empty($list)) {
-                        return $list;
-                    }
-                    return $this->normalizeJd($this->jutuike->jdSelection($page, $limit));
+                    // [官方直连切换 2026-09-21] 原订单侠/聚推客调用（driver_jd=legacy 时生效）：
+                    // $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
+                    // if (!empty($list)) {
+                    //     return $list;
+                    // }
+                    // return $this->normalizeJd($this->jutuike->jdSelection($page, $limit));
+                    return [];
                 case 'pdd':
                     if ($this->isPddOfficial()) {
                         $rows = $this->pddOfficial->fetchFeed($page, $limit, (int) $cate);
@@ -947,10 +950,12 @@ class ServiceGoodsRepository
                         if (!$this->allowLegacyFallback()) {
                             return [];
                         }
-                        // [官方直连切换 2026-09-10] 原订单侠调用（driver_pdd=legacy 或 official 空结果时）：
+                        // [官方直连切换 2026-09-21] 原订单侠调用：
                     }
-                    $raw = $this->dingdanxia->pddGoods($page, $limit, $cate);
-                    return $this->normalizePdd($raw['list'] ?? (is_array($raw) ? $raw : []));
+                    // [官方直连切换 2026-09-21] 原订单侠调用：
+                    // $raw = $this->dingdanxia->pddGoods($page, $limit, $cate);
+                    // return $this->normalizePdd($raw['list'] ?? (is_array($raw) ? $raw : []));
+                    return [];
                 case 'kuaishou':
                     if ($this->isKuaishouOfficial()) {
                         $channelId = (int) $cate;
@@ -967,8 +972,9 @@ class ServiceGoodsRepository
                     if ($this->blocksLegacyAggregator()) {
                         return [];
                     }
-                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
-                    return $this->normalizeWph($this->dingdanxia->wphGoods('热销', $page, $limit));
+                    // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+                    // return $this->normalizeWph($this->dingdanxia->wphGoods('热销', $page, $limit));
+                    return [];
                 case 'douyin':
                     return $this->fetchDouyinList('', $page, $limit);
                 default:
@@ -1005,10 +1011,11 @@ class ServiceGoodsRepository
                         }
                         $list = $this->normalizeJd($raw);
                     } else {
-                        // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
-                        $list = $this->normalizeJd(
-                            $this->dingdanxia->jdGoodsSearch($keyword, $page, $fetchLimit)
-                        );
+                        // [官方直连切换 2026-09-21] 原订单侠调用（driver_jd=legacy 时生效）：
+                        // $list = $this->normalizeJd(
+                        //     $this->dingdanxia->jdGoodsSearch($keyword, $page, $fetchLimit)
+                        // );
+                        $list = [];
                     }
                     $list = $this->filterItemsByPriceKeyword($list, $keyword, 'jd');
                     return array_slice($list, 0, $limit);
@@ -1044,8 +1051,9 @@ class ServiceGoodsRepository
                     if ($this->blocksLegacyAggregator()) {
                         return [];
                     }
-                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
-                    return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
+                    // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+                    // return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
+                    return [];
                 default:
                     return [];
             }
@@ -1113,9 +1121,13 @@ class ServiceGoodsRepository
             }
             return ['detail' => [], 'meta' => $meta];
         }
-        $meta['pipeline'][] = 'DingDanXiaService::vipGoodsDetail(legacy)';
-        $meta['detail_from'] = 'dingdanxia.vip/item_info';
-        return ['detail' => $this->dingdanxia->vipGoodsDetail((int) $goodsId), 'meta' => $meta];
+        // [官方直连切换 2026-09-21] 原订单侠调用（legacy）：
+        // $meta['pipeline'][] = 'DingDanXiaService::vipGoodsDetail(legacy)';
+        // $meta['detail_from'] = 'dingdanxia.vip/item_info';
+        // return ['detail' => $this->dingdanxia->vipGoodsDetail((int) $goodsId), 'meta' => $meta];
+        $meta['pipeline'][] = 'DingDanXiaService::vipGoodsDetail(已注释)';
+        $meta['detail_from'] = 'disabled.dingdanxia';
+        return ['detail' => [], 'meta' => $meta];
     }
 
     /**
@@ -1134,8 +1146,9 @@ class ServiceGoodsRepository
                 'statParam' => (string) ($context['stat_param'] ?? ''),
             ]);
         }
-        // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
-        return $this->dingdanxia->vipHighCommission((int) $goodsId);
+        // [官方直连切换 2026-09-21] 原订单侠调用（legacy 路由）：
+        // return $this->dingdanxia->vipHighCommission((int) $goodsId);
+        return [];
     }
 
     protected function normalizeTaobao($result): array
@@ -1522,10 +1535,12 @@ class ServiceGoodsRepository
         if ($keyword === '') {
             $keyword = '热销';
         }
-        $list = $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch($keyword, $page, $limit));
-        if (!empty($list)) {
-            return $list;
-        }
+        // [官方直连切换 2026-09-21] 原订单侠调用：
+        // $list = $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch($keyword, $page, $limit));
+        // if (!empty($list)) {
+        //     return $list;
+        // }
+        // 抖音暂无官方直连，仍可用聚推客兜底（非订单侠）
         return $this->normalizeDouyin($this->jutuike->douyinProductSearch($keyword, $page, $limit));
     }
 

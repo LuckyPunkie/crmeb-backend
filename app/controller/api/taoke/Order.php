@@ -72,8 +72,10 @@ class Order extends BaseController
         $status=  $this->request->post('status', '');
         $end_time=  $this->request->post('end_time', '');
         try {
-            $result = $this->dingdanxiaService->taobaoOrder($start_time,$end_time,$status,$page,$limit);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->taobaoOrder($start_time,$end_time,$status,$page,$limit);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用，淘宝订单请改官方 order.details.get');
 
         } catch (\Exception $e) {
             Log::error('获取订单列表失败', [
@@ -91,8 +93,10 @@ class Order extends BaseController
         $start_time=  $this->request->post('start_time', '');
         $end_time=  $this->request->post('end_time', '');
         try {
-            $result = $this->dingdanxiaService->pddOrder($start_time,$end_time,$page,$limit);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->pddOrder($start_time,$end_time,$page,$limit);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用，拼多多订单请改官方订单接口');
 
         } catch (\Exception $e) {
             Log::error('获取订单列表失败', [
@@ -105,8 +109,10 @@ class Order extends BaseController
      public function pddOrderDetail() {
         $order_sn = $this->request->post('order_sn', '');
         try {
-            $result = $this->dingdanxiaService->pddOrderDetail($order_sn);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->pddOrderDetail($order_sn);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用');
 
         } catch (\Exception $e) {
             Log::error('获取订单详情失败', [
@@ -124,8 +130,10 @@ class Order extends BaseController
         $end_time=  $this->request->post('end_time', '2026-06-05 13:00:00');
         $orderId=  $this->request->post('orderId', '');
         try {
-            $result = $this->dingdanxiaService->jdOrder($start_time,$end_time,$orderId,$page,$limit);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->jdOrder($start_time,$end_time,$orderId,$page,$limit);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用，京东订单请改官方 order.row.query');
 
         } catch (\Exception $e) {
             Log::error('获取订单列表失败', [
@@ -143,8 +151,10 @@ class Order extends BaseController
         $end_time=  $this->request->post('end_time', '2026-06-05 13:00:00');
         $status=  $this->request->post('status', '');
         try {
-            $result = $this->dingdanxiaService->vipOrder($start_time,$end_time,$status,$page,$limit);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->vipOrder($start_time,$end_time,$status,$page,$limit);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用');
 
         } catch (\Exception $e) {
             Log::error('获取订单列表失败', [
@@ -158,8 +168,10 @@ class Order extends BaseController
     public function vipOrderDetail() {
         $orderSn = $this->request->post('orderSn', '');
         try {
-            $result = $this->dingdanxiaService->vipOrderDetail($orderSn);
-            return app('json')->success($result);
+            // [官方直连切换 2026-09-21] 原订单侠调用：
+            // $result = $this->dingdanxiaService->vipOrderDetail($orderSn);
+            // return app('json')->success($result);
+            return app('json')->fail('订单侠已停用');
 
         } catch (\Exception $e) {
             Log::error('获取订单详情失败', [

@@ -338,7 +338,7 @@ class TaobaoOfficialService extends BaseServices
             'top_method'          => '',
             'pipeline'            => [],
             'official_fetch_empty' => false,
-            'note'                => 'detail 字段为淘宝 TOP 响应归一化；platform_only=true 表示非客户端 summary 拼装、非订单侠。',
+            'note'                => 'detail 为淘宝 TOP 归一化；platform_only=true=非 POST summary 拼装、非订单侠。use_summary=0 时销量文案/推广链由前端 listHints 本地补。',
         ];
 
         if ($goodsId === '') {
