@@ -1522,13 +1522,9 @@ class Goods extends BaseController
     /**
      * 生成唯品会推广链接
      * POST /api/taoke/goods/create_vip_link
+     * 注意：PHP 方法名大小写不敏感，禁止再写 createvipLink 别名壳。
      */
     public function createVipLink()
-    {
-        return $this->createvipLink();
-    }
-
-    public function createvipLink()
     {
         $goods_id = (string) $this->request->post('goods_id', $this->request->post('id', ''));
 
