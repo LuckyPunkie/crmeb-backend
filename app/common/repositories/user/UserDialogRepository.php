@@ -428,6 +428,59 @@ class UserDialogRepository extends BaseRepository
         return false;
     }
 
+    /**
+     * 我拉黑的用户列表
+     */
+    public function blacklistList(int $myUid, int $page, int $limit): array
+    {
+        $query = Db::name('user_dialog')
+            ->where(function ($q) use ($myUid) {
+                $q->where(function ($sq) use ($myUid) {
+                    $sq->where('uid_a', $myUid)->where('is_black_a', 1);
+                })->whereOr(function ($sq) use ($myUid) {
+                    $sq->where('uid_b', $myUid)->where('is_black_b', 1);
+                });
+            });
+
+        $count = (clone $query)->count();
+        $rows = $query->field('dialog_id,uid_a,uid_b,update_time')
+            ->order('update_time', 'desc')
+            ->page($page, $limit)
+            ->select()->toArray();
+
+        $chatUids = [];
+        foreach ($rows as $row) {
+            $chatUids[] = ((int)$row['uid_a'] === $myUid) ? (int)$row['uid_b'] : (int)$row['uid_a'];
+        }
+        $userMap = [];
+        if ($chatUids) {
+            $users = Db::name('user')->field('uid,nickname,avatar,sex')
+                ->whereIn('uid', $chatUids)->select()->toArray();
+            foreach ($users as $u) {
+                $userMap[(int)$u['uid']] = $u;
+            }
+        }
+
+        $list = [];
+        foreach ($rows as $row) {
+            $chatUid = ((int)$row['uid_a'] === $myUid) ? (int)$row['uid_b'] : (int)$row['uid_a'];
+            $user = $userMap[$chatUid] ?? null;
+            if (!$user) {
+                continue;
+            }
+            $list[] = [
+                'dialog_id' => (int)$row['dialog_id'],
+                'uid'       => $chatUid,
+                'nickname'  => $user['nickname'] ?? '',
+                'avatar'    => $user['avatar'] ?? '',
+                'sex'       => (int)($user['sex'] ?? 0),
+                'update_time' => $row['update_time'] ?? '',
+            ];
+        }
+
+        return ['count' => $count, 'list' => $list];
+    }
+
     public function setBlacklist(int $myUid, int $targetUid, bool $black): void
     {
         if ($myUid === $targetUid) {

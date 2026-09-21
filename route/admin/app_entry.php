@@ -20,6 +20,10 @@ Route::group(function () {
         ->name('adminAppEntryInit')
         ->option(['_alias' => 'App入口一键初始化', '_auth' => true, '_path' => '/setting/app_entry']);
 
+    Route::get('app_entry/jtk_activities', 'admin.system.AppEntry/jtkActivities')
+        ->name('adminAppEntryJtkActivities')
+        ->option(['_alias' => '聚推客活动列表(每日好券)', '_auth' => true, '_path' => '/setting/app_entry']);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

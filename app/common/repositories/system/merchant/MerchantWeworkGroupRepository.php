@@ -24,14 +24,19 @@ class MerchantWeworkGroupRepository extends BaseRepository
 
     /**
      * 按商户+分店读取配置（branch_id=0 为总店）
+     * @param bool $onlyEnabled true=仅返回已开启（C 端）；false=后台可读关闭态
      */
-    public function getByMerBranch(int $merId, int $branchId = 0): ?array
+    public function getByMerBranch(int $merId, int $branchId = 0, bool $onlyEnabled = true): ?array
     {
-        $row = MerchantWeworkGroup::getDB()
+        $query = MerchantWeworkGroup::getDB()
             ->where('mer_id', $merId)
-            ->where('branch_id', $branchId)
-            ->where('status', 1)
-            ->find();
+            ->where('branch_id', $branchId);
+
+        if ($onlyEnabled) {
+            $query->where('status', 1);
+        }
+
+        $row = $query->find();
 
         return $row ? $row->toArray() : null;
     }
@@ -42,13 +47,13 @@ class MerchantWeworkGroupRepository extends BaseRepository
     public function saveByMerBranch(int $merId, int $branchId, array $data): void
     {
         $payload = [
-            'corp_id' => (string)($data['corp_id'] ?? ''),
+            'corp_id' => '',
             'group_name' => (string)($data['group_name'] ?? ''),
-            'group_num' => max(0, (int)($data['group_num'] ?? 0)),
+            'group_num' => 0,
             'group_last_msg' => (string)($data['group_last_msg'] ?? ''),
             'qrcode_url' => (string)($data['qrcode_url'] ?? ''),
-            'group_link' => (string)($data['group_link'] ?? ''),
-            'status' => isset($data['status']) ? (int)$data['status'] : 1,
+            'group_link' => '',
+            'status' => isset($data['status']) ? ((int)$data['status'] ? 1 : 0) : 0,
             'update_time' => date('Y-m-d H:i:s'),
         ];
 
@@ -73,17 +78,17 @@ class MerchantWeworkGroupRepository extends BaseRepository
      */
     public function toApiPayload(?array $row): array
     {
-        $has = $row && (string)($row['qrcode_url'] ?? '') !== '';
+        $status = (int)($row['status'] ?? 0);
+        $qrcode = (string)($row['qrcode_url'] ?? '');
+        $has = $row && $status === 1 && $qrcode !== '';
 
         return [
             'has_group' => (bool)$has,
+            'status' => $status,
             'branch_id' => (int)($row['branch_id'] ?? 0),
-            'corp_id' => (string)($row['corp_id'] ?? ''),
             'group_name' => (string)($row['group_name'] ?? ''),
-            'group_num' => (int)($row['group_num'] ?? 0),
             'group_last_msg' => (string)($row['group_last_msg'] ?? ''),
-            'qrcode_url' => (string)($row['qrcode_url'] ?? ''),
-            'group_link' => (string)($row['group_link'] ?? ''),
+            'qrcode_url' => $qrcode,
         ];
     }
 }

@@ -10,14 +10,31 @@ class AppEntryDefaultSeed
     public static function slots(): array
     {
         return [
-            ['slot_key' => 'home_publish_note_types', 'section_title' => '', 'tab_label' => '发布笔记', 'sort' => 10],
-            ['slot_key' => 'service_official_pick', 'section_title' => '官方甄选', 'tab_label' => '服务页', 'sort' => 20],
-            ['slot_key' => 'user_gift_row', 'section_title' => '', 'tab_label' => '我的·礼物', 'sort' => 30],
-            ['slot_key' => 'user_community_grid', 'section_title' => '逛逛社区', 'tab_label' => '我的·逛逛', 'sort' => 40],
-            ['slot_key' => 'user_job_seek', 'section_title' => '求职管理', 'tab_label' => '求职管理', 'sort' => 50],
-            ['slot_key' => 'user_job_recruit', 'section_title' => '招聘管理', 'tab_label' => '招聘管理', 'sort' => 60],
-            ['slot_key' => 'user_service', 'section_title' => '我的服务', 'tab_label' => '我的服务', 'sort' => 70],
-            ['slot_key' => 'user_merchant_manage', 'section_title' => '掌上经营', 'tab_label' => '掌上经营', 'sort' => 80],
+            ['slot_key' => 'home_publish_note_types', 'section_title' => '', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '发布笔记', 'sort' => 10],
+            [
+                'slot_key' => 'service_official_pick',
+                'section_title' => '官方甄选',
+                'section_note' => '平台用心之选，让生活更美好',
+                'section_note_color' => '#0231F9',
+                'section_note_bg' => '#EBF0FF',
+                'tab_label' => '服务页',
+                'sort' => 20,
+            ],
+            [
+                'slot_key' => 'service_daily_coupon',
+                'section_title' => '每日好券',
+                'section_note' => '外卖打车咖啡奶茶，天天发券折上折！',
+                'section_note_color' => '#B03D12',
+                'section_note_bg' => '#FAE8DB',
+                'tab_label' => '每日好券',
+                'sort' => 25,
+            ],
+            ['slot_key' => 'user_gift_row', 'section_title' => '', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '我的·礼物', 'sort' => 30],
+            ['slot_key' => 'user_community_grid', 'section_title' => '逛逛社区', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '我的·逛逛', 'sort' => 40],
+            ['slot_key' => 'user_job_seek', 'section_title' => '求职管理', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '求职管理', 'sort' => 50],
+            ['slot_key' => 'user_job_recruit', 'section_title' => '招聘管理', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '招聘管理', 'sort' => 60],
+            ['slot_key' => 'user_service', 'section_title' => '我的服务', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '我的服务', 'sort' => 70],
+            ['slot_key' => 'user_merchant_manage', 'section_title' => '掌上经营', 'section_note' => '', 'section_note_color' => '', 'section_note_bg' => '', 'tab_label' => '掌上经营', 'sort' => 80],
         ];
     }
 
@@ -76,6 +93,9 @@ class AppEntryDefaultSeed
             ['item_key' => 'animal_rescue', 'name' => '动物救助', 'subtitle' => '', 'icon' => '/static/images/service/icon-rescue.svg', 'tone' => '', 'url' => '/pages/animal_rescue/index/index', 'link_type' => 'path', 'action_key' => '', 'hide_when_review' => 1],
             ['item_key' => 'blindbox', 'name' => '惊喜盲盒', 'subtitle' => '', 'icon' => '/static/images/service/icon-blindbox.svg', 'tone' => '', 'url' => '/pages/blindbox/index', 'link_type' => 'path', 'action_key' => '', 'hide_when_review' => 0],
         ]);
+
+        // 每日好券：act_id 来自聚推客，名称/图标可运营改；与原 DAILY_FIRST_PAGE 对齐
+        $flat('service_daily_coupon', self::dailyCouponItems());
 
         $flat('user_gift_row', [
             ['item_key' => 'gift_received', 'name' => '我收到的礼物', 'subtitle' => '', 'icon' => '/static/images/user/icon-gift-received.svg', 'tone' => '', 'url' => '/pages/gifts/received/index', 'link_type' => 'path', 'action_key' => '', 'hide_when_review' => 0],
@@ -190,6 +210,59 @@ class AppEntryDefaultSeed
         }
         self::$defaultIconMapCache = $map;
         return $map;
+    }
+
+    /**
+     * 每日好券默认入口（约 3 页×8；act_id 以线上聚推客为准，运营可改名/图标）
+     */
+    public static function dailyCouponItems(): array
+    {
+        $icon = static function (string $file): string {
+            return 'https://img.jutuike.com/taokeout/icon/' . $file;
+        };
+        $row = static function (string $key, string $name, int $actId, string $iconFile) use ($icon): array {
+            return [
+                'item_key' => $key,
+                'name' => $name,
+                'subtitle' => '',
+                'icon' => $icon($iconFile),
+                'tone' => '',
+                'url' => '',
+                'link_type' => 'jtk_act',
+                'action_key' => '',
+                'act_id' => $actId,
+                'hide_when_review' => 0,
+            ];
+        };
+        return [
+            // 第 1 页（原 HTML / DAILY_FIRST_PAGE）
+            $row('daily_eleme', '饿了么', 69, 'ele.png'),
+            $row('daily_meituan', '美团外卖', 9, 'meituan.png'),
+            $row('daily_luckin', '瑞幸', 33, 'luckin.png'),
+            $row('daily_didi', '滴滴打车', 18, 'didi_dc_icon.png'),
+            $row('daily_movie', '电影票', 76, 'tq_cinema_jtk_icon.png'),
+            $row('daily_fliggy_hotel', '飞猪酒店', 113, 'feizhu_hotel_jtk.png'),
+            $row('daily_fliggy_flight', '机票', 95, 'didi_dc_icon.png'),
+            $row('daily_didi_drive', '滴滴代驾', 53, 'didi_daijia_jtk.png'),
+            // 第 2 页
+            $row('daily_kfc', '肯德基', 58, 'tqkfc.png'),
+            $row('daily_pizzahut', '必胜客', 64, 'pizzahut_jtk_icon.png'),
+            $row('daily_starbucks', '星巴克', 34, 'spk.png'),
+            $row('daily_heytea', '喜茶', 37, 'heytea.png'),
+            $row('daily_nayuki', '奈雪', 32, 'nayuki.png'),
+            $row('daily_burgerking', '汉堡王', 46, 'burgerking.png'),
+            $row('daily_pagoda', '百果园', 31, 'pagoda.png'),
+            $row('daily_huaxiaozhu', '花小猪', 44, 'jtk_hxz_icon.png'),
+            // 第 3 页
+            $row('daily_jd', '京东', 23, 'jd.png'),
+            $row('daily_pdd', '拼多多', 12, 'miaosha.png'),
+            $row('daily_tongcheng', '同程打车', 87, 'tcyl_icon_jtk.png?v=2'),
+            $row('daily_meituan_sg', '美团闪购', 8, 'shangou.png'),
+            $row('daily_fliggy_car', '飞猪租车', 145, 'feizhu_zuche_icon.png'),
+            $row('daily_fliggy_ticket', '飞猪门票', 148, 'feizhu_hotel_jtk.png'),
+            $row('daily_meituan_hotel', '美团酒店', 65, 'hotal.png'),
+            $row('daily_chwl', '美团团购', 27, 'chwl.png'),
+        ];
     }
 
     public static function resolveIcon(?string $itemKey, ?string $icon): string

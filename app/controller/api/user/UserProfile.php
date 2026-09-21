@@ -5,6 +5,7 @@ namespace app\controller\api\user;
 use think\App;
 use crmeb\basic\BaseController;
 use app\common\repositories\user\UserProfileRepository as repository;
+use app\common\repositories\user\UserWechatUnlockRepository;
 
 class UserProfile extends BaseController
 {
@@ -14,6 +15,33 @@ class UserProfile extends BaseController
     {
         parent::__construct($app);
         $this->repository = $repository;
+    }
+
+    /**
+     * 付费解锁对方微信号
+     * POST /api/user/wechat_unlock/:uid
+     * body: pay_type=weixin|routine|alipay|balance|mock, return_url?
+     */
+    public function wechatUnlock($uid)
+    {
+        $buyerUid = $this->request->uid();
+        $payType = (string)$this->request->param('pay_type', 'weixin');
+        $returnUrl = (string)$this->request->param('return_url', '');
+        $result = app()->make(UserWechatUnlockRepository::class)
+            ->unlock((int)$uid, $buyerUid, $payType, $returnUrl);
+        return app('json')->success($result);
+    }
+
+    /**
+     * 检查是否已解锁对方微信号
+     * GET /api/user/wechat_unlock_check/:uid
+     */
+    public function wechatUnlockCheck($uid)
+    {
+        $buyerUid = $this->request->uid();
+        $unlocked = app()->make(UserWechatUnlockRepository::class)
+            ->checkUnlocked((int)$uid, $buyerUid);
+        return app('json')->success(['unlocked' => $unlocked]);
     }
 
     /**
@@ -58,24 +86,63 @@ class UserProfile extends BaseController
 
         // 仅处理请求里实际出现的字段，避免默认空串清空已有数据
         $intFields = [
-            'height', 'weight', 'zodiac', 'education', 'education_type',
-            'annual_income', 'car_count', 'house_count', 'total_assets',
-            'relationship_status', 'dating_purpose',
-            'marital_status', 'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child',
-            'hope_age_min', 'hope_age_max', 'hope_height_min', 'hope_education',
+            'height',
+            'weight',
+            'zodiac',
+            'education',
+            'education_type',
+            'annual_income',
+            'car_count',
+            'house_count',
+            'total_assets',
+            'relationship_status',
+            'dating_purpose',
+            'marital_status',
+            'want_kids',
+            'smoking',
+            'drinking',
+            'tattoo',
+            'only_child',
+            'hope_age_min',
+            'hope_age_max',
+            'hope_height_min',
+            'hope_education',
         ];
         $stringFields = [
-            'birth_month', 'job_title', 'wechat_id',
-            'hometown_province', 'hometown_city', 'current_province', 'current_city',
-            'school_name', 'pets', 'about_me', 'hope_cities', 'hope_text',
-            'cover_info', 'cover_about', 'cover_hope', 'cover_hobby',
-            'hobby_photo_1', 'hobby_photo_2',
+            'birth_month',
+            'job_title',
+            'wechat_id',
+            'hometown_province',
+            'hometown_city',
+            'current_province',
+            'current_city',
+            'school_name',
+            'pets',
+            'about_me',
+            'hope_cities',
+            'hope_text',
+            'cover_info',
+            'cover_about',
+            'cover_hope',
+            'cover_hobby',
+            'hobby_photo_1',
+            'hobby_photo_2',
         ];
         // 允许空串写入（用于删除封面图等）
         $allowEmpty = [
-            'cover_info', 'cover_about', 'cover_hope', 'cover_hobby',
-            'hobby_photo_1', 'hobby_photo_2', 'about_me', 'hope_text',
-            'hobbies', 'pets', 'school_name', 'hope_cities', 'wechat_id',
+            'cover_info',
+            'cover_about',
+            'cover_hope',
+            'cover_hobby',
+            'hobby_photo_1',
+            'hobby_photo_2',
+            'about_me',
+            'hope_text',
+            'hobbies',
+            'pets',
+            'school_name',
+            'hope_cities',
+            'wechat_id',
         ];
         // 允许写入 0
         $allowZero = ['car_count', 'house_count'];
@@ -116,6 +183,22 @@ class UserProfile extends BaseController
         if (array_key_exists('wechat_unlock_price', $input)) {
             $price = round(max(0, min(9999, (float)$input['wechat_unlock_price'])), 2);
             $filtered['wechat_unlock_price'] = $price;
+        }
+        // 全网粉丝：仅自然数；空串/null 表示清空不展示
+        if (array_key_exists('network_fans', $input)) {
+            $raw = $input['network_fans'];
+            if ($raw === null || $raw === '') {
+                $filtered['network_fans'] = null;
+            } else {
+                if (is_string($raw) && !preg_match('/^\d+$/', trim($raw))) {
+                    return app('json')->fail('全网粉丝仅支持填写自然数');
+                }
+                $n = (int)$raw;
+                if ($n < 0) {
+                    return app('json')->fail('全网粉丝仅支持填写自然数');
+                }
+                $filtered['network_fans'] = min($n, 999999999);
+            }
         }
 
         if (!empty($filtered)) {

@@ -578,8 +578,49 @@ class Auth extends BaseController
                 throw new ValidateException('授权失败[001]');
             return $user;
         } else if ($auth['type'] === 'app_wechat') {
-            $wechatInfo = $make->getAppAuthByCode($code);
-            $unionId = $wechatInfo['unionid'] ?? $wechatInfo['openid'];
+            // App 原生登录：客户端 uni.login 已换票，传来的是 access_token(+openid)，不是 oauth code
+            $accessToken = trim((string)($data['access_token'] ?? $code));
+            $openid = trim((string)($data['openid'] ?? ''));
+            $wechatInfo = [];
+            if ($accessToken !== '' && $openid !== '') {
+                try {
+                    $wechatInfo = $make->getAppOAuth($accessToken, $openid);
+                } catch (\Throwable $e) {
+                    // 兼容误把 oauth code 放进 code 字段的旧包：再试一次 code 换票
+                    if ($code !== '' && $code !== $accessToken) {
+                        $wechatInfo = $make->getAppAuthByCode($code);
+                    } else {
+                        throw $e instanceof ValidateException ? $e : new ValidateException('微信授权失败: ' . $e->getMessage());
+                    }
+                }
+            } elseif ($code !== '') {
+                $wechatInfo = $make->getAppAuthByCode($code);
+            } else {
+                throw new ValidateException('授权失败,参数有误');
+            }
+            if (!is_array($wechatInfo)) {
+                $wechatInfo = [];
+            }
+            if (empty($wechatInfo['openid']) && $openid !== '') {
+                $wechatInfo['openid'] = $openid;
+            }
+            $clientUnion = trim((string)($data['unionid'] ?? ''));
+            if ($clientUnion !== '' && empty($wechatInfo['unionid'])) {
+                $wechatInfo['unionid'] = $clientUnion;
+            }
+            // 客户端 getUserInfo 补齐昵称头像
+            $clientNick = trim((string)($data['nickName'] ?? ($data['nickname'] ?? '')));
+            $clientAvatar = trim((string)($data['avatarUrl'] ?? ($data['headimgurl'] ?? ($data['avatar'] ?? ''))));
+            if ($clientNick !== '' && trim((string)($wechatInfo['nickname'] ?? '')) === '') {
+                $wechatInfo['nickname'] = $clientNick;
+            }
+            if ($clientAvatar !== '' && trim((string)($wechatInfo['headimgurl'] ?? '')) === '') {
+                $wechatInfo['headimgurl'] = $clientAvatar;
+            }
+            $unionId = $wechatInfo['unionid'] ?? ($wechatInfo['openid'] ?? '');
+            if ($unionId === '') {
+                throw new ValidateException('授权失败,未获取到用户标识');
+            }
             $user = app()->make(WechatUserRepository::class)->syncAppUser($unionId, $wechatInfo, 'App', $createUser);
             if (!$user)
                 throw new ValidateException('授权失败[001]');
@@ -678,7 +719,7 @@ class Auth extends BaseController
 
         if (!empty($data['authResult']['access_token']) && !empty($data['authResult']['openid'])) {
             try {
-                $raw = $wechatUserRepository->getUserInfoBySnsAccessToken(
+                $raw = $wechatUserRepository->getAppOAuth(
                     (string)$data['authResult']['access_token'],
                     (string)$data['authResult']['openid']
                 );

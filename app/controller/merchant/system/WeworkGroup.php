@@ -17,7 +17,7 @@ use app\common\repositories\system\merchant\MerchantWeworkGroupRepository;
 use app\validate\merchant\MerchantWeworkGroupValidate;
 
 /**
- * 商户后台 - 企业微信顾客群配置
+ * 商户后台 - 微信顾客群配置
  */
 class WeworkGroup extends BaseController
 {
@@ -37,7 +37,8 @@ class WeworkGroup extends BaseController
     {
         $merId = (int)$this->request->merId();
         $branchId = (int)$this->request->param('branch_id', 0);
-        $row = $this->repository->getByMerBranch($merId, $branchId);
+        // 后台需读到关闭状态的配置，便于再次开启
+        $row = $this->repository->getByMerBranch($merId, $branchId, false);
 
         return app('json')->success($this->repository->toApiPayload($row));
     }
@@ -49,17 +50,18 @@ class WeworkGroup extends BaseController
     public function save(MerchantWeworkGroupValidate $validate)
     {
         $data = $this->request->params([
-            'corp_id',
             'group_name',
-            'group_num',
             'group_last_msg',
             'qrcode_url',
-            'group_link',
             ['branch_id', 0],
-            ['status', 1],
+            ['status', 0],
         ]);
 
         $validate->check($data);
+
+        if ((int)($data['status'] ?? 0) === 1 && trim((string)($data['qrcode_url'] ?? '')) === '') {
+            return app('json')->fail('开启微信群时请上传入群二维码');
+        }
 
         $merId = (int)$this->request->merId();
         $branchId = (int)($data['branch_id'] ?? 0);
@@ -67,6 +69,6 @@ class WeworkGroup extends BaseController
 
         $this->repository->saveByMerBranch($merId, $branchId, $data);
 
-        return app('json')->success('企业微信群配置保存成功');
+        return app('json')->success('微信群配置保存成功');
     }
 }

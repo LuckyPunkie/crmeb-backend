@@ -103,7 +103,7 @@ class CommunityReply extends BaseController
     }
 
     /**
-     * 删除评论
+     * 删除评论：评论作者本人，或帖子作者可删
      * @param $id
      * @return \think\response\Json
      * @author Qinii
@@ -111,8 +111,17 @@ class CommunityReply extends BaseController
      */
     public function delete($id)
     {
-        if (!$this->repository->uidExists($id, $this->request->userInfo()->uid))
+        $uid = (int)$this->request->userInfo()->uid;
+        $reply = $this->repository->get($id);
+        if (!$reply || (int)($reply['is_del'] ?? 0) === 1) {
             return app('json')->fail('评论不存在');
+        }
+        $isCommentOwner = (int)$reply['uid'] === $uid;
+        $isPostOwner = app()->make(CommunityRepository::class)
+            ->uidExists((int)$reply['community_id'], $uid);
+        if (!$isCommentOwner && !$isPostOwner) {
+            return app('json')->fail('无权删除该评论');
+        }
         $this->repository->delete($id);
         return app('json')->success('评论删除');
     }

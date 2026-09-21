@@ -94,13 +94,31 @@ class Community extends BaseController
             $where['order'] = 'start';
         }
         [$page, $limit] = $this->getPage();
+        $searchType = (string)($where['search_type'] ?? '');
+        $keyword = trim((string)($where['keyword'] ?? ''));
+        // 用户 Tab：按昵称 / uid / user_code 搜用户表，不走帖子列表
+        if ($searchType === 'user') {
+            return app('json')->success(
+                $this->repository->searchApiUsers($keyword, $page, $limit, $this->user)
+            );
+        }
         [$platform, $appVersion] = $this->communityFeedClientParams();
         $categoryId = (int)($where['category_id'] ?? 0);
         if ($categoryId > 0 && app()->make(\app\common\repositories\system\AppEntryCommunityFeed::class)
             ->isCategoryBlocked($categoryId, $platform, $appVersion)) {
-            return app('json')->success(['count' => 0, 'list' => []]);
+            return app('json')->success(['count' => 0, 'list' => [], 'users' => [], 'users_count' => 0]);
         }
-        return app('json')->success($this->repository->getApiList($where, $page, $limit, $this->user, $platform, $appVersion));
+        $data = $this->repository->getApiList($where, $page, $limit, $this->user, $platform, $appVersion);
+        // 全部 Tab：首页附带匹配用户（昵称 / uid / user_code），便于 ID 搜索也能出结果
+        if (($searchType === '' || $searchType === 'all') && $page === 1 && $keyword !== '') {
+            $userHit = $this->repository->searchApiUsers($keyword, 1, 5, $this->user);
+            $data['users'] = $userHit['list'] ?? [];
+            $data['users_count'] = (int)($userHit['count'] ?? 0);
+        } else {
+            $data['users'] = [];
+            $data['users_count'] = 0;
+        }
+        return app('json')->success($data);
     }
 
     /**
@@ -118,6 +136,7 @@ class Community extends BaseController
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
+            'hobby',
         ]);
         [$page, $limit] = $this->getPage();
 
@@ -137,7 +156,8 @@ class Community extends BaseController
         [$page, $limit] = $this->getPage();
         $where = $this->repository::IS_SHOW_WHERE;
         $where['community_id'] = $this->request->param('id','');
-        return app('json')->success($this->repository->getApiVideoList($where, $page, $limit, $this->user));
+        [$platform, $appVersion] = $this->communityFeedClientParams();
+        return app('json')->success($this->repository->getApiVideoList($where, $page, $limit, $this->user, 0, $platform, $appVersion));
     }
 
     /**
@@ -213,7 +233,8 @@ class Community extends BaseController
         $where['is_del'] = 0;
         $where['community_id'] = $this->request->param('community_id/d','');
 
-        $data = $this->repository->getApiVideoList($where, $page, $limit, $this->user,$is_start);
+        [$platform, $appVersion] = $this->communityFeedClientParams();
+        $data = $this->repository->getApiVideoList($where, $page, $limit, $this->user, $is_start, $platform, $appVersion);
         return app('json')->success($data);
     }
 

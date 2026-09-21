@@ -67,8 +67,14 @@ class AnimalRescue extends BaseController
      */
     public function lst()
     {
-        $where = $this->request->params(['keyword', 'type', 'city_id']);
+        $where = $this->request->params(['keyword', 'type', 'city_id', 'only_active']);
+        $onlyActive = !empty($where['only_active']) && (int)$where['only_active'] === 1;
+        unset($where['only_active']);
         $where = array_merge($where, $this->repository::IS_SHOW_WHERE);
+        // 仅看未完成：status=1 进行中（默认含进行中+已完成）
+        if ($onlyActive) {
+            $where['status'] = \app\common\model\animal_rescue\AnimalRescuePost::STATUS_ACTIVE;
+        }
         [$page, $limit] = $this->getPage();
         $uid = $this->request->isLogin() ? (int)$this->request->uid() : 0;
         return app('json')->success($this->repository->getApiList($where, $page, $limit, $uid));

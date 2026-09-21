@@ -266,6 +266,77 @@ class CommunityRepository extends BaseRepository
     }
 
     /**
+     * 社区搜索用户：按昵称 / uid / user_code 匹配
+     * 返回结构兼容前端搜索结果页「用户」Tab（author + is_fans）
+     */
+    public function searchApiUsers(string $keyword, int $page, int $limit, $userInfo = null): array
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            return ['count' => 0, 'list' => []];
+        }
+
+        $viewerUid = isset($userInfo) && $userInfo ? (int)$userInfo->uid : 0;
+        $query = \think\facade\Db::name('user')->alias('User')
+            ->whereNull('User.cancel_time')
+            ->where('User.status', 1)
+            ->where(function ($q) use ($keyword) {
+                $q->whereLike('User.nickname', '%' . $keyword . '%')
+                    ->whereOr('User.user_code', 'like', '%' . $keyword . '%');
+                if (ctype_digit($keyword)) {
+                    $q->whereOr('User.uid', (int)$keyword);
+                }
+            });
+
+        if ($viewerUid > 0) {
+            $blockedUids = $this->getBlockedRelatedUids($viewerUid);
+            if ($blockedUids) {
+                $query->whereNotIn('User.uid', $blockedUids);
+            }
+        }
+
+        $count = (int)$query->count('User.uid');
+        $rows = $query->field('User.uid,User.avatar,User.nickname,User.count_fans,User.count_content,User.user_code')
+            ->order('User.uid', 'desc')
+            ->page($page, $limit)
+            ->select()
+            ->toArray();
+
+        $followedMap = [];
+        if ($viewerUid > 0 && $rows) {
+            $uids = array_column($rows, 'uid');
+            $followed = \think\facade\Db::name('relevance')
+                ->where('left_id', $viewerUid)
+                ->where('type', RelevanceRepository::TYPE_COMMUNITY_FANS)
+                ->whereIn('right_id', $uids)
+                ->column('right_id');
+            $followedMap = array_flip($followed ?: []);
+        }
+
+        $list = [];
+        foreach ($rows as $row) {
+            $uid = (int)$row['uid'];
+            $author = [
+                'uid' => $uid,
+                'avatar' => $row['avatar'] ?? '',
+                'nickname' => $row['nickname'] ?? '',
+                'count_fans' => (int)($row['count_fans'] ?? 0),
+                'count_content' => (int)($row['count_content'] ?? 0),
+                'user_code' => $row['user_code'] ?? '',
+            ];
+            $isFans = isset($followedMap[$uid]);
+            $list[] = [
+                'uid' => $uid,
+                'author' => $author,
+                'is_fans' => $isFans,
+                'is_start' => $isFans,
+            ];
+        }
+
+        return compact('count', 'list');
+    }
+
+    /**
      * 视频下滑列表第一个视频
      * @param $community_id
      * @param $userInfo
@@ -281,7 +352,7 @@ class CommunityRepository extends BaseRepository
         if ($viewerUid > 0) {
             $blockedUids = $this->getBlockedRelatedUids($viewerUid);
             if ($blockedUids) {
-                $ownerUid = (int)$this->dao->search(['community_id' => $community_id])->value('uid');
+                $ownerUid = (int)$this->dao->search(['community_id' => $community_id])->value('Community.uid');
                 if ($ownerUid > 0 && in_array($ownerUid, $blockedUids, true)) {
                     return null;
                 }
@@ -348,10 +419,14 @@ class CommunityRepository extends BaseRepository
      * @return array
      * @author Qinii
      */
-    public function getApiVideoList(array $where, int $page, int $limit, $userInfo, $type = 0)
+    public function getApiVideoList(array $where, int $page, int $limit, $userInfo, $type = 0, string $clientPlatform = '', string $appVersion = '')
     {
         $where['is_type'] = self::COMMUNIT_TYPE_VIDEO;
         $first = $this->getFirst($where['community_id'], $userInfo);
+        // 提审隐藏类型（如付费）时，首条也不应强插进下滑列表
+        if ($first && $clientPlatform !== '' && $this->isCommunityFeedBlockedItem($first, $clientPlatform, $appVersion)) {
+            $first = null;
+        }
 
         if ($type) { // 点赞过的内容
             $where['uid'] = $userInfo->uid;
@@ -365,10 +440,10 @@ class CommunityRepository extends BaseRepository
         }
 
         unset($where['community_id']);
-        $data = $this->getApiList($where, $page, $limit, $userInfo);
+        $data = $this->getApiList($where, $page, $limit, $userInfo, $clientPlatform, $appVersion);
         if (empty($data['list']) && isset($where['topic_id'])) {
             unset($where['topic_id']);
-            $data = $this->getApiList($where, $page, $limit, $userInfo);
+            $data = $this->getApiList($where, $page, $limit, $userInfo, $clientPlatform, $appVersion);
         }
 
         if ($first && $page == 1) {
@@ -377,6 +452,38 @@ class CommunityRepository extends BaseRepository
             $data['count']++;
         }
         return $data;
+    }
+
+    /**
+     * 是否属于 C1 社区信息流在当前提审端应隐藏的帖子
+     */
+    protected function isCommunityFeedBlockedItem($item, string $clientPlatform, string $appVersion): bool
+    {
+        $arr = is_array($item) ? $item : (method_exists($item, 'toArray') ? $item->toArray() : (array)$item);
+        $communityType = (int)($arr['community_type'] ?? 0);
+        $isType = (int)($arr['is_type'] ?? 0);
+        $ctx = app()->make(\app\common\repositories\system\AppEntryCommunityFeed::class)
+            ->clientContext($clientPlatform, $appVersion);
+        foreach ($ctx['hidden_type_keys'] as $typeKey) {
+            switch ($typeKey) {
+                case 'note_image':
+                    if ($communityType === 0 && $isType === 1) return true;
+                    break;
+                case 'note_video':
+                    if ($communityType === 0 && $isType === 2) return true;
+                    break;
+                case 'redpacket':
+                    if ($communityType === 1) return true;
+                    break;
+                case 'paid':
+                    if ($communityType === 2) return true;
+                    break;
+                case 'recruit':
+                    if ($communityType === 3) return true;
+                    break;
+            }
+        }
+        return false;
     }
 
     /**
@@ -450,7 +557,7 @@ class CommunityRepository extends BaseRepository
                 },
             ])
             ->hidden(['is_del'])
-            ->field('community_id,title,image,topic_id,count_start,count_reply,start,create_time,uid,status,pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal,visibility')
+            ->field('community_id,title,image,topic_id,count_start,count_reply,start,create_time,update_time,uid,status,pv,is_show,content,video_link,is_type,community_type,community_type_data,refusal,visibility')
             ->find();
 
         if (!$data) throw new ValidateException('内容不存在，可能已被删除了哦～');
@@ -631,6 +738,7 @@ class CommunityRepository extends BaseRepository
     public function create(array $data)
     {
         event('community.create.before', compact('data'));
+        $this->guardDuplicateCreate($data);
         $topicRepo = app()->make(CommunityTopicRepository::class);
         $topics = $topicRepo->resolveTopicsFromPayload($data);
         unset($data['topic_names'], $data['free_content']);
@@ -667,6 +775,40 @@ class CommunityRepository extends BaseRepository
     }
 
     /**
+     * 防重复发布：短时内同用户同内容指纹只允许创建一次（兜底前端连点 / 双事件）
+     */
+    protected function guardDuplicateCreate(array $data): void
+    {
+        $uid = (int)($data['uid'] ?? 0);
+        if ($uid <= 0) {
+            return;
+        }
+        $image = $data['image'] ?? '';
+        if (is_array($image)) {
+            $image = implode(',', $image);
+        }
+        $fingerprint = md5(json_encode([
+            $uid,
+            (string)($data['title'] ?? ''),
+            (string)($data['content'] ?? ''),
+            (string)$image,
+            (string)($data['video_link'] ?? ''),
+            (int)($data['community_type'] ?? 0),
+            (int)($data['is_type'] ?? 1),
+        ], JSON_UNESCAPED_UNICODE));
+
+        $contentKey = 'community:create:dup:' . $fingerprint;
+        $uidKey = 'community:create:uid:' . $uid;
+
+        if (Cache::get($contentKey) || Cache::get($uidKey)) {
+            throw new ValidateException('请勿重复发布');
+        }
+        // 同内容 10 秒；同用户连点 3 秒
+        Cache::set($contentKey, 1, 10);
+        Cache::set($uidKey, 1, 3);
+    }
+
+    /**
      *  编辑
      * @param int $id
      * @param array $data
@@ -696,6 +838,8 @@ class CommunityRepository extends BaseRepository
         Db::transaction(function () use ($id, $data, $topics, $topicRepo) {
             $spuId = $data['spu_id'] ?? [];
             unset($data['spu_id']);
+            // 作者重新编辑后记录更新时间，详情页据此展示「编辑于」
+            $data['update_time'] = date('Y-m-d H:i:s');
             $community = $this->dao->update($id, $data);
             if (!empty($spuId)) $this->joinProduct($id, $spuId);
             $topicIds = [];
@@ -839,6 +983,7 @@ class CommunityRepository extends BaseRepository
         }
         $data['start']          = $user->count_start;
         $data['uid']            = $user->uid;
+        $data['user_code']      = $user->user_code ?? '';
         $data['avatar']         = $user->avatar;
         $data['nickname']       = $user->nickname;
         $data['sex']            = $user->sex ?? 0;
@@ -901,6 +1046,9 @@ class CommunityRepository extends BaseRepository
         $data['wechat_unlock_price'] = $unlockPrice;
         $data['wechat_unlocked'] = $is_self || $wechatUnlocked;
         $data['wechat_id'] = ($is_self || $wechatUnlocked || $unlockPrice <= 0) ? $wechatId : '';
+        // 全网粉丝（用户自填）；未填则为 null，前端不展示
+        $networkFans = $profile['network_fans'] ?? null;
+        $data['network_fans'] = ($networkFans === null || $networkFans === '') ? null : (int)$networkFans;
 
         return $data;
     }
@@ -954,7 +1102,7 @@ class CommunityRepository extends BaseRepository
 
         // 感情状态·交友目的
         $relMap    = [1 => '单身', 2 => '已婚', 3 => '离异', 4 => '丧偶'];
-        $datingMap = [1 => '找对象', 2 => '普通交友', 3 => '不确定'];
+        $datingMap = [1 => '找对象', 2 => '交朋友', 3 => '不交朋友'];
         if (!empty($profile['relationship_status'])) {
             $rel    = $relMap[$profile['relationship_status']] ?? '';
             $dating = !empty($profile['dating_purpose']) ? ($datingMap[$profile['dating_purpose']] ?? '') : '';

@@ -205,6 +205,9 @@ Route::group(function () {
         // 社交档案
         Route::get('profile', 'UserProfile/detail');
         Route::post('profile/save', 'UserProfile/save');
+        // 付费解锁微信号
+        Route::post('wechat_unlock/:uid', 'UserProfile/wechatUnlock');
+        Route::get('wechat_unlock_check/:uid', 'UserProfile/wechatUnlockCheck');
 
         // 资质认证
         Route::get('certification', 'UserCertification/list');
@@ -279,6 +282,7 @@ Route::group(function () {
 
         Route::post('reply/create/:id', 'CommunityReply/create');
         Route::post('reply/start/:id', 'CommunityReply/start');
+        Route::delete('reply/delete/:id', 'CommunityReply/delete');
 
         Route::get('order/:id', 'Community/getSpuByOrder');
 
@@ -554,6 +558,22 @@ Route::group(function () {
     Route::group('user', function () {
         // 签到数据信息获取
         Route::get('sign/info', 'UserSign/info');
+
+        // 印象墙
+        Route::group('impression', function () {
+            Route::get('summary/:owner_uid', 'Impression/summary');
+            Route::get('lst/:owner_uid', 'Impression/lst');
+            Route::post('create/:owner_uid', 'Impression/create');
+            Route::post('delete/:impression_id', 'Impression/delete');
+
+            Route::get('comment/:impression_id', 'Impression/comments');
+            Route::get('comment/replies/:parent_id', 'Impression/commentReplies');
+            Route::post('comment/create/:impression_id', 'Impression/commentCreate');
+            Route::post('comment/delete/:comment_id', 'Impression/commentDelete');
+
+            Route::post('like', 'Impression/like');
+            Route::post('wall/toggle', 'Impression/wallToggle');
+        });
     })->prefix('api.user.');
 
     //获取商户基本信息

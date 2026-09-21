@@ -113,10 +113,10 @@ class CommunityDao extends BaseDao
 //                $query->whereLike('title',"%{$where['keyword']}%");
 //            })
             ->when(isset($where['uid']) && $where['uid'] !==  '', function ($query) use($where) {
-                $query->where('uid',$where['uid']);
+                $query->where('Community.uid',$where['uid']);
             })
             ->when(isset($where['uids']) && $where['uids'] !==  '', function ($query) use($where) {
-                $query->whereIn('uid',$where['uids']);
+                $query->whereIn('Community.uid',$where['uids']);
             })
             ->when(isset($where['topic_id']) && $where['topic_id'] !==  '', function ($query) use($where) {
                 $tid = $where['topic_id'];

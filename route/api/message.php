@@ -18,6 +18,7 @@ Route::group('message', function () {
     Route::get('unread-total', 'api.message.Notification/unreadTotal');
 
     Route::group('user', function () {
+        Route::get('blacklist', 'api.message.Message/blacklist');
         Route::get('history/:uid', 'api.message.Message/messageHistory');
         Route::get('settings/:uid', 'api.message.Message/chatSettings');
         Route::get('search/:uid', 'api.message.Message/searchHistory');

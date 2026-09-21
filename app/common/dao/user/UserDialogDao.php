@@ -32,19 +32,26 @@ class UserDialogDao extends BaseDao
         $uidA = min($uid1, $uid2);
         $uidB = max($uid1, $uid2);
         $dialog = $this->getModel()::where('uid_a', $uidA)->where('uid_b', $uidB)->find();
+        $relationType = $this->calcRelationType($uid1, $uid2);
         if (!$dialog) {
-            $relationType = $this->calcRelationType($uid1, $uid2);
-            $dialog = $this->getModel()::create([
-                'uid_a' => $uidA,
-                'uid_b' => $uidB,
-                'relation_type' => $relationType,
-            ]);
-        } else {
-            $relationType = $this->calcRelationType($uid1, $uid2);
-            if ($dialog->relation_type != $relationType) {
-                $dialog->relation_type = $relationType;
-                $dialog->save();
+            try {
+                $dialog = $this->getModel()::create([
+                    'uid_a' => $uidA,
+                    'uid_b' => $uidB,
+                    'relation_type' => $relationType,
+                ]);
+            } catch (\think\db\exception\PDOException $e) {
+                // 并发写入命中 uk_uid_pair 唯一键：另一路请求已建好，改为读取
+                if ((int)$e->getCode() === 23000 || strpos($e->getMessage(), '1062') !== false) {
+                    $dialog = $this->getModel()::where('uid_a', $uidA)->where('uid_b', $uidB)->find();
+                } else {
+                    throw $e;
+                }
             }
+        }
+        if ($dialog && $dialog->relation_type != $relationType) {
+            $dialog->relation_type = $relationType;
+            $dialog->save();
         }
         return $dialog;
     }

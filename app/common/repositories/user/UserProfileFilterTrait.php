@@ -168,6 +168,19 @@ trait UserProfileFilterTrait
             }
         }
 
+        // 兴趣爱好：JSON 数组标签完全一致；字母不区分大小写
+        if (!empty($where['hobby'])) {
+            $hobby = trim((string)$where['hobby']);
+            if ($hobby !== '') {
+                $hasProfileFilter = true;
+                $escaped = addcslashes(mb_strtolower($hobby, 'UTF-8'), '%_\\');
+                $profileQuery->whereRaw(
+                    "LOWER(CAST(`hobbies` AS CHAR)) LIKE ?",
+                    ['%"' . $escaped . '"%']
+                );
+            }
+        }
+
         if (!$hasProfileFilter) {
             return null;
         }
@@ -184,6 +197,7 @@ trait UserProfileFilterTrait
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
+            'hobby',
         ];
     }
 }

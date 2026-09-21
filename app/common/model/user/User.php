@@ -367,7 +367,8 @@ class User extends BaseModel
 
     public function getAvatarAttr($value)
     {
-        if (empty($value)) {
+        // 微信小程序未授权头像时返回固定的灰色默认头像（POgEwh4m...），视为未设置头像
+        if (empty($value) || strpos($value, 'POgEwh4mIHO4nibH0KlMECNjjGxQUq24ZEaGT4poC6icRiccVGKSyXwibcPq4BWmiaIGuG1icwxaQX6grC9VemZoJ8rg') !== false) {
             return systemConfig('user_default_avatar') ?: rtrim(systemConfig('site_url'), '/') . '/static/f.png';
         }
         return $value;

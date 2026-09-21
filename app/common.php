@@ -1283,6 +1283,61 @@ if (!function_exists('lbs_address')) {
     }
 }
 
+if (!function_exists('lbs_suggestion')) {
+    /**
+     * 腾讯地图地点输入提示（多结果 POI），可按城市限制搜索范围
+     * @param string $keyword
+     * @param string $region 城市名，如「广州」
+     * @param string $location 「lat,lng」用于排序距离
+     * @param int $regionFix 1=强制仅在 region 内
+     * @return array
+     */
+    function lbs_suggestion($keyword, $region = '', $location = '', $regionFix = 1)
+    {
+        $key = systemConfig('tx_map_key');
+        if (!$key) {
+            throw new \think\exception\ValidateException('未配置腾讯地图KEY');
+        }
+        $query = [
+            'keyword' => $keyword,
+            'key' => $key,
+            'page_index' => 1,
+            'page_size' => 20,
+            'policy' => 1,
+        ];
+        if ($region !== '' && $region !== null) {
+            $query['region'] = $region;
+            $query['region_fix'] = (int)$regionFix ? 1 : 0;
+        }
+        if ($location !== '' && $location !== null) {
+            $query['location'] = $location;
+        }
+        $url = 'https://apis.map.qq.com/ws/place/v1/suggestion/?' . http_build_query($query);
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+        $original = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $error = $errno ? curl_error($ch) : null;
+        curl_close($ch);
+        if ($error) {
+            throw new \think\exception\ValidateException($error);
+        }
+        $json = json_decode((string)$original, true);
+        if (!is_array($json)) {
+            throw new \think\exception\ValidateException('地点搜索失败');
+        }
+        if (!empty($json['status'])) {
+            Log::info('地图suggestion错误:' . ($json['message'] ?? ''));
+            throw new \think\exception\ValidateException($json['message'] ?? '地点搜索失败');
+        }
+        return is_array($json['data'] ?? null) ? $json['data'] : [];
+    }
+}
+
 
 if (!function_exists('aj_captcha_check_one')) {
     /**

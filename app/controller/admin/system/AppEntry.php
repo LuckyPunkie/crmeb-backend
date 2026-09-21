@@ -35,4 +35,16 @@ class AppEntry extends BaseController
         $result = $this->repository->initDefaults($force);
         return app('json')->success($result);
     }
+
+    /**
+     * 聚推客活动列表（每日好券添加入口）
+     * GET /sys/app_entry/jtk_activities
+     */
+    public function jtkActivities()
+    {
+        $keyword = (string)$this->request->param('keyword', '');
+        $page = (int)$this->request->param('page/d', 1);
+        $pageSize = (int)$this->request->param('pageSize/d', 100);
+        return app('json')->success($this->repository->listJutuikeActivities($keyword, $page, $pageSize));
+    }
 }

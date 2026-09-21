@@ -237,9 +237,19 @@ class WechatUserRepository extends BaseRepository
 
         return Db::transaction(function () use ($createUser, $type, $wechatInfo, $wechatUser) {
             if ($wechatUser) {
-                unset($wechatInfo['nickname']);
+                // 已有昵称时不覆盖（用户可能已自行修改）；库里为空则允许补写微信昵称
+                if (trim((string)($wechatUser['nickname'] ?? '')) !== '') {
+                    unset($wechatInfo['nickname']);
+                }
+                // 新头像为空时保留原头像
+                if (trim((string)($wechatInfo['headimgurl'] ?? '')) === '') {
+                    unset($wechatInfo['headimgurl']);
+                }
                 $wechatUser->save($wechatInfo);
             } else {
+                if (trim((string)($wechatInfo['nickname'] ?? '')) === '') {
+                    $wechatInfo['nickname'] = '微信用户U' . substr(uniqid(true, true), -6);
+                }
                 $wechatUser = $this->dao->create($wechatInfo);
             }
             if (!$createUser) {
@@ -595,7 +605,8 @@ class WechatUserRepository extends BaseRepository
     }
 
     /**
-     * App 微信登录：onlyAuthorize 模式下用 code 换用户信息（移动应用 OAuth）
+     * App 微信登录：onlyAuthorize 下用 code 换用户信息（移动应用 OAuth）
+     * 注意：code 只能用一次，客户端不要再调 getUserInfo 以免把 code 消耗掉。
      */
     public function getAppAuthByCode(string $code): array
     {
@@ -610,6 +621,39 @@ class WechatUserRepository extends BaseRepository
             $oauth = (new OfficialAccountApplication($config))->getOAuth();
             $socialiteUser = $oauth->userFromCode($code);
             $raw = $socialiteUser->getRaw();
+            if (!is_array($raw)) {
+                $raw = [];
+            }
+            if (empty($raw['nickname']) && method_exists($socialiteUser, 'getNickname')) {
+                $raw['nickname'] = (string)($socialiteUser->getNickname() ?: '');
+            }
+            if (empty($raw['headimgurl']) && method_exists($socialiteUser, 'getAvatar')) {
+                $raw['headimgurl'] = (string)($socialiteUser->getAvatar() ?: '');
+            }
+            if (empty($raw['openid']) && method_exists($socialiteUser, 'getId')) {
+                $raw['openid'] = (string)($socialiteUser->getId() ?: '');
+            }
+            // 缺昵称/头像时，用已换到的 access_token 再拉 sns/userinfo（不再次消耗 code）
+            $tokenResponse = method_exists($socialiteUser, 'getTokenResponse')
+                ? ($socialiteUser->getTokenResponse() ?: [])
+                : [];
+            $accessToken = (string)($tokenResponse['access_token'] ?? $socialiteUser->getAccessToken() ?? '');
+            $openid = (string)($raw['openid'] ?? $tokenResponse['openid'] ?? '');
+            if ($accessToken !== '' && $openid !== ''
+                && (trim((string)($raw['nickname'] ?? '')) === '' || trim((string)($raw['headimgurl'] ?? '')) === '')) {
+                try {
+                    $profile = $this->getAppOAuth($accessToken, $openid);
+                    $raw = array_merge($raw, is_array($profile) ? $profile : []);
+                } catch (\Throwable $e) {
+                    Log::warning('app wechat sns/userinfo fallback: ' . $e->getMessage());
+                }
+            }
+            if (empty($raw['unionid']) && !empty($tokenResponse['unionid'])) {
+                $raw['unionid'] = $tokenResponse['unionid'];
+            }
+            if (empty($raw['openid']) && $openid !== '') {
+                $raw['openid'] = $openid;
+            }
         } catch (ValidateException $e) {
             throw $e;
         } catch (\Throwable $e) {

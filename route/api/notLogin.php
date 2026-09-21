@@ -52,6 +52,8 @@ Route::get('common/home', 'api.Common/home');
 Route::get('lbs/geocoder', 'api.Common/lbs_geocoder');
 //位置信息转经纬度
 Route::get('lbs/address', 'api.Common/lbs_address');
+//地点输入提示（多 POI，可按城市限制）
+Route::get('lbs/suggestion', 'api.Common/lbs_suggestion');
 //获取支付宝支付链接
 Route::get('common/pay_key/:key', 'api.Common/pay_key');
 //用户反馈类型

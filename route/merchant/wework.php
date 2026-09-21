@@ -8,7 +8,7 @@
 // +----------------------------------------------------------------------
 // | Author: CRMEB Team <admin@crmeb.com>
 // +----------------------------------------------------------------------
-// | 企业微信群配置 商户后台API路由
+// | 微信顾客群配置 商户后台API路由
 // +----------------------------------------------------------------------
 
 use think\facade\Route;
@@ -21,10 +21,10 @@ use app\common\middleware\MerchantCheckBaseInfoMiddleware;
 Route::group(function () {
     Route::get('wework/group', '/info')
         ->name('merchantWeworkGroupInfo')
-        ->option(['_alias' => '企业微信群配置']);
+        ->option(['_alias' => '微信群配置']);
     Route::post('wework/group', '/save')
         ->name('merchantWeworkGroupSave')
-        ->option(['_alias' => '保存企业微信群配置']);
+        ->option(['_alias' => '保存微信群配置']);
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(MerchantTokenMiddleware::class, true)
     ->middleware(MerchantAuthMiddleware::class)
@@ -34,5 +34,5 @@ Route::group(function () {
     ->option([
         '_path' => '/systemForm/wework',
         '_auth' => true,
-        '_alias' => '企业微信',
+        '_alias' => '微信群',
     ]);

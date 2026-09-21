@@ -44,6 +44,7 @@ class Message extends BaseController
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
+            'hobby',
         ]);
         $sort = (string)$this->request->param('sort', 'latest');
         $result = $this->dialogRepository->dialogList($uid, $page, $limit, $type, $filter, $sort);
@@ -128,6 +129,13 @@ class Message extends BaseController
             return app('json')->fail('参数错误');
         }
         return app('json')->success($this->dialogRepository->getChatSettings($myUid, $targetUid));
+    }
+
+    public function blacklist()
+    {
+        $myUid = $this->request->uid();
+        [$page, $limit] = $this->getPage();
+        return app('json')->success($this->dialogRepository->blacklistList($myUid, $page, $limit));
     }
 
     public function toggleBlacklist($uid)

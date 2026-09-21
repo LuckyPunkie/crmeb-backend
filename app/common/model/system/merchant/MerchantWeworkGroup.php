@@ -14,7 +14,7 @@ namespace app\common\model\system\merchant;
 use app\common\model\BaseModel;
 
 /**
- * 商户/分店企业微信顾客群配置
+ * 商户/分店微信顾客群配置
  */
 class MerchantWeworkGroup extends BaseModel
 {

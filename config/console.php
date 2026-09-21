@@ -55,5 +55,7 @@ return [
         'animal_rescue:expire_check' => 'app\command\AnimalRescueExpireCheck',
         //救助站月捐结算
         'animal_rescue:monthly_settlement' => 'app\command\AnimalRescueMonthlySettlement',
+        //为存量用户批量生成 7 位 user_code
+        'user:backfill_code' => 'app\command\BackfillUserCode',
     ],
 ];

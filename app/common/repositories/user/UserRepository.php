@@ -850,13 +850,16 @@ class UserRepository extends BaseRepository
             // 准备需要同步到用户账号的基础信息。
             $data = ['wechat_user_id' => $auth['id'], 'user_type' => $auth['type']];
 
-            // 如果微信用户有昵称，则同步昵称到用户账号。
+            // 如果微信用户有昵称，则同步昵称到用户账号（覆盖空昵称/手机号掩码）
             if ($wechatUser['nickname']) {
-                $data['nickname'] = $wechatUser['nickname'];
+                $curNick = trim((string)($user['nickname'] ?? ''));
+                if ($curNick === '' || preg_match('/^\d{3}\*{4}\d{4}$/', $curNick) || str_starts_with($curNick, '微信用户')) {
+                    $data['nickname'] = $wechatUser['nickname'];
+                }
             }
 
-            // 如果微信用户有头像URL，则同步头像到用户账号。
-            if ($wechatUser['headimgurl']) {
+            // 如果微信用户有头像URL，且用户头像为空，则同步头像
+            if ($wechatUser['headimgurl'] && trim((string)($user['avatar'] ?? '')) === '') {
                 $data['avatar'] = $wechatUser['headimgurl'];
             }
 
@@ -886,13 +889,23 @@ class UserRepository extends BaseRepository
 
         // 如果用户记录存在，则更新用户信息。
         if ($user) {
-            $user->save(array_filter([
-                'nickname' => $wechatUser['nickname'] ?? '',
-                'avatar' => $wechatUser['headimgurl'] ?? '',
+            $patch = [
                 'sex' => $wechatUser['sex'] ?? 0,
                 'last_time' => date('Y-m-d H:i:s'),
                 'last_ip' => $request->ip(),
-            ]));
+            ];
+            $wxNick = trim((string)($wechatUser['nickname'] ?? ''));
+            $wxAvatar = trim((string)($wechatUser['headimgurl'] ?? ''));
+            $curNick = trim((string)($user['nickname'] ?? ''));
+            $curAvatar = trim((string)($user['avatar'] ?? ''));
+            // 用户昵称为空，或仍是手机号掩码/默认微信用户名时，用微信昵称覆盖
+            if ($wxNick !== '' && ($curNick === '' || preg_match('/^\d{3}\*{4}\d{4}$/', $curNick) || str_starts_with($curNick, '微信用户'))) {
+                $patch['nickname'] = $wxNick;
+            }
+            if ($wxAvatar !== '' && $curAvatar === '') {
+                $patch['avatar'] = $wxAvatar;
+            }
+            $user->save($patch);
         } else {
             // 如果用户记录不存在，则创建一个新的用户记录。
             $user = $this->create($userType, [
@@ -940,6 +953,10 @@ class UserRepository extends BaseRepository
             $userInfo['status'] = 1;
         }
         $userInfo['last_ip'] = app('request')->ip();
+        // 生成对外展示 ID（7 位大小写字母数字混排），uid 主键保持不变
+        if (empty($userInfo['user_code'])) {
+            $userInfo['user_code'] = $this->generateUserCode();
+        }
         // 通过DAO创建用户对象
         $user = $this->dao->create($userInfo);
         // 标记新创建的用户对象
@@ -1137,6 +1154,39 @@ class UserRepository extends BaseRepository
         // 验证码验证通过后，删除缓存中的验证码，防止重复使用
         // 删除code
         Cache::delete('am_captcha' . $key);
+    }
+
+    /**
+     * 生成 7 位大写字母数字混排的用户对外展示 ID。
+     * 强制混排：必须至少含 1 个字母 + 1 个数字（避免全数字被误当 uid/手机号，避免全字母不像 ID）。
+     * 存储统一大写；业务侧比较时应先 strtoupper 再匹配（不区分大小写）。
+     * 依赖 eb_user.user_code 上的 UNIQUE 索引避免竞态下重复。
+     */
+    public function generateUserCode(): string
+    {
+        $letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        $digits = '0123456789';
+        $chars = $letters . $digits;
+        $maxChar = strlen($chars) - 1;
+        for ($tries = 0; $tries < 30; $tries++) {
+            // 5 位任意 + 1 位强制字母 + 1 位强制数字，再 Fisher–Yates 打乱位置
+            $slot = [];
+            for ($i = 0; $i < 5; $i++) {
+                $slot[] = $chars[random_int(0, $maxChar)];
+            }
+            $slot[] = $letters[random_int(0, 25)];
+            $slot[] = $digits[random_int(0, 9)];
+            for ($i = count($slot) - 1; $i > 0; $i--) {
+                $j = random_int(0, $i);
+                [$slot[$i], $slot[$j]] = [$slot[$j], $slot[$i]];
+            }
+            $code = implode('', $slot);
+            $exists = \think\facade\Db::name('user')->where('user_code', $code)->value('uid');
+            if (!$exists) {
+                return $code;
+            }
+        }
+        throw new \RuntimeException('generateUserCode: 连续 30 次碰撞，请检查唯一索引或字符空间');
     }
 
     /**
@@ -2575,7 +2625,7 @@ class UserRepository extends BaseRepository
                 $uids = \think\facade\Db::name('user_profile')
                     ->whereIn('education', $educations)
                     ->column('uid');
-                $query->whereIn('uid', $uids ?: [0]);
+                $query->whereIn('User.uid', $uids ?: [0]);
             }
         }
 
@@ -2590,12 +2640,16 @@ class UserRepository extends BaseRepository
                 $heightQuery->where('height', '<=', $hMax);
             }
             $heightUids = $heightQuery->column('uid');
-            $query->whereIn('uid', $heightUids ?: [0]);
+            $query->whereIn('User.uid', $heightUids ?: [0]);
         }
+
+        // 脱单/人脉/邂逅硬规则：交友目标仅 找对象(1)/交朋友(2)；至少一项资料；已更换头像
+        $where = $this->normalizeCommunitySocialFeedWhere($where);
+        $this->applyCommunitySocialFeedVisibility($query, $where);
 
         $profileUids = $this->filterUidsByUserProfile($where);
         if ($profileUids !== null) {
-            $query->whereIn('uid', $profileUids ?: [0]);
+            $query->whereIn('User.uid', $profileUids ?: [0]);
         }
 
         // 资料完善度 DESC 排序：user_profile 里 birth_month/height/education/zodiac 任一非空排前面
@@ -2624,7 +2678,7 @@ class UserRepository extends BaseRepository
             ];
             // 与用户资料表单对齐
             $relMap = [1 => '单身', 2 => '恋爱中', 3 => '已婚', 4 => '已育', 5 => '离异', 6 => '丧偶'];
-            $datingMap = [1 => '找对象', 2 => '普通交友', 3 => '不确定'];
+            $datingMap = [1 => '找对象', 2 => '交朋友', 3 => '不交朋友'];
 
             $allLabelIds = [];
             foreach ($list as $row) {
@@ -2705,6 +2759,47 @@ class UserRepository extends BaseRepository
         return compact('count', 'list');
     }
 
+    /**
+     * 社交流交友目标：仅允许 找对象(1) / 交朋友(2)；筛选项再与之取交集
+     */
+    protected function normalizeCommunitySocialFeedWhere(array $where): array
+    {
+        $allowed = [1, 2];
+        if (!empty($where['dating_purpose'])) {
+            $purposes = is_array($where['dating_purpose'])
+                ? $where['dating_purpose']
+                : array_filter(explode(',', (string)$where['dating_purpose']));
+            $purposes = array_values(array_intersect(array_map('intval', $purposes), $allowed));
+            $where['dating_purpose'] = $purposes ?: $allowed;
+        } else {
+            $where['dating_purpose'] = $allowed;
+        }
+        return $where;
+    }
+
+    /**
+     * 脱单/人脉/邂逅可见性：已更换过头像（非空、非系统默认、非微信灰色占位头像）
+     * 交友目标与「至少一项资料」由 normalizeCommunitySocialFeedWhere + dating_purpose 筛选保证
+     */
+    protected function applyCommunitySocialFeedVisibility($query, array $where): void
+    {
+        $defaultAvatar = trim((string)(systemConfig('user_default_avatar') ?: ''));
+        $wxPlaceholder = 'POgEwh4mIHO4nibH0KlMECNjjGxQUq24ZEaGT4poC6icRiccVGKSyXwibcPq4BWmiaIGuG1icwxaQX6grC9VemZoJ8rg';
+
+        $query->where(function ($q) use ($defaultAvatar, $wxPlaceholder) {
+            $q->whereNotNull('User.avatar')
+                ->where('User.avatar', '<>', '')
+                ->where('User.avatar', 'not like', '%' . $wxPlaceholder . '%');
+            if ($defaultAvatar !== '') {
+                $q->where('User.avatar', '<>', $defaultAvatar);
+                $path = parse_url($defaultAvatar, PHP_URL_PATH);
+                if (is_string($path) && $path !== '') {
+                    $q->where('User.avatar', 'not like', '%' . ltrim($path, '/') . '%');
+                }
+            }
+            $q->where('User.avatar', 'not like', '%/static/f.png%');
+        });
+    }
 
     /**
      * 更新用户内容数
