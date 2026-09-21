@@ -3,7 +3,12 @@
 namespace app\common\repositories\taoke;
 
 use crmeb\services\taoke\DingDanXiaService;
+use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
+use crmeb\services\taoke\KuaishouOfficialService;
+use crmeb\services\taoke\PddOfficialService;
+use crmeb\services\taoke\TaobaoOfficialService;
+use crmeb\services\taoke\VipOfficialService;
 use think\facade\Log;
 
 /**
@@ -11,13 +16,838 @@ use think\facade\Log;
  */
 class ServiceGoodsRepository
 {
+    /** null=读 .env；legacy|official=API 通道锁定（与 /taoke/goods vs /taoke/official/goods 对应） */
+    protected ?string $driverChannel = null;
+
     protected DingDanXiaService $dingdanxia;
     protected JuTuiKeService $jutuike;
+    protected JdOfficialService $jdOfficial;
+    protected TaobaoOfficialService $taobaoOfficial;
+    protected PddOfficialService $pddOfficial;
+    protected KuaishouOfficialService $kuaishouOfficial;
+    protected VipOfficialService $vipOfficial;
 
-    public function __construct(DingDanXiaService $dingdanxia, JuTuiKeService $jutuike)
-    {
+    public function __construct(
+        DingDanXiaService $dingdanxia,
+        JuTuiKeService $jutuike,
+        JdOfficialService $jdOfficial,
+        TaobaoOfficialService $taobaoOfficial,
+        PddOfficialService $pddOfficial,
+        KuaishouOfficialService $kuaishouOfficial,
+        VipOfficialService $vipOfficial
+    ) {
         $this->dingdanxia = $dingdanxia;
         $this->jutuike = $jutuike;
+        $this->jdOfficial = $jdOfficial;
+        $this->taobaoOfficial = $taobaoOfficial;
+        $this->pddOfficial = $pddOfficial;
+        $this->kuaishouOfficial = $kuaishouOfficial;
+        $this->vipOfficial = $vipOfficial;
+    }
+
+    public function withDriverChannel(string $channel): self
+    {
+        $clone = clone $this;
+        $clone->driverChannel = $channel === 'official' ? 'official' : 'legacy';
+        return $clone;
+    }
+
+    public function getDriverChannel(): ?string
+    {
+        return $this->driverChannel;
+    }
+
+    /** 官方通道下禁止回退订单侠/聚推客 */
+    protected function allowLegacyFallback(): bool
+    {
+        return $this->driverChannel !== 'official';
+    }
+
+    /** official 路由：列表/搜索禁止订单侠、聚推客聚合 */
+    protected function blocksLegacyAggregator(): bool
+    {
+        return $this->driverChannel === 'official';
+    }
+
+    public function isWphOfficial(): bool
+    {
+        return $this->useOfficialFor('wph');
+    }
+
+    public function getWphDataSource(): string
+    {
+        return $this->isWphOfficial() ? 'official' : 'legacy';
+    }
+
+    /**
+     * official 列表：透传平台 API 原字段，仅补 platform / _source 便于混排去重与前端识别
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function tagOfficialPlatformList(array $rows, string $platform): array
+    {
+        $platform = strtolower(trim($platform));
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            if (!isset($row['platform'])) {
+                $row['platform'] = $platform;
+            }
+            if (!isset($row['_source'])) {
+                $row['_source'] = 'official';
+            }
+            $out[] = $row;
+        }
+        return $out;
+    }
+
+    protected function useOfficialFor(string $platform): bool
+    {
+        if ($this->driverChannel === 'legacy') {
+            return false;
+        }
+        if ($this->driverChannel === 'official') {
+            return true;
+        }
+        return config('taoke.driver.' . $platform) === 'official';
+    }
+
+    public function isTaobaoOfficial(): bool
+    {
+        // 淘宝固定走联盟 TOP（/taoke/official/goods 与物料/详情/转链一致），不调用订单侠
+        return true;
+    }
+
+    public function getTaobaoDataSource(): string
+    {
+        return $this->isTaobaoOfficial() ? 'official' : 'legacy';
+    }
+
+    protected function isJdOfficial(): bool
+    {
+        return $this->useOfficialFor('jd');
+    }
+
+    /** 联调标记：京东列表/搜索当前数据源 official | legacy */
+    public function getJdDataSource(): string
+    {
+        return $this->isJdOfficial() ? 'official' : 'legacy';
+    }
+
+    public function isPddOfficial(): bool
+    {
+        return $this->useOfficialFor('pdd');
+    }
+
+    public function getPddDataSource(): string
+    {
+        return $this->isPddOfficial() ? 'official' : 'legacy';
+    }
+
+    public function isKuaishouOfficial(): bool
+    {
+        return $this->useOfficialFor('kuaishou');
+    }
+
+    public function getKuaishouDataSource(): string
+    {
+        return $this->isKuaishouOfficial() ? 'official' : 'legacy';
+    }
+
+    /**
+     * 拼多多详情（按 driver）
+     */
+    public function fetchPddDetail(string $goodsSign): array
+    {
+        return $this->fetchPddDetailWithMeta($goodsSign)['detail'];
+    }
+
+    /**
+     * @return array{detail: array, meta: array<string, mixed>}
+     */
+    public function fetchPddDetailWithMeta(string $goodsSign): array
+    {
+        $goodsSign = trim($goodsSign);
+        $meta = [
+            'goods_sign' => $goodsSign,
+            'driver' => $this->getPddDataSource(),
+            'summary_used' => false,
+            'pipeline' => [],
+            'legacy_full_fallback' => false,
+            'official_fetch_empty' => false,
+            'detail_from' => '',
+            'note' => 'official 通道(OfficialGoods) allowLegacyFallback=false，禁止订单侠；详情走 pdd.ddk.goods.detail(goods_sign)。',
+        ];
+
+        if ($this->isPddOfficial()) {
+            $meta['pipeline'][] = 'PddOfficialService::fetchDetail(goods_sign)';
+            $detail = $this->pddOfficial->fetchDetail($goodsSign);
+            if (!empty($detail) && !isset($detail['error_response'])) {
+                $meta['detail_from'] = 'pdd.ddk.goods.detail';
+                return ['detail' => $detail, 'meta' => $meta];
+            }
+            $meta['official_fetch_empty'] = true;
+            if ($this->allowLegacyFallback()) {
+                $meta['pipeline'][] = 'legacy: DingDanXiaService::pddGoodsDetail(仅 legacy 路由)';
+                $meta['legacy_full_fallback'] = true;
+                $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
+                return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
+            }
+            return ['detail' => [], 'meta' => $meta];
+        }
+
+        $meta['pipeline'][] = 'DingDanXiaService::pddGoodsDetail(legacy 路由)';
+        $meta['detail_from'] = 'dingdanxia.pddGoodsDetail';
+        return ['detail' => $this->dingdanxia->pddGoodsDetail($goodsSign), 'meta' => $meta];
+    }
+
+    /**
+     * 拼多多高佣转链
+     */
+    /**
+     * 淘宝一级后台类目（TOP itemcats.get），用于 Tab cat 参数
+     *
+     * @return array<int, array{id: int|string, text: string}>
+     */
+    public function getTaobaoCategoryTags(): array
+    {
+        if (!$this->isTaobaoOfficial()) {
+            return [];
+        }
+        return $this->taobaoOfficial->fetchTopCategoryTags();
+    }
+
+    public function getKuaishouChannelTags(): array
+    {
+        if (!$this->isKuaishouOfficial()) {
+            return [];
+        }
+        $rows = $this->kuaishouOfficial->fetchSelectionChannels();
+        $data = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $id = $row['channelId'] ?? ($row['id'] ?? '');
+            $text = $row['channelName'] ?? ($row['name'] ?? '');
+            if ($id === '' || $text === '') {
+                continue;
+            }
+            $data[] = ['id' => $id, 'text' => $text];
+        }
+        return $data;
+    }
+
+    public function fetchKuaishouDetail(string $goodsId, array $summary = []): array
+    {
+        $bundle = $this->fetchKuaishouDetailWithMeta($goodsId, $summary);
+        return $bundle['detail'];
+    }
+
+    /**
+     * @return array{detail: array, meta: array<string, mixed>}
+     */
+    public function fetchKuaishouDetailWithMeta(string $goodsId, array $summary = []): array
+    {
+        $goodsId = trim($goodsId);
+        $summary = is_array($summary) ? $summary : [];
+        $meta = [
+            'goods_id' => $goodsId,
+            'driver' => $this->getKuaishouDataSource(),
+            'summary_used' => $summary !== [],
+            'pipeline' => [],
+            'legacy_full_fallback' => false,
+            'official_fetch_empty' => false,
+            'detail_from' => '',
+            'note' => '快手 detail 接口常返回多商品数组且不含请求 id；列表 summary=官方选品行。无订单侠。',
+            'summary_has_express' => !empty($summary['express_id']) || !empty($summary['expressId']),
+        ];
+
+        if ($this->isKuaishouOfficial()) {
+            $meta['detail_param_hint'] = '官方文档：selection.item.detail 入参 itemId 为 List<Long>（如 [26957319894510]），勿用 goodsId+cpsPid';
+            foreach ($this->kuaishouDetailIdCandidates($goodsId, $summary) as $tryId) {
+                $ctx = array_merge($summary, ['goods_id' => $tryId, 'goodsId' => $tryId]);
+                $detail = $this->kuaishouOfficial->fetchDetail($tryId, $ctx);
+                $detailFromApi = !empty($detail) && isset($detail['goodsId']);
+                if (!$detailFromApi) {
+                    $meta['pipeline'][] = 'selection.item.detail 无匹配（检查 itemId 数组） tryId=' . $tryId;
+                    $resolved = $this->kuaishouOfficial->resolveSelectionRow($tryId, $ctx);
+                    if (is_array($resolved) && !empty($resolved['row']['goodsId'])) {
+                        $detail = $resolved['row'];
+                        if (($resolved['via'] ?? '') === 'summary') {
+                            $meta['pipeline'][] = '使用列表 POST summary 还原选品行（与 kuaishou_goods 同源）';
+                            $meta['detail_from'] = 'kwaimoney.selection.list_row_summary';
+                        } else {
+                            $meta['pipeline'][] = 'selection.item.list 关键词/频道反查命中';
+                            $meta['detail_from'] = 'kwaimoney.selection.list_refetch';
+                        }
+                    } else {
+                        $meta['pipeline'][] = 'list 反查未命中 tryId=' . $tryId;
+                        continue;
+                    }
+                } else {
+                    $meta['pipeline'][] = 'KuaishouOfficialService::fetchDetail(itemId[]) 命中';
+                    $meta['detail_from'] = 'kwaimoney.selection.detail';
+                }
+                if (!$this->kuaishouDetailMatchesList($detail, $summary)) {
+                    Log::warning('快手详情与列表摘要不一致，尝试下一 ID', [
+                        'try_id' => $tryId,
+                        'detail_title' => (string) ($detail['itemTitle'] ?? ''),
+                        'summary_title' => (string) ($summary['store_name'] ?? ($summary['title'] ?? '')),
+                    ]);
+                    continue;
+                }
+                if ($summary !== []) {
+                    $summaryMap = [
+                        'expressId' => $summary['expressId'] ?? ($summary['express_id'] ?? null),
+                        'expressType' => $summary['expressType'] ?? ($summary['express_type'] ?? null),
+                        'relItemId' => $summary['relItemId'] ?? ($summary['rel_item_id'] ?? null),
+                        'itemLinkUrl' => $summary['itemLinkUrl'] ?? ($summary['item_link_url'] ?? null),
+                        'couponClickUrl' => $summary['couponClickUrl'] ?? ($summary['coupon_click_url'] ?? null),
+                    ];
+                    foreach ($summaryMap as $key => $summaryVal) {
+                        $detailVal = $detail[$key] ?? null;
+                        if (($detailVal === null || $detailVal === '' || $detailVal === 0) && $summaryVal !== null && $summaryVal !== '' && $summaryVal !== 0) {
+                            $detail[$key] = $summaryVal;
+                        }
+                    }
+                }
+                return ['detail' => $this->formatKuaishouDetail($detail), 'meta' => $meta];
+            }
+            if ($summary !== []) {
+                $meta['pipeline'][] = 'official API 未命中 -> 列表 summary（非订单侠）';
+                $meta['detail_from'] = 'list_summary_official';
+                return ['detail' => $this->formatKuaishouDetail($summary), 'meta' => $meta];
+            }
+            $meta['official_fetch_empty'] = true;
+            return ['detail' => [], 'meta' => $meta];
+        }
+
+        if ($summary !== []) {
+            $meta['pipeline'][] = 'legacy 路由 + 列表 summary';
+            $meta['detail_from'] = 'list_summary';
+            return ['detail' => $this->formatKuaishouDetail($summary), 'meta' => $meta];
+        }
+        return ['detail' => [], 'meta' => $meta];
+    }
+
+    /**
+     * 列表/详情统一用 goodsId（勿把 distributeItemId 当详情主键）
+     */
+    protected function kuaishouListItemId(array $val): string
+    {
+        foreach (['goodsId', 'relItemId', 'itemId', 'item_id', 'kwaiItemId'] as $key) {
+            $id = trim((string) ($val[$key] ?? ''));
+            if ($id !== '') {
+                return $id;
+            }
+        }
+
+        return trim((string) ($val['distributeItemId'] ?? ''));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    protected function kuaishouDetailIdCandidates(string $goodsId, array $summary = []): array
+    {
+        $ids = [];
+        $push = function ($id) use (&$ids) {
+            $id = trim((string) $id);
+            if ($id !== '' && !in_array($id, $ids, true)) {
+                $ids[] = $id;
+            }
+        };
+        $push($goodsId);
+        foreach (['goods_id', 'goodsId', 'product_id', 'rel_item_id', 'relItemId'] as $key) {
+            if (isset($summary[$key])) {
+                $push($summary[$key]);
+            }
+        }
+
+        return $ids;
+    }
+
+    protected function kuaishouDetailMatchesList(array $detail, array $summary): bool
+    {
+        if ($summary === []) {
+            return true;
+        }
+        $want = trim((string) ($summary['store_name'] ?? ($summary['title'] ?? ($summary['goods_name'] ?? ($summary['itemTitle'] ?? '')))));
+        if ($want === '') {
+            return true;
+        }
+        $got = trim((string) ($detail['itemTitle'] ?? ($detail['title'] ?? ($detail['goods_name'] ?? ''))));
+        if ($got === '') {
+            return true;
+        }
+        if ($want === $got) {
+            return true;
+        }
+        $headWant = mb_substr($want, 0, 12);
+        $headGot = mb_substr($got, 0, 12);
+        if ($headWant !== '' && (mb_strpos($got, $headWant) !== false || mb_strpos($want, $headGot) !== false)) {
+            return true;
+        }
+        similar_text($want, $got, $pct);
+
+        return $pct >= 35.0;
+    }
+
+    public function createKuaishouPromotion(string $goodsId, array $context = []): array
+    {
+        if (!$this->isKuaishouOfficial()) {
+            return [];
+        }
+        $raw = $this->kuaishouOfficial->createCpsLink($goodsId, '', $context);
+        if ((int) ($raw['result'] ?? 0) === 1 && !empty($raw['data'])) {
+            return $this->formatKuaishouLinkResponse($raw['data']);
+        }
+        return is_array($raw) ? $raw : [];
+    }
+
+    /**
+     * @param mixed $data
+     * @return array<string, mixed>
+     */
+    protected function formatKuaishouLinkResponse($data): array
+    {
+        if (!is_array($data)) {
+            return ['link' => (string) $data];
+        }
+        $link = (string) ($data['kwaiUrl'] ?? ($data['linkUrl'] ?? ($data['cpsLink'] ?? ($data['promotionLink'] ?? ($data['url'] ?? ($data['itemLinkUrl'] ?? ''))))));
+        $pwd = (string) ($data['linkCode'] ?? ($data['commandContent'] ?? ($data['kwaiPassword'] ?? ($data['password'] ?? ($data['shareToken'] ?? '')))));
+        $out = $data;
+        if ($link !== '') {
+            $out['link_url'] = $link;
+            $out['click_url'] = $link;
+        }
+        if (!empty($data['shortContent'])) {
+            $out['short_content'] = (string) $data['shortContent'];
+        }
+        if (!empty($data['nebulaKwaiUrl'])) {
+            $out['nebula_kwai_url'] = (string) $data['nebulaKwaiUrl'];
+        }
+        if ($pwd !== '') {
+            $out['password'] = $pwd;
+            $out['link_code'] = $pwd;
+        }
+        $out['_source'] = $this->getKuaishouDataSource();
+        return $out;
+    }
+
+    protected function snakeCase(string $key): string
+    {
+        return strtolower(preg_replace('/([a-z])([A-Z])/', '$1_$2', $key) ?? $key);
+    }
+
+    protected function formatKuaishouDetail(array $item): array
+    {
+        $goodsId = (string) ($item['goodsId'] ?? ($item['goods_id'] ?? ''));
+        $priceCent = (int) ($item['zkFinalPrice'] ?? ($item['zkGoodsPrice'] ?? ($item['goodsPrice'] ?? 0)));
+        if ($priceCent <= 0 && isset($item['price']) && $item['price'] !== '' && $item['price'] !== null) {
+            $price = number_format((float) $item['price'], 2, '.', '');
+        } else {
+            $price = $priceCent > 0 ? number_format($priceCent / 100, 2, '.', '') : '0.00';
+        }
+        $image = (string) ($item['itemImgUrl'] ?? ($item['itemCdnImgUrl'] ?? ($item['image'] ?? '')));
+        $gallery = [];
+        if ($image !== '') {
+            $gallery[] = $image;
+        }
+        if (!empty($item['itemDescUrls']) && is_array($item['itemDescUrls'])) {
+            $gallery = array_merge($gallery, $item['itemDescUrls']);
+        }
+        return [
+            'platform' => 'kuaishou',
+            '_source' => $this->getKuaishouDataSource(),
+            'goods_id' => $goodsId,
+            'product_id' => $goodsId,
+            'goods_name' => (string) ($item['itemTitle'] ?? ($item['title'] ?? ($item['store_name'] ?? ''))),
+            'title' => (string) ($item['itemTitle'] ?? ($item['title'] ?? ($item['store_name'] ?? ''))),
+            'store_name' => (string) ($item['itemTitle'] ?? ($item['title'] ?? ($item['store_name'] ?? ''))),
+            'image' => $image,
+            'gallery' => $gallery,
+            'mall_name' => (string) ($item['mallName'] ?? ($item['mallFullName'] ?? '')),
+            'price' => $price,
+            'ot_price' => (string) ($item['ot_price'] ?? $price),
+            'sales' => (int) ($item['soldCountThirtyDays'] ?? ($item['salesTip'] ?? 0)),
+            'sales_text' => (string) ($item['salesTip'] ?? ''),
+            'promotion_rate' => isset($item['promotionRate']) ? ((int) $item['promotionRate']) / 10 : '',
+            'item_link_url' => (string) ($item['itemLinkUrl'] ?? ''),
+            'express_id' => (int) ($item['expressId'] ?? 0),
+            'express_type' => (int) ($item['expressType'] ?? 0),
+            'rel_item_id' => (string) ($item['relItemId'] ?? ''),
+            'raw' => $item,
+        ];
+    }
+
+    public function createPddPromotion(string $goodsSign, string $pid, string $customParameters): array
+    {
+        if ($this->isPddOfficial()) {
+            $raw = $this->pddOfficial->generateGoodsPromotionUrl($goodsSign, $pid, $customParameters);
+            if (!isset($raw['error_response'])) {
+                $key = '';
+                foreach ($raw as $k => $v) {
+                    if (is_string($k) && str_ends_with($k, '_response')) {
+                        $key = $k;
+                        break;
+                    }
+                }
+                $list = $key !== '' ? ($raw[$key]['goods_promotion_url_list'] ?? []) : [];
+                $first = is_array($list) && isset($list[0]) ? $list[0] : [];
+                if (!empty($first)) {
+                    return $first;
+                }
+            }
+            if (!$this->allowLegacyFallback()) {
+                return [];
+            }
+            // [官方直连切换 2026-09-10] 原订单侠调用：
+        }
+        return $this->dingdanxia->pddHighCommission($goodsSign, $pid, $customParameters);
+    }
+
+    /**
+     * 京东商品详情（按 driver 路由 + 统一 list 结构）
+     */
+    public function fetchJdDetail($itemIds, array $summary = [], array $hints = []): array
+    {
+        return $this->fetchJdDetailWithMeta($itemIds, $summary, $hints)['list'];
+    }
+
+    /**
+     * 详情 + 联调元数据（区分联盟官方 / 后台补全 / 订单侠媒体补图）
+     *
+     * @return array{list: array, meta: array<string, mixed>}
+     */
+    public function fetchJdDetailWithMeta($itemIds, array $summary = [], array $hints = []): array
+    {
+        $meta = [
+            'item_ids' => is_array($itemIds) ? implode(',', $itemIds) : (string) $itemIds,
+            'driver' => $this->getJdDataSource(),
+            'summary_used' => $summary !== [],
+            'hints_used' => array_filter(is_array($hints) ? $hints : []),
+            'pipeline' => [],
+            'official_before_supplement' => null,
+            'legacy_media_supplement' => false,
+            'legacy_full_fallback' => false,
+            'official_fetch_empty' => false,
+            'backend_fields_on_list_item' => ['_source', 'goods_id'],
+            'note' => '商详主接口 jd.union.open.goods.bigfield.query：sceneId=1+itemIds、sceneId=2+skuIds(需权限)；列表 summary 补价图；京粉 itemId 不稳定。',
+            'jd_item_id_unstable' => true,
+        ];
+
+        if ($this->isJdOfficial()) {
+            if ($summary !== []) {
+                $meta['pipeline'][] = 'JdOfficialService::fetchDetail(bigfield itemIds sceneId=1 + summary；hints→sku sceneId=2)';
+            } else {
+                $meta['pipeline'][] = 'JdOfficialService::fetchDetail(bigfield itemIds/skuIds；无 summary 时价图可能偏少)';
+            }
+            $raw = $this->jdOfficial->fetchDetail($itemIds, $summary, $hints);
+            $beforeRows = $this->normalizeJdDetailRowsForMerge($raw);
+            $meta['official_before_supplement'] = $beforeRows[0] ?? null;
+            if ($beforeRows === []) {
+                $meta['official_fetch_empty'] = true;
+            }
+
+            if ($this->allowLegacyFallback() && $beforeRows === []) {
+                $meta['pipeline'][] = 'legacy: DingDanXiaService::jdGoodsDetail(仅 driver=legacy 或 allowLegacyFallback)';
+                $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+                $meta['legacy_full_fallback'] = true;
+                $meta['backend_fields_on_list_item'][] = '_detail_fallback';
+            } elseif ($beforeRows !== [] && $this->allowLegacyFallback()) {
+                $supplemented = false;
+                $raw = $this->supplementJdOfficialDetailMedia($itemIds, $raw, $supplemented);
+                $meta['legacy_media_supplement'] = $supplemented;
+                if ($supplemented) {
+                    $meta['pipeline'][] = 'legacy: supplementJdOfficialDetailMedia';
+                    $meta['backend_fields_on_list_item'][] = '_detail_media';
+                }
+            } else {
+                $raw = $beforeRows;
+            }
+        } else {
+            $meta['pipeline'][] = 'DingDanXiaService::jdGoodsDetail(订单侠 jd/item_detail)';
+            $raw = $this->dingdanxia->jdGoodsDetail($itemIds);
+        }
+
+        $meta['pipeline'][] = 'formatJdDetailList(+_source)';
+        $list = $this->formatJdDetailList($raw);
+        if (!empty($meta['legacy_full_fallback']) && !empty($list[0]) && is_array($list[0])) {
+            $list[0]['_detail_fallback'] = 'legacy_full';
+        }
+
+        return ['list' => $list, 'meta' => $meta];
+    }
+
+    /**
+     * 官方详情缺长图/图文时，用订单侠 jd/item_detail 仅补媒体字段（不改变 _source=official）
+     */
+    protected function supplementJdOfficialDetailMedia($itemIds, array $raw, bool &$supplemented = false): array
+    {
+        $supplemented = false;
+        $list = $this->normalizeJdDetailRowsForMerge($raw);
+        if ($list === []) {
+            return $raw;
+        }
+        $row = $list[0];
+        if ($this->jdDetailHasRichMedia($row)) {
+            return [$row];
+        }
+        try {
+            $legacyRaw = $this->dingdanxia->jdGoodsDetail($itemIds);
+            $legacyList = $this->normalizeJdDetailRowsForMerge($legacyRaw);
+            $legacy = $legacyList[0] ?? null;
+            if (!is_array($legacy)) {
+                return [$row];
+            }
+            foreach (['detailImages', 'baseBigFieldInfo', 'imageInfo', 'categoryInfo', 'shopInfo', 'promotionInfo'] as $field) {
+                if (empty($row[$field]) && !empty($legacy[$field])) {
+                    $row[$field] = $legacy[$field];
+                }
+            }
+            if (empty($row['materialUrl']) && !empty($legacy['materialUrl'])) {
+                $row['materialUrl'] = $legacy['materialUrl'];
+            }
+            if (empty($row['skuId']) && !empty($legacy['mainSkuId'])) {
+                $row['skuId'] = $legacy['mainSkuId'];
+            }
+            if (empty($row['spuid']) && !empty($legacy['productId'])) {
+                $row['spuid'] = $legacy['productId'];
+            }
+            $row['_detail_media'] = 'legacy_supplement';
+            $supplemented = true;
+        } catch (\Throwable $e) {
+            Log::warning('京东官方详情媒体补全失败', ['itemIds' => $itemIds, 'error' => $e->getMessage()]);
+        }
+        return [$row];
+    }
+
+    protected function normalizeJdDetailRowsForMerge($raw): array
+    {
+        if (!is_array($raw)) {
+            return [];
+        }
+        if (isset($raw['list']) && is_array($raw['list'])) {
+            return array_values(array_filter($raw['list'], 'is_array'));
+        }
+        if (isset($raw['data']) && is_array($raw['data'])) {
+            return array_values(array_filter($raw['data'], 'is_array'));
+        }
+        if (isset($raw[0]) && is_array($raw[0])) {
+            return array_values(array_filter($raw, 'is_array'));
+        }
+        if (isset($raw['itemId']) || isset($raw['skuName']) || isset($raw['skuId'])) {
+            return [$raw];
+        }
+        return [];
+    }
+
+    protected function jdDetailHasRichMedia(array $row): bool
+    {
+        $images = $row['detailImages'] ?? [];
+        if (is_array($images) && count($images) > 0) {
+            return true;
+        }
+        $wdis = $row['baseBigFieldInfo']['wdis'] ?? '';
+        if (is_string($wdis) && strlen(trim(strip_tags($wdis))) > 30) {
+            return true;
+        }
+        if (is_array($wdis) && !empty($wdis)) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 淘宝商品详情（按 driver 路由）
+     */
+    public function fetchTaobaoDetail(string $goodsId, string $title = '', array $summary = []): array
+    {
+        return $this->fetchTaobaoDetailWithMeta($goodsId, $title, $summary)['detail'];
+    }
+
+    /**
+     * @return array{detail: array<string, mixed>, meta: array<string, mixed>}
+     */
+    public function fetchTaobaoDetailWithMeta(string $goodsId, string $title = '', array $summary = []): array
+    {
+        $goodsId = trim($goodsId);
+        $summary = is_array($summary) ? $summary : [];
+        $meta = [
+            'goods_id' => $goodsId,
+            'driver' => $this->getTaobaoDataSource(),
+            'summary_used' => $summary !== [] && $this->taobaoOfficial->hasSummary($summary),
+            'pipeline' => [],
+            'legacy_full_fallback' => false,
+            'official_fetch_empty' => false,
+            'detail_from' => '',
+            'top_method' => '',
+            'gateway' => 'https://eco.taobao.com/router/rest',
+            'platform_only' => true,
+            'note' => 'official 通道禁止订单侠时，detail 仅来自 TOP；platform_only=false 表示 summary 或 legacy。',
+        ];
+
+        if ($this->isTaobaoOfficial()) {
+            $bundle = $this->taobaoOfficial->fetchDetailWithMeta($goodsId, $title, $summary);
+            $meta = array_merge($meta, $bundle['meta']);
+            $meta['driver'] = 'official';
+            $row = $bundle['rows'][0] ?? [];
+            if (is_array($row) && $row !== []) {
+                $meta['detail_from'] = $meta['detail_from'] ?: (string) ($row['_detail_via'] ?? '');
+                $meta['platform_only'] = ($meta['summary_used'] ?? false) ? false : (bool) ($meta['platform_only'] ?? true);
+                return ['detail' => $row, 'meta' => $meta];
+            }
+            $meta['official_fetch_empty'] = true;
+            $meta['pipeline'][] = '淘宝官方 TOP 无结果（不调用订单侠）';
+            return ['detail' => [], 'meta' => $meta];
+        }
+
+        $meta['official_fetch_empty'] = true;
+        $meta['pipeline'][] = '淘宝仅官方 TOP（不调用订单侠）';
+        return ['detail' => [], 'meta' => $meta];
+    }
+
+    /**
+     * 淘宝高佣转链
+     */
+    public function createTaobaoLink(string $goodsId, string $relateId = '', string $title = '', array $hints = []): array
+    {
+        if ($this->isTaobaoOfficial()) {
+            $cached = $this->buildTaobaoLinkFromHints($goodsId, $hints);
+            if ($cached !== []) {
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($cached, $title);
+            }
+            $link = $this->taobaoOfficial->createPromotionLink($goodsId, $title);
+            if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
+            }
+            $link = $this->taobaoOfficial->createLinkFromItemInfo($goodsId);
+            if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
+                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
+            }
+            return [];
+        }
+        return [];
+    }
+
+    /** 列表/详情已带物料升级版 publish_info 链接时直接复用，避免二次请求拿不到同一商品 */
+    protected function buildTaobaoLinkFromHints(string $goodsId, array $hints): array
+    {
+        $itemUrl = trim((string) ($hints['item_url'] ?? ($hints['taoke_item_url'] ?? '')));
+        $couponUrl = trim((string) ($hints['coupon_click_url'] ?? ($hints['taoke_coupon_click_url'] ?? '')));
+        $itemUrl = $this->normalizeTbkAffiliateUrl($itemUrl);
+        $couponUrl = $this->normalizeTbkAffiliateUrl($couponUrl);
+        $promo = $couponUrl !== '' ? $couponUrl : $itemUrl;
+        if ($promo === '') {
+            return [];
+        }
+        return [
+            'item_id' => $goodsId,
+            'item_url' => $promo,
+            'coupon_click_url' => $couponUrl !== '' ? $couponUrl : $promo,
+            '_source' => 'official',
+            '_link_via' => 'tbk.dg.material.upgrade.cached',
+        ];
+    }
+
+    protected function normalizeTbkAffiliateUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '') {
+            return '';
+        }
+        if (strpos($url, '//') === 0) {
+            return 'https:' . $url;
+        }
+        if (strpos($url, 'http://') === 0) {
+            return 'https://' . substr($url, 7);
+        }
+        return $url;
+    }
+
+    protected function formatJdDetailList($raw): array
+    {
+        if (isset($raw['list']) && is_array($raw['list'])) {
+            $list = $raw['list'];
+        } elseif (is_array($raw) && (isset($raw[0]) || $raw === [])) {
+            $list = $raw;
+        } elseif (is_array($raw) && (isset($raw['skuId']) || isset($raw['itemId']) || isset($raw['skuName']))) {
+            $list = [$raw];
+        } else {
+            $list = [];
+        }
+
+        $source = $this->getJdDataSource();
+        foreach ($list as $i => $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $list[$i]['_source'] = $source;
+            if (isset($item['detailImages']) && is_string($item['detailImages'])) {
+                $parts = array_filter(array_map('trim', explode(',', $item['detailImages'])));
+                $list[$i]['detailImages'] = array_values($parts);
+            }
+        }
+        return $list;
+    }
+
+    /**
+     * 混排涉及的平台（official 不含抖音：暂无联盟直连，避免掺订单侠）
+     *
+     * @return list<string>
+     */
+    protected function crossPlatformKeys(string $platformFilter = ''): array
+    {
+        $all = $this->driverChannel === 'official'
+            ? ['taobao', 'jd', 'pdd', 'kuaishou']
+            : ['taobao', 'jd', 'pdd', 'kuaishou', 'douyin'];
+        $platformFilter = strtolower(trim($platformFilter));
+        if ($platformFilter !== '') {
+            return in_array($platformFilter, $all, true) ? [$platformFilter] : [];
+        }
+        return $all;
+    }
+
+    /**
+     * 多平台列表交错混排，避免 concat 后 array_slice 只保留前两个平台
+     *
+     * @param array<int, array<int, array<string, mixed>>> $buckets
+     */
+    protected function interleavePlatformBuckets(array $buckets): array
+    {
+        $out = [];
+        $maxLen = 0;
+        foreach ($buckets as $bucket) {
+            if (!is_array($bucket)) {
+                continue;
+            }
+            $maxLen = max($maxLen, count($bucket));
+        }
+        for ($i = 0; $i < $maxLen; $i++) {
+            foreach ($buckets as $bucket) {
+                if (isset($bucket[$i]) && is_array($bucket[$i])) {
+                    $out[] = $bucket[$i];
+                }
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * @param list<string> $platforms
+     */
+    protected function perPlatformLimitForMix(int $limit, array $platforms): int
+    {
+        $n = count($platforms);
+        if ($n <= 0) {
+            return $limit;
+        }
+        return max(1, (int) ceil($limit / $n));
     }
 
     /**
@@ -25,16 +855,14 @@ class ServiceGoodsRepository
      */
     public function aggregateRecommend(int $page = 1, int $limit = 20, string $platform = ''): array
     {
-        $platform = strtolower(trim($platform));
-        $per = max(4, (int)ceil($limit / 2));
-        $list = [];
-
-        $platforms = $platform !== '' ? [$platform] : ['taobao', 'jd', 'pdd', 'douyin'];
+        $platforms = $this->crossPlatformKeys($platform);
+        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        $buckets = [];
         foreach ($platforms as $item) {
-            $list = array_merge($list, $this->safePlatformFeed($item, $page, $per));
+            $buckets[] = $this->safePlatformFeed($item, $page, $per);
         }
 
-        return array_slice($this->uniqueList($list), 0, $limit);
+        return array_slice($this->uniqueList($this->interleavePlatformBuckets($buckets)), 0, $limit);
     }
 
     /**
@@ -46,12 +874,13 @@ class ServiceGoodsRepository
         if ($keyword === '') {
             return [];
         }
-        $per = max(4, (int)ceil($limit / 2));
-        $list = [];
-        foreach (['taobao', 'jd', 'pdd', 'douyin'] as $platform) {
-            $list = array_merge($list, $this->safePlatformSearch($platform, $keyword, $page, $per));
+        $platforms = $this->crossPlatformKeys('');
+        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        $buckets = [];
+        foreach ($platforms as $platform) {
+            $buckets[] = $this->safePlatformSearch($platform, $keyword, $page, $per);
         }
-        return array_slice($this->uniqueList($list), 0, $limit);
+        return array_slice($this->uniqueList($this->interleavePlatformBuckets($buckets)), 0, $limit);
     }
 
     /**
@@ -72,32 +901,76 @@ class ServiceGoodsRepository
         return array_slice($this->uniqueList($merged), 0, $limit);
     }
 
-    public function searchPlatform(string $platform, string $keyword, int $page = 1, int $limit = 20, $cate = 0): array
+    public function searchPlatform(string $platform, string $keyword, int $page = 1, int $limit = 20, $cate = 0, array $rangeList = []): array
     {
         $platform = strtolower(trim($platform));
         if ($keyword !== '') {
-            return $this->safePlatformSearch($platform, $keyword, $page, $limit);
+            return $this->safePlatformSearch($platform, $keyword, $page, $limit, $cate, $rangeList);
         }
-        return $this->safePlatformFeed($platform, $page, $limit, $cate);
+        return $this->safePlatformFeed($platform, $page, $limit, $cate, $rangeList);
     }
 
-    protected function safePlatformFeed(string $platform, int $page, int $limit, $cate = 0): array
+    protected function safePlatformFeed(string $platform, int $page, int $limit, $cate = 0, array $rangeList = []): array
     {
         try {
             switch ($platform) {
                 case 'taobao':
-                    return $this->normalizeTaobao($this->dingdanxia->taobaoGoods($page, $limit));
+                    return $this->normalizeTaobao(
+                        $this->taobaoOfficial->fetchSearch('', $page, $limit, (int) $cate)
+                    );
                 case 'jd':
+                    if ($this->isJdOfficial()) {
+                        $list = $this->normalizeJd(
+                            $this->jdOfficial->fetchFeed($page, $limit, (int) $cate)
+                        );
+                        if (!empty($list)) {
+                            return $list;
+                        }
+                        if (!$this->allowLegacyFallback()) {
+                            return [];
+                        }
+                        // official 空结果时回退 legacy
+                    }
+                    // [官方直连切换 2026-09-09] 原订单侠/聚推客调用（driver_jd=legacy 时生效）：
                     $list = $this->normalizeJd($this->dingdanxia->jdGoods($page, $limit, (int)$cate));
                     if (!empty($list)) {
                         return $list;
                     }
                     return $this->normalizeJd($this->jutuike->jdSelection($page, $limit));
                 case 'pdd':
+                    if ($this->isPddOfficial()) {
+                        $rows = $this->pddOfficial->fetchFeed($page, $limit, (int) $cate);
+                        $list = $this->normalizePdd($rows);
+                        if (!empty($list)) {
+                            return $list;
+                        }
+                        if (!$this->allowLegacyFallback()) {
+                            return [];
+                        }
+                        // [官方直连切换 2026-09-10] 原订单侠调用（driver_pdd=legacy 或 official 空结果时）：
+                    }
                     $raw = $this->dingdanxia->pddGoods($page, $limit, $cate);
                     return $this->normalizePdd($raw['list'] ?? (is_array($raw) ? $raw : []));
+                case 'kuaishou':
+                    if ($this->isKuaishouOfficial()) {
+                        $channelId = (int) $cate;
+                        return $this->normalizeKuaishou(
+                            $this->kuaishouOfficial->fetchFeed($page, $limit, $channelId, $rangeList)
+                        );
+                    }
+                    return [];
+                case 'wph':
+                    if ($this->isWphOfficial()) {
+                        $parsed = $this->vipOfficial->fetchFeed($page, $limit);
+                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                    }
+                    if ($this->blocksLegacyAggregator()) {
+                        return [];
+                    }
+                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
+                    return $this->normalizeWph($this->dingdanxia->wphGoods('热销', $page, $limit));
                 case 'douyin':
-                    return $this->fetchDouyinList($keyword, $page, $limit);
+                    return $this->fetchDouyinList('', $page, $limit);
                 default:
                     return [];
             }
@@ -107,20 +980,71 @@ class ServiceGoodsRepository
         }
     }
 
-    protected function safePlatformSearch(string $platform, string $keyword, int $page, int $limit): array
+    protected function safePlatformSearch(string $platform, string $keyword, int $page, int $limit, $cate = 0, array $rangeList = []): array
     {
         try {
             switch ($platform) {
                 case 'taobao':
-                    return $this->normalizeTaobao($this->dingdanxia->taobaoGoodsSearch($page, $limit, $keyword));
+                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
+                    $rows = $this->taobaoOfficial->fetchSearch($keyword, $page, $fetchLimit, (int) $cate);
+                    $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'taobao');
+                    return $this->normalizeTaobao(array_slice($rows, 0, $limit));
                 case 'jd':
-                    return $this->normalizeJd($this->dingdanxia->jdGoodsSearch($keyword, $page, $limit));
+                    $tierLabel = $this->resolvePriceTierLabel($keyword);
+                    $fetchLimit = $tierLabel !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
+                    if ($this->isJdOfficial()) {
+                        $raw = $this->jdOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        // 线上账号 goods.query 常未开通；价格 pill 改京粉池 + 券后价分档
+                        if ($raw === [] && $tierLabel !== null) {
+                            $poolSize = min(150, max(80, $fetchLimit * 5));
+                            $raw = $this->jdOfficial->fetchFeedPool($page, $poolSize);
+                        }
+                        $list = $this->normalizeJd($raw);
+                    } else {
+                        // [官方直连切换 2026-09-09] 原订单侠调用（driver_jd=legacy 时生效）：
+                        $list = $this->normalizeJd(
+                            $this->dingdanxia->jdGoodsSearch($keyword, $page, $fetchLimit)
+                        );
+                    }
+                    $list = $this->filterItemsByPriceKeyword($list, $keyword, 'jd');
+                    return array_slice($list, 0, $limit);
                 case 'pdd':
-                    $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $limit);
-                    return $this->normalizePddSearch($raw);
+                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                        ? min(50, max($limit * 3, $limit))
+                        : $limit;
+                    if ($this->isPddOfficial()) {
+                        $rows = $this->pddOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'pdd');
+                        return $this->normalizePdd(array_slice($rows, 0, $limit));
+                    }
+                    $raw = $this->jutuike->pddGoodsSearchFull($keyword, $page, $fetchLimit);
+                    $list = $this->normalizePddSearch($raw);
+                    $list = $this->filterItemsByPriceKeyword($list, $keyword, 'pdd');
+                    return array_slice($list, 0, $limit);
+                case 'kuaishou':
+                    if ($this->isKuaishouOfficial()) {
+                        $channelId = (int) $cate;
+                        $list = $this->normalizeKuaishou(
+                            $this->kuaishouOfficial->fetchSearch($keyword, $page, $limit, $channelId, $rangeList)
+                        );
+                        return $this->filterItemsByPriceKeyword($list, $keyword, 'kuaishou');
+                    }
+                    return [];
                 case 'douyin':
                     return $this->fetchDouyinList($keyword, $page, $limit);
                 case 'wph':
+                    if ($this->isWphOfficial()) {
+                        $parsed = $this->vipOfficial->fetchSearch($keyword ?: '热销', $page, $limit);
+                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                    }
+                    if ($this->blocksLegacyAggregator()) {
+                        return [];
+                    }
+                    // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
                     return $this->normalizeWph($this->dingdanxia->wphGoods($keyword ?: '热销', $page, $limit));
                 default:
                     return [];
@@ -135,25 +1059,83 @@ class ServiceGoodsRepository
         }
     }
 
-    protected function normalizeWph($result): array
+    protected function normalizeWph($result, bool $official = false): array
     {
         if (!is_array($result)) return [];
         $list = [];
         foreach ($result as $val) {
             if (!is_array($val)) continue;
-            $list[] = [
+            $salesText = trim((string) ($val['productSales'] ?? ''));
+            $row = [
                 'platform'   => 'wph',
                 'goods_id'   => (string)($val['goodsId'] ?? ''),
                 'title'      => (string)($val['goodsName'] ?? ''),
                 'store_name' => (string)($val['goodsName'] ?? ''),
-                'image'      => (string)($val['goodsMainPicture'] ?? ''),
+                'image'      => (string)($val['goodsMainPicture'] ?? ($val['goodsThumbUrl'] ?? '')),
                 'price'      => (string)($val['vipPrice'] ?? '0.00'),
                 'ot_price'   => (string)($val['marketPrice'] ?? '0.00'),
                 'sales'      => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
-                'sales_text' => '',
+                'sales_text' => $salesText,
+                'commission_rate' => (string) ($val['commissionRate'] ?? ''),
+                'commission' => (string) ($val['commission'] ?? ''),
             ];
+            if ($official) {
+                $row['_source'] = 'official';
+                if (!empty($val['adCode'])) {
+                    $row['ad_code'] = (string) $val['adCode'];
+                }
+                if (!empty($val['destUrl'])) {
+                    $row['dest_url'] = (string) $val['destUrl'];
+                }
+            }
+            $list[] = $row;
         }
         return $list;
+    }
+
+    /**
+     * @return array{detail: array, meta: array<string, mixed>}
+     */
+    public function fetchVipDetailWithMeta(string $goodsId): array
+    {
+        $goodsId = trim($goodsId);
+        $meta = [
+            'goods_id' => $goodsId,
+            'driver' => $this->getWphDataSource(),
+            'pipeline' => [],
+        ];
+        if ($this->isWphOfficial()) {
+            $meta['pipeline'][] = 'VipOfficialService::fetchDetail';
+            $detail = $this->vipOfficial->fetchDetail($goodsId);
+            if ($detail !== []) {
+                $meta['detail_from'] = 'UnionGoodsV2Service.getByGoodsIdsV2';
+                return ['detail' => $detail, 'meta' => $meta];
+            }
+            return ['detail' => [], 'meta' => $meta];
+        }
+        $meta['pipeline'][] = 'DingDanXiaService::vipGoodsDetail(legacy)';
+        $meta['detail_from'] = 'dingdanxia.vip/item_info';
+        return ['detail' => $this->dingdanxia->vipGoodsDetail((int) $goodsId), 'meta' => $meta];
+    }
+
+    /**
+     * @param array{ad_code?: string, dest_url?: string, stat_param?: string} $context
+     */
+    public function createVipPromotion(string $goodsId, string $openId = '', array $context = []): array
+    {
+        $goodsId = trim($goodsId);
+        if ($goodsId === '') {
+            return [];
+        }
+        if ($this->isWphOfficial()) {
+            return $this->vipOfficial->generateLinkByGoodsId($goodsId, $openId, '', [
+                'adCode' => (string) ($context['ad_code'] ?? ($context['adCode'] ?? '')),
+                'destUrl' => (string) ($context['dest_url'] ?? ($context['destUrl'] ?? '')),
+                'statParam' => (string) ($context['stat_param'] ?? ''),
+            ]);
+        }
+        // [官方直连切换 2026-09-14] 原订单侠调用（legacy 路由）：
+        return $this->dingdanxia->vipHighCommission((int) $goodsId);
     }
 
     protected function normalizeTaobao($result): array
@@ -162,29 +1144,63 @@ class ServiceGoodsRepository
         if (!is_array($result)) {
             return $list;
         }
+        $source = $this->getTaobaoDataSource();
         foreach ($result as $val) {
             if (!is_array($val)) {
                 continue;
             }
             $itemBasic = $val['item_basic_info'] ?? [];
             $priceInfo = $val['price_promotion_info'] ?? [];
-            $goodsId = (string)($val['item_id'] ?? '');
+            $goodsId = (string)($val['item_id'] ?? ($val['num_iid'] ?? ''));
             if ($goodsId === '') {
                 continue;
             }
-            $list[] = [
+            $title = (string)($itemBasic['title'] ?? ($itemBasic['short_title'] ?? ($val['title'] ?? '')));
+            $image = $this->normalizeTbkAffiliateUrl((string)($itemBasic['pict_url'] ?? ($itemBasic['white_image'] ?? ($val['pict_url'] ?? ''))));
+            $sales = isset($itemBasic['tk_total_sales'])
+                ? (int)$itemBasic['tk_total_sales']
+                : (int)($itemBasic['volume'] ?? ($val['volume'] ?? 0));
+            $salesText = trim((string)($itemBasic['annual_vol'] ?? ($val['annual_vol'] ?? '')));
+            $price = (string)($priceInfo['final_promotion_price'] ?? ($val['zk_final_price'] ?? '0.00'));
+            $otPrice = (string)($priceInfo['reserve_price'] ?? ($val['reserve_price'] ?? '0.00'));
+            $publish = is_array($val['publish_info'] ?? null) ? $val['publish_info'] : [];
+            $clickUrl = $this->normalizeTbkAffiliateUrl((string) ($publish['click_url'] ?? ''));
+            $couponUrl = $this->normalizeTbkAffiliateUrl((string) ($publish['coupon_share_url'] ?? ''));
+            $row = [
                 'platform' => 'taobao',
+                '_source' => $source,
                 'goods_id' => $goodsId,
-                'title' => $itemBasic['title'] ?? '',
-                'image' => $itemBasic['pict_url'] ?? '',
-                'sales' => isset($itemBasic['tk_total_sales']) ? (int)$itemBasic['tk_total_sales'] : (int)($itemBasic['volume'] ?? 0),
-                'sales_text' => trim((string)($itemBasic['annual_vol'] ?? '')),
-                'annual_vol' => trim((string)($itemBasic['annual_vol'] ?? '')),
-                'price' => $priceInfo['final_promotion_price'] ?? '0.00',
-                'ot_price' => $priceInfo['reserve_price'] ?? '0.00',
+                'item_id' => $goodsId,
+                'title' => $title,
+                'store_name' => $title,
+                'image' => $image,
+                'sales' => $sales,
+                'sales_text' => $salesText,
+                'annual_vol' => $salesText,
+                'price' => $price,
+                'ot_price' => $otPrice,
             ];
+            if ($clickUrl !== '') {
+                $row['taoke_item_url'] = $couponUrl !== '' ? $couponUrl : $clickUrl;
+            }
+            if ($couponUrl !== '') {
+                $row['taoke_coupon_click_url'] = $couponUrl;
+            }
+            $list[] = $row;
         }
         return $list;
+    }
+
+    /** 京东联盟 priceInfo 为元（整数或小数），统一成列表用的两位小数字符串 */
+    protected function formatJdYuanPrice($value): string
+    {
+        if ($value === '' || $value === null) {
+            return '0.00';
+        }
+        if (!is_numeric($value)) {
+            return '0.00';
+        }
+        return number_format((float) $value, 2, '.', '');
     }
 
     protected function normalizeJd($result): array
@@ -207,23 +1223,35 @@ class ServiceGoodsRepository
                 continue;
             }
             $image = '';
-            if (!empty($val['imageInfo']['imageList'][0]['url'])) {
-                $image = $val['imageInfo']['imageList'][0]['url'];
+            $slider = [];
+            if (!empty($val['imageInfo']['imageList']) && is_array($val['imageInfo']['imageList'])) {
+                foreach ($val['imageInfo']['imageList'] as $img) {
+                    $url = is_array($img) ? (string) ($img['url'] ?? '') : (string) $img;
+                    if ($url !== '') {
+                        $slider[] = $url;
+                    }
+                }
+            }
+            if (!empty($slider)) {
+                $image = $slider[0];
             } elseif (!empty($val['imageUrl'])) {
                 $image = $val['imageUrl'];
             }
             $shopInfo = $val['shopInfo'] ?? [];
             $promotionInfo = $val['promotionInfo'] ?? [];
             $clickURL = (string)($promotionInfo['clickURL'] ?? ($promotionInfo['clickUrl'] ?? ''));
+            $couponPrice = $priceInfo['lowestCouponPrice'] ?? ($priceInfo['price'] ?? ($val['price'] ?? 0));
+            $originPrice = $priceInfo['price'] ?? ($priceInfo['lowestPrice'] ?? $couponPrice);
             $list[] = [
                 'platform' => 'jd',
+                '_source' => $this->getJdDataSource(),
                 'goods_id' => $goodsId,
                 'title' => $val['skuName'] ?? ($val['goodsName'] ?? ''),
                 'store_name' => $val['skuName'] ?? ($val['goodsName'] ?? ''),
                 'image' => $image,
-                'sales' => isset($val['inOrderCount30Days']) ? (int)$val['inOrderCount30Days'] : 0,
-                'price' => $priceInfo['lowestCouponPrice'] ?? ($priceInfo['price'] ?? ($val['price'] ?? '0.00')),
-                'ot_price' => $priceInfo['price'] ?? '0.00',
+                'sales' => (int) ($val['inOrderCount30Days'] ?? ($val['inOrderCount30DaysSku'] ?? ($val['comments'] ?? 0))),
+                'price' => $this->formatJdYuanPrice($couponPrice),
+                'ot_price' => $this->formatJdYuanPrice($originPrice),
                 'is_hot' => $val['isHot'] ?? 0,
                 'materialUrl' => $val['materialUrl'] ?? '',
                 'clickURL' => $clickURL,
@@ -231,9 +1259,145 @@ class ServiceGoodsRepository
                 'shopName' => $shopInfo['shopName'] ?? '',
                 'shopId' => $shopInfo['shopId'] ?? '',
                 'shopLevel' => $shopInfo['shopLevel'] ?? '',
+                'spuid' => $val['spuid'] ?? '',
+                'slider_image' => $slider,
             ];
         }
         return $list;
+    }
+
+    /** @return list<string> */
+    protected function priceTierLabelsAsc(): array
+    {
+        return ['9.9', '19.9', '29.9', '39.9'];
+    }
+
+    /**
+     * 从 pill 文案解析档位（长串优先，避免 29.9 命中 9.9）
+     */
+    protected function resolvePriceTierLabel(string $keyword): ?string
+    {
+        $keyword = trim($keyword);
+        if ($keyword === '') {
+            return null;
+        }
+        foreach (array_reverse($this->priceTierLabelsAsc()) as $label) {
+            if (strpos($keyword, $label) !== false) {
+                return $label;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 互斥价格带：等价于「先取 ≤最大档，再逐级从剩余里剥小档」
+     * 9.9 → (0, 9.9]；19.9 → (9.9, 19.9]；29.9 → (19.9, 29.9]；39.9 → (29.9, 39.9]
+     *
+     * @return array{0: float, 1: float, 2: bool}|null min, max, minExclusive
+     */
+    protected function resolvePriceTierBounds(string $keyword): ?array
+    {
+        $label = $this->resolvePriceTierLabel($keyword);
+        if ($label === null) {
+            return null;
+        }
+        $order = $this->priceTierLabelsAsc();
+        $idx = array_search($label, $order, true);
+        if ($idx === false) {
+            return null;
+        }
+        $max = (float) $label;
+        $min = $idx > 0 ? (float) $order[$idx - 1] : 0.0;
+        return [$min, $max, $idx > 0];
+    }
+
+    protected function extractItemPriceYuan(array $item, string $platform = ''): ?float
+    {
+        $platform = strtolower(trim($platform));
+        $priceInfo = is_array($item['price_promotion_info'] ?? null) ? $item['price_promotion_info'] : [];
+        // 只用券后/成交价，不用 ot_price、划线价
+        $candidates = [
+            $priceInfo['final_promotion_price'] ?? null,
+            $priceInfo['promotion_price'] ?? null,
+            $item['final_promotion_price'] ?? null,
+            $item['price'] ?? null,
+            $item['zk_final_price'] ?? null,
+        ];
+        if ($platform === 'pdd' || isset($item['min_group_price']) || isset($item['goods_sign'])) {
+            $cent = (int) ($item['min_group_price'] ?? 0);
+            if ($cent <= 0) {
+                $cent = (int) ($item['min_normal_price'] ?? 0);
+            }
+            if ($cent > 0) {
+                return $cent / 100;
+            }
+        }
+        foreach ($candidates as $raw) {
+            if ($raw === null || $raw === '') {
+                continue;
+            }
+            if (is_numeric($raw)) {
+                $v = (float) $raw;
+                if ($v >= 100 && $platform === 'kuaishou') {
+                    return $v / 100;
+                }
+                return $v;
+            }
+            $s = preg_replace('/[^\d.]/', '', (string) $raw);
+            if ($s !== '' && is_numeric($s)) {
+                return (float) $s;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 价格 pill：关键词粗召回后按券后价区间过滤，并去掉同 key 重复
+     */
+    protected function priceTierMatchesYuan(float $yuan, array $bounds): bool
+    {
+        [$minYuan, $maxYuan, $minExclusive] = $bounds;
+        if ($yuan <= 0 || $yuan > $maxYuan + 0.02) {
+            return false;
+        }
+        if (!$minExclusive) {
+            return $yuan <= $maxYuan + 0.02;
+        }
+        return $yuan > $minYuan + 0.001 && $yuan <= $maxYuan + 0.02;
+    }
+
+    protected function filterItemsByPriceKeyword(array $list, string $keyword, string $platform = ''): array
+    {
+        $bounds = $this->resolvePriceTierBounds($keyword);
+        if ($bounds === null || $list === []) {
+            return $list;
+        }
+        $platform = strtolower(trim($platform));
+        $out = [];
+        $seen = [];
+        foreach ($list as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+            $yuan = $this->extractItemPriceYuan($item, $platform);
+            if ($yuan === null || !$this->priceTierMatchesYuan($yuan, $bounds)) {
+                continue;
+            }
+            $id = $item['goods_sign']
+                ?? ($item['goods_id']
+                ?? ($item['item_id']
+                ?? ($item['itemId']
+                ?? ($item['num_iid']
+                ?? ($item['skuId'] ?? '')))));
+            $pl = (string) ($item['platform'] ?? $platform);
+            $key = $pl . ':' . (string) $id;
+            if ($key === ':' || isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $out[] = $item;
+        }
+        return $out;
     }
 
     protected function normalizePdd($result): array
@@ -246,15 +1410,71 @@ class ServiceGoodsRepository
             if (!is_array($val)) {
                 continue;
             }
+            $minGroup = (int) ($val['min_group_price'] ?? 0);
+            $minNormal = (int) ($val['min_normal_price'] ?? 0);
+            $priceCent = $minGroup > 0 ? $minGroup : $minNormal;
             $list[] = [
                 'platform' => 'pdd',
+                '_source' => $this->getPddDataSource(),
                 'goods_id' => (string)($val['goods_id'] ?? '0'),
+                'store_name' => $val['goods_name'] ?? '',
                 'title' => $val['goods_name'] ?? '',
+                'goods_name' => $val['goods_name'] ?? '',
                 'image' => $val['goods_image_url'] ?? ($val['goods_thumbnail_url'] ?? ''),
-                'sales' => isset($val['sales_tip']) ? (int)$val['sales_tip'] : (int)($val['sales'] ?? 0),
-                'price' => isset($val['min_normal_price']) ? ($val['min_normal_price'] / 100) : ($val['min_group_price'] ?? 0) / 100,
-                'ot_price' => '0.00',
+                'goods_image_url' => $val['goods_image_url'] ?? ($val['goods_thumbnail_url'] ?? ''),
+                'goods_thumbnail_url' => $val['goods_thumbnail_url'] ?? ($val['goods_image_url'] ?? ''),
+                'sales_text' => (string) ($val['sales_tip'] ?? ($val['sales_text'] ?? '')),
+                'sales' => isset($val['sales_tip']) ? (int) preg_replace('/[^\d]/', '', (string) $val['sales_tip']) : (int)($val['sales'] ?? 0),
+                'price' => $priceCent > 0 ? number_format($priceCent / 100, 2, '.', '') : '0.00',
+                'ot_price' => $minNormal > 0 ? number_format($minNormal / 100, 2, '.', '') : '0.00',
                 'goods_sign' => $val['goods_sign'] ?? '',
+            ];
+        }
+        return $list;
+    }
+
+    protected function normalizeKuaishou($result): array
+    {
+        if (!is_array($result)) {
+            return [];
+        }
+        $source = $this->getKuaishouDataSource();
+        $list = [];
+        foreach ($result as $val) {
+            if (!is_array($val)) {
+                continue;
+            }
+            $itemId = $this->kuaishouListItemId($val);
+            if ($itemId === '') {
+                continue;
+            }
+            $canonicalGoodsId = trim((string) ($val['goodsId'] ?? ''));
+            $relItemId = trim((string) ($val['relItemId'] ?? ''));
+            $title = (string) ($val['itemTitle'] ?? ($val['title'] ?? ($val['itemName'] ?? '')));
+            $image = (string) ($val['itemImgUrl'] ?? ($val['itemCdnImgUrl'] ?? ($val['coverUrl'] ?? ($val['cover_url'] ?? ($val['image'] ?? '')))));
+            $priceRaw = $val['zkFinalPrice'] ?? ($val['zkGoodsPrice'] ?? ($val['zkPrice'] ?? ($val['price'] ?? ($val['itemPrice'] ?? 0))));
+            $price = $priceRaw;
+            if (is_numeric($priceRaw) && (float) $priceRaw >= 100) {
+                $price = number_format(((float) $priceRaw) / 100, 2, '.', '');
+            }
+            $list[] = [
+                'platform' => 'kuaishou',
+                '_source' => $source,
+                'goods_id' => $itemId,
+                'goodsId' => $canonicalGoodsId !== '' ? $canonicalGoodsId : $itemId,
+                'title' => $title,
+                'store_name' => $title,
+                'itemTitle' => $title,
+                'image' => $image,
+                'sales' => (int) ($val['soldCount'] ?? ($val['sales'] ?? 0)),
+                'sales_text' => (string) ($val['soldCountDesc'] ?? ($val['sales_text'] ?? '')),
+                'price' => $price ?: '0.00',
+                'ot_price' => '0.00',
+                'express_id' => (int) ($val['expressId'] ?? 0),
+                'express_type' => (int) ($val['expressType'] ?? 0),
+                'rel_item_id' => $relItemId,
+                'relItemId' => $relItemId,
+                'distribute_item_id' => (string) ($val['distributeItemId'] ?? ''),
             ];
         }
         return $list;
@@ -295,6 +1515,9 @@ class ServiceGoodsRepository
 
     protected function fetchDouyinList(string $keyword, int $page, int $limit): array
     {
+        if ($this->blocksLegacyAggregator()) {
+            return [];
+        }
         $keyword = trim($keyword);
         if ($keyword === '') {
             $keyword = '热销';
@@ -352,7 +1575,13 @@ class ServiceGoodsRepository
         $seen = [];
         $out = [];
         foreach ($list as $item) {
-            $key = ($item['platform'] ?? '') . ':' . ($item['goods_sign'] ?? ($item['goods_id'] ?? ''));
+            $id = $item['goods_sign']
+                ?? ($item['goods_id']
+                ?? ($item['item_id']
+                ?? ($item['itemId']
+                ?? ($item['num_iid']
+                ?? ($item['skuId'] ?? '')))));
+            $key = ($item['platform'] ?? '') . ':' . $id;
             if ($key === ':' || isset($seen[$key])) {
                 continue;
             }

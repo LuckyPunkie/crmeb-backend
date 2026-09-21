@@ -6,7 +6,10 @@ use app\common\repositories\taoke\ServiceTabConfigRepository;
 use crmeb\basic\BaseController;
 use think\App;
 
-class ServiceTabConfig extends BaseController
+/**
+ * 平台直连（official）专用服务页 Tab，与现网 legacy Tab 互不影响。
+ */
+class OfficialServiceTabConfig extends BaseController
 {
     protected ServiceTabConfigRepository $repository;
 
@@ -19,7 +22,7 @@ class ServiceTabConfig extends BaseController
     public function index()
     {
         return app('json')->success([
-            'list' => $this->repository->listAll(ServiceTabConfigRepository::CHANNEL_LEGACY),
+            'list' => $this->repository->listAll(ServiceTabConfigRepository::CHANNEL_OFFICIAL),
         ]);
     }
 
@@ -37,14 +40,14 @@ class ServiceTabConfig extends BaseController
         if (!is_array($data['brands'])) {
             $data['brands'] = [];
         }
-        $row = $this->repository->saveConfig($data, ServiceTabConfigRepository::CHANNEL_LEGACY);
+        $row = $this->repository->saveConfig($data, ServiceTabConfigRepository::CHANNEL_OFFICIAL);
         return app('json')->success($row);
     }
 
     public function delete()
     {
         $id = (int) $this->request->param('id', 0);
-        $this->repository->deleteConfig($id, ServiceTabConfigRepository::CHANNEL_LEGACY);
+        $this->repository->deleteConfig($id, ServiceTabConfigRepository::CHANNEL_OFFICIAL);
         return app('json')->success('删除成功');
     }
 }
