@@ -4,8 +4,11 @@ namespace app\controller\api\user;
 
 use think\App;
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\user\UserProfileRepository as repository;
+use app\common\repositories\user\UserProfileFieldRepository;
 use app\common\repositories\user\UserWechatUnlockRepository;
+use app\common\repositories\user\UserHomepageUnlockRepository;
 
 class UserProfile extends BaseController
 {
@@ -45,6 +48,61 @@ class UserProfile extends BaseController
     }
 
     /**
+     * 付费解锁对方主页
+     * POST /api/user/homepage_unlock/:uid
+     */
+    public function homepageUnlock($uid)
+    {
+        $buyerUid = $this->request->uid();
+        $payType = (string)$this->request->param('pay_type', 'weixin');
+        $returnUrl = (string)$this->request->param('return_url', '');
+        $result = app()->make(UserHomepageUnlockRepository::class)
+            ->unlock((int)$uid, $buyerUid, $payType, $returnUrl);
+        return app('json')->success($result);
+    }
+
+    /**
+     * 检查是否已解锁对方主页
+     * GET /api/user/homepage_unlock_check/:uid
+     */
+    public function homepageUnlockCheck($uid)
+    {
+        $buyerUid = $this->request->uid();
+        $unlocked = app()->make(UserHomepageUnlockRepository::class)
+            ->checkUnlocked((int)$uid, $buyerUid);
+        return app('json')->success(['unlocked' => $unlocked]);
+    }
+
+    /**
+     * 交友资料字段的选项元数据（供筛选/资料页拉取，运营在后台可编辑）
+     * GET /api/user/profile/field_options
+     */
+    public function fieldOptions()
+    {
+        $fieldRepo = app()->make(UserProfileFieldRepository::class);
+        $fields = $fieldRepo->enabledFields();
+        $map = [];
+        foreach ($fields as $f) {
+            $key = (string)($f['field_key'] ?? '');
+            if ($key === '') {
+                continue;
+            }
+            $opts = $f['options'] ?? [];
+            if (!is_array($opts)) {
+                $opts = [];
+            }
+            $map[$key] = [
+                'field_key'   => $key,
+                'title'       => (string)($f['title'] ?? ''),
+                'type'        => (string)($f['type'] ?? ''),
+                'bind_column' => (string)($f['bind_column'] ?? ''),
+                'options'     => array_values(array_map('strval', $opts)),
+            ];
+        }
+        return app('json')->success(['fields' => $map]);
+    }
+
+    /**
      * 获取当前用户社交档案
      * GET /api/user/profile
      */
@@ -61,11 +119,22 @@ class UserProfile extends BaseController
             $profile['hobbies'] = [];
         }
 
+        $fieldRepo = app()->make(UserProfileFieldRepository::class);
+        $accountPhone = trim((string)($userInfo['phone'] ?? ''));
+        $fields = $fieldRepo->attachValues($fieldRepo->enabledFields(), $profile, [
+            'account_phone' => $accountPhone,
+            'account_real_name' => trim((string)($userInfo['real_name'] ?? '')),
+        ]);
+
         return app('json')->success([
             'uid'      => $uid,
+            'phone'    => $accountPhone,
+            'real_name' => trim((string)($userInfo['real_name'] ?? '')),
+            'card_id'   => trim((string)($userInfo['card_id'] ?? '')),
             'sex'      => $userInfo['sex'] ?? 0,
             'birthday' => $userInfo['birthday'] ?? null,
             'profile'  => $profile,
+            'fields'   => $fields,
         ]);
     }
 
@@ -76,6 +145,8 @@ class UserProfile extends BaseController
     public function save()
     {
         $uid   = $this->request->uid();
+        $identityLocked = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
+            ->isIdentityVerified($uid);
         $sex   = $this->request->param('sex/d', -1);
         $input = $this->request->param();
 
@@ -96,7 +167,6 @@ class UserProfile extends BaseController
             'house_count',
             'total_assets',
             'relationship_status',
-            'dating_purpose',
             'marital_status',
             'want_kids',
             'smoking',
@@ -108,6 +178,8 @@ class UserProfile extends BaseController
             'hope_height_min',
             'hope_education',
         ];
+        // dating_purpose：VARCHAR，多选 CSV（如 "1,2"）
+        $csvFields = ['dating_purpose'];
         $stringFields = [
             'birth_month',
             'job_title',
@@ -116,6 +188,8 @@ class UserProfile extends BaseController
             'hometown_city',
             'current_province',
             'current_city',
+            'registered_province',
+            'registered_city',
             'school_name',
             'pets',
             'about_me',
@@ -184,6 +258,10 @@ class UserProfile extends BaseController
             $price = round(max(0, min(9999, (float)$input['wechat_unlock_price'])), 2);
             $filtered['wechat_unlock_price'] = $price;
         }
+        if (array_key_exists('homepage_unlock_price', $input)) {
+            $price = round(max(0, min(9999, (float)$input['homepage_unlock_price'])), 2);
+            $filtered['homepage_unlock_price'] = $price;
+        }
         // 全网粉丝：仅自然数；空串/null 表示清空不展示
         if (array_key_exists('network_fans', $input)) {
             $raw = $input['network_fans'];
@@ -201,8 +279,100 @@ class UserProfile extends BaseController
             }
         }
 
+        // 动态字段：field_values = { field_key: value }
+        $extraPatch = [];
+        if (array_key_exists('field_values', $input) && is_array($input['field_values'])) {
+            $allowedBind = array_flip(array_merge($intFields, $stringFields, $csvFields, ['wechat_unlock_price', 'homepage_unlock_price', 'network_fans']));
+            $fieldRepo = app()->make(UserProfileFieldRepository::class);
+            $metaMap = [];
+            foreach ($fieldRepo->enabledFields() as $meta) {
+                $metaMap[$meta['field_key']] = $meta;
+            }
+            foreach ($input['field_values'] as $key => $value) {
+                $key = (string)$key;
+                if ($key === '' || !isset($metaMap[$key])) {
+                    continue;
+                }
+                if ($key === UserProfileFieldRepository::ACCOUNT_PHONE_FIELD_KEY) {
+                    continue;
+                }
+                if ($key === UserProfileFieldRepository::REAL_NAME_FIELD_KEY) {
+                    if ($identityLocked) {
+                        continue;
+                    }
+                    $rn = mb_substr(trim((string)$value), 0, 32);
+                    \app\common\model\user\User::where('uid', $uid)->update(['real_name' => $rn]);
+                    continue;
+                }
+                if ($key === 'id_card' && $identityLocked) {
+                    continue;
+                }
+                $meta = $metaMap[$key];
+                $bind = (string)($meta['bind_column'] ?? '');
+                if ($bind === 'wechat_id') {
+                    $filtered['wechat_id'] = mb_substr(trim((string)$value), 0, 64);
+                    continue;
+                }
+                if ($bind !== '' && isset($allowedBind[$bind])) {
+                    // dating_purpose 等 CSV 类型字段：labels → index+1 CSV
+                    if (in_array($bind, $csvFields, true)) {
+                        $opts = is_array($meta['options'] ?? null) ? $meta['options'] : [];
+                        $labels = is_array($value) ? $value : (array)$value;
+                        $ids = [];
+                        foreach ($labels as $lb) {
+                            $lb = (string)$lb;
+                            // 数字字符串直接用（老数据/前端兜底）
+                            if (ctype_digit($lb)) {
+                                $ids[] = (int)$lb;
+                                continue;
+                            }
+                            $idx = array_search($lb, $opts, true);
+                            if ($idx !== false) $ids[] = (int)$idx + 1;
+                        }
+                        $ids = array_values(array_unique(array_filter($ids)));
+                        $filtered[$bind] = implode(',', $ids);
+                        continue;
+                    }
+                    // 预留：其它 bind 列直接写入主表
+                    $filtered[$bind] = is_array($value)
+                        ? json_encode(array_values($value), JSON_UNESCAPED_UNICODE)
+                        : mb_substr(trim((string)$value), 0, 255);
+                    continue;
+                }
+                if (($meta['type'] ?? '') === 'checkbox') {
+                    if (is_array($value)) {
+                        $extraPatch[$key] = array_values(array_map('strval', $value));
+                    } elseif (is_string($value) && $value !== '') {
+                        $decoded = json_decode($value, true);
+                        $extraPatch[$key] = is_array($decoded) ? array_values($decoded) : [$value];
+                    } else {
+                        $extraPatch[$key] = [];
+                    }
+                } else {
+                    $extraPatch[$key] = mb_substr(trim((string)($value ?? '')), 0, 255);
+                }
+            }
+        }
+
+        foreach (['about_me', 'cover_about'] as $bioField) {
+            if (!empty($filtered[$bioField])) {
+                $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
+                ContentSecurityService::checkText(
+                    (string)$filtered[$bioField],
+                    ContentSecurityService::SCENE_PROFILE,
+                    'profile_' . $bioField,
+                    $uid,
+                    $uid,
+                    $openid
+                );
+            }
+        }
+
         if (!empty($filtered)) {
             $this->repository->save($uid, $filtered);
+        }
+        if (!empty($extraPatch)) {
+            $this->repository->mergeExtraFields($uid, $extraPatch);
         }
 
         return app('json')->success('保存成功');

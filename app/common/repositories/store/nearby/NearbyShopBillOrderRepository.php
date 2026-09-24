@@ -86,8 +86,16 @@ class NearbyShopBillOrderRepository extends BaseRepository
 
         $order = $this->dao->getWhere(['order_sn' => $orderSn]);
 
+        $majorSettlement = null;
         try {
-            $this->recordFinancial($order, $updateData);
+            $majorSettlement = app()->make(\app\common\repositories\major_customer\MajorCustomerRepository::class)
+                ->onBillOrderPaid(is_array($order) ? $order : $order->toArray());
+        } catch (\Throwable $e) {
+            Log::error('NearbyBill major_customer settlement failed: ' . $e->getMessage());
+        }
+
+        try {
+            $this->recordFinancial($order, $updateData, $majorSettlement);
         } catch (\Exception $e) {
             Log::error('NearbyBill paySuccess financial record failed: ' . $e->getMessage());
         }
@@ -391,11 +399,15 @@ class NearbyShopBillOrderRepository extends BaseRepository
     /**
      * 记录财务流水：买单金额进入商户账户
      */
-    protected function recordFinancial($order, $updateData)
+    protected function recordFinancial($order, $updateData, ?array $majorSettlement = null)
     {
         $merId = (int)($order['mer_id'] ?? 0);
-        $amount = (float)($order['pay_price'] ?? 0);
-        if ($merId <= 0 || $amount <= 0) {
+        $displayAmount = round((float)($order['pay_price'] ?? 0), 2);
+        $lockAmount = $displayAmount;
+        if ($majorSettlement && isset($majorSettlement['merchant_d'])) {
+            $lockAmount = round((float)$majorSettlement['merchant_d'], 2);
+        }
+        if ($merId <= 0 || $lockAmount <= 0) {
             return;
         }
 
@@ -410,7 +422,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
             $merId,
             'order',
             (int)$order['id'],
-            $amount
+            $lockAmount
         );
 
         $userInfo = 'uid:' . (int)($order['uid'] ?? 0);
@@ -428,11 +440,12 @@ class NearbyShopBillOrderRepository extends BaseRepository
             'user_id' => (int)($order['uid'] ?? 0),
             'financial_type' => 'nearby_bill',
             'type' => 1,
-            'number' => $amount,
+            'number' => $displayAmount,
             'pay_type' => (int)$payTypeIndex,
         ], $merId);
 
-        Log::info('NearbyBill financial in: sn=' . $order['order_sn'] . ' mer_id=' . $merId . ' amount=' . $amount . ' pay_type=' . $payType);
+        Log::info('NearbyBill financial in: sn=' . $order['order_sn'] . ' mer_id=' . $merId
+            . ' display=' . $displayAmount . ' lock=' . $lockAmount . ' pay_type=' . $payType);
     }
 
     /**

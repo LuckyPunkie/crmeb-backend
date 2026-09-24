@@ -831,25 +831,44 @@ class Auth extends BaseController
     {
         $code = $this->request->param('code/s');
         $auth_token = $this->request->param('auth_token/s');
+        $phoneCode = trim((string)$this->request->param('phone_code/s', ''));
         $iv = $this->request->param('iv');
         $encryptedData = $this->request->param('encryptedData/s');
-        $userInfoCong = Cache::get('eb_api_code_' . $code);
-        if (!$code && !$userInfoCong)
-            throw new ValidateException('授权失败,参数有误');
-        if ($code && !$userInfoCong) {
-            try {
-                $userInfoCong = MiniProgram::getUserInfo($code);
-                Cache::set('eb_api_code_' . $code, $userInfoCong, 86400);
-            } catch (Exception $e) {
-                throw new ValidateException('获取session_key失败，请检查您的配置！');
-            }
-        }
-        $session_key = $userInfoCong['session_key'];
-
-        $data = MiniProgram::decryptData($session_key, $iv, $encryptedData);
         $userRepository = app()->make(UserRepository::class);
 
-        $phone = $data['purePhoneNumber'];
+        if ($phoneCode !== '') {
+            try {
+                $phoneInfo = MiniProgram::getPhoneNumberByCode($phoneCode);
+            } catch (\Throwable $e) {
+                return app('json')->fail('获取手机号失败：' . $e->getMessage());
+            }
+            $phone = (string)($phoneInfo['purePhoneNumber'] ?? $phoneInfo['phoneNumber'] ?? '');
+            if ($phone === '') {
+                return app('json')->fail('未解析到手机号');
+            }
+        } else {
+            if (!$code) {
+                throw new ValidateException('授权失败,参数有误');
+            }
+            try {
+                $userInfoCong = app()->make(WechatUserRepository::class)->getUserInfoByCode($code);
+            } catch (\Throwable $e) {
+                return app('json')->fail('登录凭证无效，请返回重试：' . $e->getMessage());
+            }
+            $session_key = $userInfoCong['session_key'] ?? '';
+            if (!$session_key) {
+                return app('json')->fail('获取 session_key 失败');
+            }
+            try {
+                $data = MiniProgram::decryptData($session_key, $iv, $encryptedData);
+            } catch (\Throwable $e) {
+                return app('json')->fail('解密手机号失败：' . $e->getMessage());
+            }
+            $phone = (string)($data['purePhoneNumber'] ?? '');
+            if ($phone === '') {
+                return app('json')->fail('未解析到手机号');
+            }
+        }
         $user = $userRepository->accountByUser($phone);
         //        if($user && $auth_token){
         //            return app('json')->fail('用户已存在');

@@ -35,6 +35,12 @@ Route::group('taoke/official', function () {
         Route::post('vip_goods_detail', 'api.taoke.OfficialGoods/vipGoodsDetail');
         Route::post('create_vip_link', 'api.taoke.OfficialGoods/createVipLink');
 
+        Route::post('douyin_goods', 'api.taoke.OfficialGoods/douyinGoods');
+        Route::post('douyin_goods_detail', 'api.taoke.OfficialGoods/douyinGoodsDetail');
+        Route::post('douyin_live', 'api.taoke.OfficialGoods/douyinLive');
+        Route::post('create_douyin_link', 'api.taoke.OfficialGoods/createDouyinLink');
+        Route::post('create_douyin_live_link', 'api.taoke.OfficialGoods/createDouyinLiveLink');
+
         Route::post('category', 'api.taoke.OfficialGoods/category');
         Route::post('aggregate_recommend', 'api.taoke.OfficialGoods/aggregateRecommend');
         Route::post('brand_goods', 'api.taoke.OfficialGoods/brandGoods');

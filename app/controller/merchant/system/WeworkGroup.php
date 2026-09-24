@@ -53,6 +53,7 @@ class WeworkGroup extends BaseController
             'group_name',
             'group_last_msg',
             'qrcode_url',
+            'group_avatar',
             ['branch_id', 0],
             ['status', 0],
         ]);

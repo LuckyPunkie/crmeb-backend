@@ -16,6 +16,7 @@ use app\common\repositories\user\UserDialogRepository;
 use app\common\repositories\user\UserMessageRepository;
 use app\common\repositories\community\CommunityReportRepository;
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use crmeb\services\UploadService;
 use think\App;
 use think\exception\ValidateException;
@@ -41,6 +42,7 @@ class Message extends BaseController
             'sex', 'gender', 'age_min', 'age_max', 'height_min', 'height_max', 'education',
             'weight_min', 'weight_max', 'zodiac', 'school_name', 'job_title',
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
+            'registered_province', 'registered_city',
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
@@ -89,6 +91,17 @@ class Message extends BaseController
         }
         if (!$data['msn'] && $data['msn_type'] == 1) {
             return app('json')->fail('内容字符无效');
+        }
+        if ($data['msn_type'] == 1) {
+            $user = $this->request->userInfo();
+            ContentSecurityService::checkText(
+                $data['msn'],
+                ContentSecurityService::SCENE_SOCIAL,
+                'chat_msg',
+                $toUid,
+                $myUid,
+                $user->wechat->routine_openid ?? ''
+            );
         }
 
         $data['voice_duration'] = $data['voice_duration'] ?? 0;

@@ -11,6 +11,7 @@ use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JuTuiKeService;
 use crmeb\services\taoke\PddOfficialService;
 use think\App;
+use think\facade\Cache;
 use think\facade\Log;
 
 /**
@@ -84,12 +85,7 @@ class Goods extends BaseController
         if ($type == 'taobao') {
             $data = $this->getTaobaoCategoryTags();
         } elseif ($type == 'wph') {
-            $data = [
-                ['id' => 1, 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
-                ['id' => 2, 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
-                ['id' => 3, 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
-                ['id' => 4, 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
-            ];
+            $data = $this->getWphCategoryTags();
         } elseif ($type == 'pdd') {
             $data = $this->getPddCategoryTags();
         } elseif ($type == 'kuaishou') {
@@ -97,13 +93,7 @@ class Goods extends BaseController
         } elseif ($type == 'jd') {
             $data = $this->getJdCategoryTags();
         } elseif ($type == 'douyin') {
-            $data = [
-                ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
-                ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆护肤'],
-                ['id' => 3, 'text' => '服饰鞋包', 'keyword' => '服饰鞋包'],
-                ['id' => 4, 'text' => '居家日用', 'keyword' => '居家日用'],
-                ['id' => 5, 'text' => '食品零食', 'keyword' => '零食'],
-            ];
+            $data = $this->getDouyinCategoryTags();
         } elseif ($type == 'recommend') {
             // 推荐 Tab 仅跨平台价格筛选，不带各平台类目
             $data = $this->getTaobaoPriceTags();
@@ -131,9 +121,14 @@ class Goods extends BaseController
         return $this->buildServiceTabsPayload(ServiceTabConfigRepository::CHANNEL_LEGACY);
     }
 
-    protected function buildServiceTabsPayload(string $channel)
+    protected function buildServiceTabsPayload(string $channel, bool $probeOfficialGoods = false)
     {
         $tabs = $this->serviceTabConfigRepository->listEnabled($channel);
+        if ($probeOfficialGoods && $channel === ServiceTabConfigRepository::CHANNEL_OFFICIAL) {
+            $tabs = array_values(array_filter($tabs, function (array $tab): bool {
+                return $this->probeOfficialTabHasGoods($tab);
+            }));
+        }
         $legacyBrand = ['enabled' => false, 'name' => '', 'brands' => []];
         foreach ($tabs as $t) {
             if ((int) $t['tab_type'] === 2 && !empty($t['brands'])) {
@@ -150,7 +145,29 @@ class Goods extends BaseController
             'tabs'      => $tabs,
             'brand_tab' => $legacyBrand,
             'channel'   => $channel,
+            'tabs_probed' => $probeOfficialGoods && $channel === ServiceTabConfigRepository::CHANNEL_OFFICIAL,
         ]);
+    }
+
+    /**
+     * 平台直连：Tab 已开启但当前无货 / 探活失败 → 不下发（App 隐藏 Tab）
+     */
+    protected function probeOfficialTabHasGoods(array $tab): bool
+    {
+        $tabKey = (string) ($tab['tab_key'] ?? '');
+        $cacheKey = 'taoke_official_tab_probe:' . md5($tabKey . ':' . (int) ($tab['id'] ?? 0));
+        $cached = Cache::get($cacheKey);
+        if ($cached !== null && $cached !== '') {
+            return (int) $cached === 1;
+        }
+        try {
+            $has = $this->serviceGoodsRepository->probeOfficialTabHasGoods($tab);
+        } catch (\Throwable $e) {
+            Log::warning('服务页 Tab 探活失败', ['tab_key' => $tabKey, 'error' => $e->getMessage()]);
+            $has = false;
+        }
+        Cache::set($cacheKey, $has ? 1 : 0, $has ? 600 : 180);
+        return $has;
     }
 
     /**
@@ -268,12 +285,139 @@ class Goods extends BaseController
         $page = (int)$this->request->param('page', $this->request->param('page_no', 1));
         $limit = (int)$this->request->param('limit', $this->request->param('page_size', 20));
         $keyword = (string)$this->request->param('keyword', '');
+        $filters = $this->buildDouyinListFiltersFromRequest();
         try {
-            $list = $this->serviceGoodsRepository->searchPlatform('douyin', $keyword, $page, $limit);
-            return app('json')->success(['list' => $list]);
+            $list = $this->serviceGoodsRepository->fetchDouyinListWithFilters($keyword, $page, $limit, $filters);
+            return app('json')->success([
+                'list' => $list,
+                '_source' => $this->serviceGoodsRepository->getDouyinDataSource(),
+            ]);
         } catch (\Exception $e) {
             Log::error('抖音商品列表获取失败', ['error' => $e->getMessage()]);
-            return app('json')->success(['list' => []]);
+            return app('json')->success(['list' => [], '_source' => $this->serviceGoodsRepository->getDouyinDataSource()]);
+        }
+    }
+
+    /**
+     * 抖音商品详情（好单库 dy_item_info）
+     * POST /api/taoke/goods/douyin_goods_detail
+     */
+    public function douyinGoodsDetail()
+    {
+        $goodsId = (string) $this->request->param('goods_id', $this->request->param('itemid', ''));
+        if ($goodsId === '') {
+            return app('json')->fail('商品ID不能为空');
+        }
+        try {
+            $detail = $this->serviceGoodsRepository->fetchDouyinDetail($goodsId);
+            if ($detail === []) {
+                return app('json')->fail('商品详情获取失败');
+            }
+            return app('json')->success([
+                'detail' => $detail,
+                '_source' => $this->serviceGoodsRepository->getDouyinDataSource(),
+            ]);
+        } catch (\Exception $e) {
+            Log::error('抖音商品详情获取失败', ['goods_id' => $goodsId, 'error' => $e->getMessage()]);
+            return app('json')->fail('商品详情获取失败');
+        }
+    }
+
+    /**
+     * 抖音直播列表（好单库 dy_live_list）
+     * POST /api/taoke/goods/douyin_live
+     */
+    public function douyinLive()
+    {
+        $page = (int) $this->request->param('page', $this->request->param('page_no', 1));
+        $limit = (int) $this->request->param('limit', $this->request->param('page_size', 20));
+        $minId = $this->request->param('min_id', null);
+        $filters = [
+            'min_id' => $minId !== null && $minId !== '' ? $minId : $page,
+            'keyword' => (string) $this->request->param('keyword', ''),
+        ];
+        try {
+            $bundle = $this->serviceGoodsRepository->fetchDouyinLiveList($page, $limit, $filters);
+            if ($bundle['code'] !== 0 && $bundle['code'] !== -1) {
+                return app('json')->fail(
+                    $bundle['message'] !== '' ? $bundle['message'] : '抖音直播列表获取失败'
+                );
+            }
+            if ($bundle['code'] === -1 && $bundle['message'] === 'haodanku_not_configured') {
+                return app('json')->success([
+                    'list' => [],
+                    'total' => 0,
+                    'min_id' => null,
+                    '_source' => 'haodanku',
+                    'hdk_message' => 'haodanku_not_configured',
+                ]);
+            }
+            return app('json')->success([
+                'list' => $bundle['list'],
+                'total' => $bundle['total'],
+                'min_id' => $bundle['min_id'] ?? null,
+                '_source' => 'haodanku',
+                'hdk_message' => $bundle['message'],
+            ]);
+        } catch (\Exception $e) {
+            Log::error('抖音直播列表获取失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('获取失败，请稍后重试');
+        }
+    }
+
+    /**
+     * 抖音直播转链（好单库 get_dylive_link）
+     * POST /api/taoke/goods/create_douyin_live_link
+     */
+    public function createDouyinLiveLink()
+    {
+        $uid = (string) ($this->request->uid() ?? '');
+        $context = [
+            'room_id' => (string) $this->request->post('room_id', ''),
+            'author_id' => (string) $this->request->post('author_id', $this->request->post('author_openid', '')),
+            'buyin_id' => (string) $this->request->post('buyin_id', $this->request->post('author_buyin_id', '')),
+            'author_buyin_id' => (string) $this->request->post('author_buyin_id', ''),
+            'product_id' => (string) $this->request->post('product_id', ''),
+            'channel' => (string) $this->request->post('channel', $this->request->post('external_info', $uid)),
+            'share_type' => $this->request->post('share_type', '1,3'),
+            'platform' => $this->request->post('platform', null),
+        ];
+        try {
+            $result = $this->serviceGoodsRepository->createDouyinLivePromotion($context);
+            $code = (int) ($result['code'] ?? -1);
+            if ($code !== 0) {
+                return app('json')->fail((string) ($result['message'] ?? '生成直播推广链接失败'));
+            }
+            return app('json')->success($result);
+        } catch (\Exception $e) {
+            Log::error('抖音直播转链失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('生成推广链接失败');
+        }
+    }
+
+    /**
+     * 抖音商品转链（好单库 get_dyitem_link）
+     * POST /api/taoke/goods/create_douyin_link
+     */
+    public function createDouyinLink()
+    {
+        $uid = (string) ($this->request->uid() ?? '');
+        $context = [
+            'itemid' => (string) $this->request->post('itemid', $this->request->post('goods_id', '')),
+            'goods_id' => (string) $this->request->post('goods_id', ''),
+            'channel' => (string) $this->request->post('channel', $this->request->post('external_info', $uid)),
+            'share_type' => $this->request->post('share_type', '1,3'),
+        ];
+        try {
+            $result = $this->serviceGoodsRepository->createDouyinProductPromotion($context);
+            $code = (int) ($result['code'] ?? -1);
+            if ($code !== 0) {
+                return app('json')->fail((string) ($result['message'] ?? '生成商品推广链接失败'));
+            }
+            return app('json')->success($result);
+        } catch (\Exception $e) {
+            Log::error('抖音商品转链失败', ['error' => $e->getMessage()]);
+            return app('json')->fail('生成推广链接失败');
         }
     }
 
@@ -459,6 +603,26 @@ class Goods extends BaseController
     }
 
     /**
+     * 唯品会 Tab：价格 pill + 官方一级类目（getCategorys）
+     */
+    protected function getWphCategoryTags(): array
+    {
+        $priceTags = [
+            ['id' => 'wph_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+            ['id' => 'wph_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
+            ['id' => 'wph_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
+            ['id' => 'wph_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
+        ];
+        try {
+            $cats = $this->serviceGoodsRepository->getWphCategoryTags();
+            return array_merge($priceTags, $cats ?: []);
+        } catch (\Throwable $e) {
+            Log::error('唯品会类目标签获取失败', ['error' => $e->getMessage()]);
+            return $priceTags;
+        }
+    }
+
+    /**
      * 拼多多分类标签（订单侠 activity_tags，失败则兜底）
      */
     protected function getKuaishouCategoryTags(): array
@@ -527,6 +691,50 @@ class Goods extends BaseController
             'rangeFrom' => (int) $this->request->post('price_from', 0),
             'rangeTo' => (int) $to,
         ]];
+    }
+
+    /**
+     * 抖音 Tab：好单库 price_min / price_max（单位：元）
+     *
+     * @return array{price_min?:float|int,price_max?:float|int,sort?:int}
+     */
+    protected function buildDouyinListFiltersFromRequest(): array
+    {
+        $filters = [];
+        $min = $this->request->param('price_min', null);
+        $max = $this->request->param('price_max', null);
+        if ($min !== null && $min !== '') {
+            $filters['price_min'] = $min;
+        }
+        if ($max !== null && $max !== '') {
+            $filters['price_max'] = $max;
+        }
+        $sort = $this->request->param('sort', null);
+        if ($sort !== null && $sort !== '') {
+            $filters['sort'] = (int) $sort;
+        }
+        return $filters;
+    }
+
+    /**
+     * 抖音 Tab：价格 pill + 类目关键词（好单库 keyword）
+     */
+    protected function getDouyinCategoryTags(): array
+    {
+        $priceTags = [
+            ['id' => 'dy_p99', 'text' => '9.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 9.9],
+            ['id' => 'dy_p199', 'text' => '19.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 19.9],
+            ['id' => 'dy_p299', 'text' => '29.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 29.9],
+            ['id' => 'dy_p399', 'text' => '39.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 39.9],
+        ];
+        $categoryTags = [
+            ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
+            ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆护肤'],
+            ['id' => 3, 'text' => '服饰鞋包', 'keyword' => '服饰鞋包'],
+            ['id' => 4, 'text' => '居家日用', 'keyword' => '居家日用'],
+            ['id' => 5, 'text' => '食品零食', 'keyword' => '零食'],
+        ];
+        return array_merge($priceTags, $categoryTags);
     }
 
     protected function getPddCategoryTags(): array
@@ -1472,11 +1680,12 @@ class Goods extends BaseController
         $page = (int) $this->request->post('page_no', $this->request->post('page', 1));
         $limit = (int) $this->request->post('page_size', $this->request->post('limit', 20));
         $keyword = (string) $this->request->post('keyword', '');
-        if ($keyword === '') {
+        $cate = (int) $this->request->post('cate', 0);
+        if ($keyword === '' && $cate <= 0) {
             $keyword = '热销';
         }
         try {
-            $list = $this->serviceGoodsRepository->searchPlatform('wph', $keyword, $page, $limit);
+            $list = $this->serviceGoodsRepository->searchPlatform('wph', $keyword, $page, $limit, $cate);
             $payload = [
                 'list' => $list,
                 '_source' => $this->serviceGoodsRepository->getWphDataSource(),
@@ -1538,6 +1747,7 @@ class Goods extends BaseController
             $result = $this->serviceGoodsRepository->createVipPromotion($goods_id, $openId, [
                 'ad_code' => (string) $this->request->post('ad_code', ''),
                 'dest_url' => (string) $this->request->post('url', ''),
+                'goods_name' => (string) $this->request->post('goods_name', ''),
             ]);
 
             if (empty($result)) {

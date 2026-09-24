@@ -39,23 +39,23 @@ Route::group(function () {
         ->name('merchantNearbyCategoryTree')
         ->option(['_alias' => '附近好店分类树']);
 
-    // 推荐菜管理
-    Route::group('nearby/recommend', function () {
-        Route::get('lst', '/lst')->name('merchantNearbyRecommendLst');
-        Route::post('create', '/create')->name('merchantNearbyRecommendCreate');
-        Route::post(':id', '/update')->name('merchantNearbyRecommendUpdate');
-        Route::delete(':id', '/delete')->name('merchantNearbyRecommendDelete');
-    })->prefix('merchant.store.nearby.NearbyRecommend')
-        ->option(['_path' => '/nearby/recommend', '_auth' => true]);
+    // 推荐菜管理：菜单入口已下线（改用 商品「店铺推荐」勾选筛选），路由暂注释；测试稳定后再彻底删除
+    // Route::group('nearby/recommend', function () {
+    //     Route::get('lst', '/lst')->name('merchantNearbyRecommendLst');
+    //     Route::post('create', '/create')->name('merchantNearbyRecommendCreate');
+    //     Route::post(':id', '/update')->name('merchantNearbyRecommendUpdate');
+    //     Route::delete(':id', '/delete')->name('merchantNearbyRecommendDelete');
+    // })->prefix('merchant.store.nearby.NearbyRecommend')
+    //     ->option(['_path' => '/nearby/recommend', '_auth' => true]);
 
-    // 套餐管理
-    Route::group('nearby/package', function () {
-        Route::get('lst', '/lst')->name('merchantNearbyPackageLst');
-        Route::post('create', '/create')->name('merchantNearbyPackageCreate');
-        Route::post(':id', '/update')->name('merchantNearbyPackageUpdate');
-        Route::delete(':id', '/delete')->name('merchantNearbyPackageDelete');
-    })->prefix('merchant.store.nearby.NearbyPackage')
-        ->option(['_path' => '/nearby/package', '_auth' => true]);
+    // 套餐管理：菜单入口已下线（附近好店套餐走系统自带优惠套餐），路由暂注释；测试稳定后再彻底删除
+    // Route::group('nearby/package', function () {
+    //     Route::get('lst', '/lst')->name('merchantNearbyPackageLst');
+    //     Route::post('create', '/create')->name('merchantNearbyPackageCreate');
+    //     Route::post(':id', '/update')->name('merchantNearbyPackageUpdate');
+    //     Route::delete(':id', '/delete')->name('merchantNearbyPackageDelete');
+    // })->prefix('merchant.store.nearby.NearbyPackage')
+    //     ->option(['_path' => '/nearby/package', '_auth' => true]);
 
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(MerchantTokenMiddleware::class, true)

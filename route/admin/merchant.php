@@ -351,6 +351,15 @@ Route::group(function () {
         Route::post('label/local/:id', 'merchant.MerchantLabel/localLabelMarginSet')->name('systemMarginLabelLocalSet')->option([
             '_alias' => '标签保证金线下缴纳',
         ]);
+        // 标签保证金扣费
+        Route::get('label/deduct/:id/form', 'merchant.MerchantLabel/deductForm')->name('systemMarginLabelDeductForm')->option([
+            '_alias' => '标签保证金扣费表单',
+            '_auth' => false,
+            '_form' => 'systemMarginLabelDeduct',
+        ]);
+        Route::post('label/deduct/:id', 'merchant.MerchantLabel/deduct')->name('systemMarginLabelDeduct')->option([
+            '_alias' => '标签保证金扣费',
+        ]);
     })->prefix('admin.system.')->option([
         '_path' => '/merchant/deposit_list',
         '_auth' => true,

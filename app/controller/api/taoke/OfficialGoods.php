@@ -18,6 +18,6 @@ class OfficialGoods extends Goods
      */
     public function serviceTabs()
     {
-        return $this->buildServiceTabsPayload(ServiceTabConfigRepository::CHANNEL_OFFICIAL);
+        return $this->buildServiceTabsPayload(ServiceTabConfigRepository::CHANNEL_OFFICIAL, true);
     }
 }

@@ -25,6 +25,7 @@ use app\common\repositories\user\UserVisitRepository;
 use app\validate\api\UserBaseInfoValidate;
 use crmeb\basic\BaseController;
 use crmeb\services\wechat\MiniProgram;
+use crmeb\services\security\ContentSecurityService;
 use crmeb\services\SmsService;
 use think\App;
 use think\db\exception\DataNotFoundException;
@@ -692,11 +693,13 @@ class User extends BaseController
         if(!empty($nickname)) {
             $validate->check(['nickname' => $nickname]);
             $data['nickname'] = $nickname;
-            MiniProgram::msgSecCheck(
+            ContentSecurityService::checkText(
                 $data['nickname'],
-                1,
-                $user->wechat->routine_openid ?? '',
-                0
+                ContentSecurityService::SCENE_PROFILE,
+                'nickname',
+                $user->uid,
+                $user->uid,
+                $user->wechat->routine_openid ?? ''
             );
         }
         if(!empty($avatar)) {

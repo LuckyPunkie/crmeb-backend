@@ -16,18 +16,11 @@ class MerchantLabel extends BaseController
         $this->repository = $repository;
     }
 
-    /**
-     * 获取所有商家标签（附带当前商户加入状态）
-     */
     public function labels()
     {
-        $merId = $this->request->merId();
-        return app('json')->success($this->repository->getLabelsWithStatus($merId));
+        return app('json')->success($this->repository->getLabelsWithStatus($this->request->merId()));
     }
 
-    /**
-     * 加入标签
-     */
     public function join($id)
     {
         if (!$id) return app('json')->fail('参数错误');
@@ -39,9 +32,6 @@ class MerchantLabel extends BaseController
         return app('json')->success($result);
     }
 
-    /**
-     * 获取标签保证金支付二维码
-     */
     public function marginCode($id)
     {
         if (!$id) return app('json')->fail('参数错误');
@@ -51,5 +41,50 @@ class MerchantLabel extends BaseController
             return app('json')->fail($e->getMessage());
         }
         return app('json')->success($result);
+    }
+
+    /**
+     * 商家保存标签公告文案
+     */
+    public function saveAnnouncement($id)
+    {
+        if (!$id) return app('json')->fail('参数错误');
+        $content = (string)$this->request->param('content', '');
+        if (mb_strlen($content) > 500) return app('json')->fail('公告不能超过 500 字');
+        try {
+            $this->repository->saveAnnouncement((int)$id, $this->request->merId(), $content);
+        } catch (\InvalidArgumentException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success('保存成功');
+    }
+
+    /**
+     * 查看某标签退款账户信息（返回 online/offline/info 用于弹窗展示）
+     */
+    public function refundInfo($id)
+    {
+        if (!$id) return app('json')->fail('参数错误');
+        try {
+            $result = $this->repository->checkRefundLabelMargin((int)$id, $this->request->merId(), $this->request->adminId());
+        } catch (\Exception $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success($result);
+    }
+
+    /**
+     * 提交某标签保证金退款申请（走店铺退款完全相同的流程 + Financial 记录）
+     */
+    public function refundApply($id)
+    {
+        if (!$id) return app('json')->fail('参数错误');
+        $account = $this->request->params(['type', 'name', 'code', 'pic']);
+        try {
+            $this->repository->refundLabelMargin((int)$id, $this->request->merId(), $this->request->adminId(), $account);
+        } catch (\Exception $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        return app('json')->success('提交成功');
     }
 }

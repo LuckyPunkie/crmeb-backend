@@ -64,6 +64,10 @@ Route::group('taoke', function () {
         Route::post('create_vip_link', 'api.taoke.Goods/createVipLink');
 
         Route::post('douyin_goods', 'api.taoke.Goods/douyinGoods');
+        Route::post('douyin_goods_detail', 'api.taoke.Goods/douyinGoodsDetail');
+        Route::post('douyin_live', 'api.taoke.Goods/douyinLive');
+        Route::post('create_douyin_link', 'api.taoke.Goods/createDouyinLink');
+        Route::post('create_douyin_live_link', 'api.taoke.Goods/createDouyinLiveLink');
         Route::get('service_tabs', 'api.taoke.Goods/serviceTabs');
         Route::post('aggregate_recommend', 'api.taoke.Goods/aggregateRecommend');
         Route::post('brand_goods', 'api.taoke.Goods/brandGoods');

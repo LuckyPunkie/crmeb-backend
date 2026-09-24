@@ -17,7 +17,12 @@ class UserProfileRepository extends BaseRepository
     public function getByUid(int $uid): array
     {
         $profile = $this->dao->getByUid($uid);
-        return $profile ? $profile->toArray() : [];
+        if (!$profile) {
+            return ['extra_fields' => []];
+        }
+        $arr = $profile->toArray();
+        $arr['extra_fields'] = $this->decodeExtraFields($arr['extra_fields'] ?? null);
+        return $arr;
     }
 
     public function save(int $uid, array $data): void
@@ -32,11 +37,14 @@ class UserProfileRepository extends BaseRepository
             'job_title',
             'wechat_id',
             'wechat_unlock_price',
+            'homepage_unlock_price',
             'network_fans',
             'hometown_province',
             'hometown_city',
             'current_province',
             'current_city',
+            'registered_province',
+            'registered_city',
             'annual_income',
             'car_count',
             'house_count',
@@ -65,12 +73,68 @@ class UserProfileRepository extends BaseRepository
             'cover_hobby',
             'hobby_photo_1',
             'hobby_photo_2',
+            'extra_fields',
         ];
         $filtered = array_intersect_key($data, array_flip($allowed));
         if (isset($filtered['hobbies']) && is_array($filtered['hobbies'])) {
             $filtered['hobbies'] = json_encode(array_values($filtered['hobbies']), JSON_UNESCAPED_UNICODE);
         }
+        if (array_key_exists('extra_fields', $filtered)) {
+            $filtered['extra_fields'] = $this->encodeExtraFields($filtered['extra_fields']);
+        }
         $this->dao->upsert($uid, $filtered);
+    }
+
+    /**
+     * 合并写入动态字段（按 field_key；bind_column 已映射的不进 extra）
+     * @param array $extraPatch field_key => value
+     */
+    public function mergeExtraFields(int $uid, array $extraPatch): void
+    {
+        if (!$extraPatch) {
+            return;
+        }
+        $profile = $this->getByUid($uid);
+        $extra = $profile['extra_fields'] ?? [];
+        if (!is_array($extra)) {
+            $extra = [];
+        }
+        foreach ($extraPatch as $key => $value) {
+            $key = (string)$key;
+            if ($key === '') {
+                continue;
+            }
+            if (is_array($value)) {
+                $extra[$key] = array_values($value);
+            } else {
+                $extra[$key] = $value === null ? '' : (string)$value;
+            }
+        }
+        $this->save($uid, ['extra_fields' => $extra]);
+    }
+
+    public function decodeExtraFields($raw): array
+    {
+        if (is_array($raw)) {
+            return $raw;
+        }
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+        $decoded = json_decode($raw, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    public function encodeExtraFields($raw): string
+    {
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            $raw = is_array($decoded) ? $decoded : [];
+        }
+        if (!is_array($raw)) {
+            $raw = [];
+        }
+        return json_encode($raw, JSON_UNESCAPED_UNICODE);
     }
 
     /**

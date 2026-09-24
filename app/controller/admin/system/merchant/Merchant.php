@@ -195,7 +195,7 @@ class Merchant extends BaseController
             ],
         ]);
 
-        Db::transaction(function () use ($id, $data) {
+        Db::transaction(function () use ($id, $data, $merchant) {
             // 处理关联店铺分组
             $relevanceRepository = app()->make(RelevanceRepository::class);
             $storeGroupIds = $data['store_group_ids'] ?? [];

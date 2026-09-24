@@ -184,6 +184,9 @@ Route::group(function () {
         Route::get('lst', 'merchant.system.MerchantLabel/labels');
         Route::post('join/:id', 'merchant.system.MerchantLabel/join');
         Route::get('margin_code/:id', 'merchant.system.MerchantLabel/marginCode');
+        Route::post('announcement/:id', 'merchant.system.MerchantLabel/saveAnnouncement');
+        Route::get('refund_info/:id', 'merchant.system.MerchantLabel/refundInfo');
+        Route::post('refund_apply/:id', 'merchant.system.MerchantLabel/refundApply');
     })->option([
         '_path' => '/merchant_label/lst',
         '_auth' => false,

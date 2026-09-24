@@ -557,7 +557,19 @@ class FinancialRepository extends BaseRepository
     public function getAdminList(array $where, int $page, int $limit)
     {
         $where['is_del'] = 0;
-        $query = $this->dao->search($where)->with([
+        // 标签保证金独立页专用：只返回 label_id > 0 的退款申请
+        // 店铺保证金退回列表：排除 label_id > 0 的记录
+        $labelOnly = !empty($where['label_only']);
+        unset($where['label_only']);
+        $query = $this->dao->search($where);
+        if ($labelOnly) {
+            $query->where('label_id', '>', 0);
+        } else {
+            $query->where(function ($q) {
+                $q->whereNull('label_id')->whereOr('label_id', 0);
+            });
+        }
+        $query->with([
             'merchant' => function ($query) {
                 $query->field('mer_id,mer_name,is_trader,mer_avatar,type_id,mer_phone,mer_address,is_margin,margin,real_name,ot_margin');
                 $query->with([
@@ -570,6 +582,20 @@ class FinancialRepository extends BaseRepository
         ]);
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
+
+        // 补挂标签保证金退款的 label_name（label_id>0 时）
+        $labelIds = [];
+        foreach ($list as $row) {
+            if (!empty($row['label_id'])) $labelIds[(int)$row['label_id']] = true;
+        }
+        if ($labelIds) {
+            $labelMap = Db::name('merchant_label')->whereIn('id', array_keys($labelIds))->column('label_name', 'id');
+            foreach ($list as $row) {
+                if (!empty($row['label_id'])) {
+                    $row['label_name'] = $labelMap[(int)$row['label_id']] ?? '';
+                }
+            }
+        }
 
         return compact('count', 'list');
     }
@@ -912,6 +938,7 @@ class FinancialRepository extends BaseRepository
             case 1:
                 $bill['number'] = $res['extract_money'];
                 $bill['mer_id'] = $res->merchant->mer_id;
+                $labelId = (int)($res['label_id'] ?? 0);
                 if ($data['status'] == 1) {
                     $this->agree($res);
                     $data['financial_status'] = 1;
@@ -920,18 +947,38 @@ class FinancialRepository extends BaseRepository
                     $bill['balance'] = 0;
                     $bill['mark'] = '【 操作者：' . request()->adminId() . '|' . request()->adminInfo()->real_name . '】';
                     $pm = 0;
+                    // 标签保证金退款通过：只回写 merchant_label_store，不动 merchant.margin
+                    if ($labelId > 0) {
+                        Db::name('merchant_label_store')
+                            ->where('mer_id', $res['mer_id'])
+                            ->where('label_id', $labelId)
+                            ->update(['is_margin' => -1, 'update_time' => date('Y-m-d H:i:s')]);
+                    }
                 } else if ($data['status'] == -1) {
-                    $number = bcadd($res->merchant->margin, $res->extract_money, 2);
-                    $res->merchant->is_margin = 10;
-                    $res->merchant->margin = $number;
-                    app()->make(MerchantCoreService::class)->writeMerchant((int)$res->merchant->mer_id, ['is_margin', 'margin'], function () use ($res) {
-                        $res->merchant->save();
-                    }, 'financial_refund_margin_reject');
-                    $tempId = 'REFUND_MARGIN_FAIL';
-                    $bill['title'] = '审核拒绝';
-                    $bill['balance'] = $number;
-                    $bill['mark'] = $data['refusal'] . '【 操作者：' . request()->adminId() . '|' . request()->adminInfo()->real_name . '】';
-                    $pm = 1;
+                    if ($labelId > 0) {
+                        // 标签保证金退款被拒：仅回滚 store.is_margin=10；不改商户 margin
+                        Db::name('merchant_label_store')
+                            ->where('mer_id', $res['mer_id'])
+                            ->where('label_id', $labelId)
+                            ->update(['is_margin' => 10, 'update_time' => date('Y-m-d H:i:s')]);
+                        $tempId = 'REFUND_MARGIN_FAIL';
+                        $bill['title'] = '审核拒绝';
+                        $bill['balance'] = 0;
+                        $bill['mark'] = $data['refusal'] . '【 操作者：' . request()->adminId() . '|' . request()->adminInfo()->real_name . '】';
+                        $pm = 1;
+                    } else {
+                        $number = bcadd($res->merchant->margin, $res->extract_money, 2);
+                        $res->merchant->is_margin = 10;
+                        $res->merchant->margin = $number;
+                        app()->make(MerchantCoreService::class)->writeMerchant((int)$res->merchant->mer_id, ['is_margin', 'margin'], function () use ($res) {
+                            $res->merchant->save();
+                        }, 'financial_refund_margin_reject');
+                        $tempId = 'REFUND_MARGIN_FAIL';
+                        $bill['title'] = '审核拒绝';
+                        $bill['balance'] = $number;
+                        $bill['mark'] = $data['refusal'] . '【 操作者：' . request()->adminId() . '|' . request()->adminInfo()->real_name . '】';
+                        $pm = 1;
+                    }
                 }
                 $userBillRepository = app()->make(UserBillRepository::class);
                 $userBillRepository->bill(0, 'mer_margin', 'margin_status', $pm, $bill);
@@ -1026,7 +1073,8 @@ class FinancialRepository extends BaseRepository
             * 变更保证金状态&关闭店铺
             *
             */
-            if (!$has) {
+            // 标签保证金退款不影响商户主保证金 / 店铺开闭状态
+            if (!$has && (int)($res['label_id'] ?? 0) === 0) {
                 $is_margin = $res['merchant']['merchantType']['is_margin'];
                 $res->merchant->is_margin = $is_margin;
                 $res->merchant->margin = $res['merchant']['merchantType']['margin'];

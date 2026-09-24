@@ -17,6 +17,7 @@ use app\common\repositories\store\order\StoreOrderProductRepository;
 use app\validate\api\ProductReplyValidate;
 use think\App;
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\store\product\ProductReplyRepository as repository;
 
 class StoreReply extends BaseController
@@ -113,6 +114,17 @@ class StoreReply extends BaseController
 
         // 获取当前请求的用户信息
         $user = $this->request->userInfo();
+
+        if (!empty($data['comment'])) {
+            ContentSecurityService::checkText(
+                $data['comment'],
+                ContentSecurityService::SCENE_COMMENT,
+                'goods_comment',
+                (int)$id,
+                $user->uid,
+                $user->wechat->routine_openid ?? ''
+            );
+        }
 
         // 将用户ID、订单产品ID、用户昵称和头像添加到评价数据中
         $data['uid'] = $this->request->uid();

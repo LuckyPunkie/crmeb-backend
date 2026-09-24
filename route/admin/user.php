@@ -78,6 +78,34 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // 交友资料字段配置
+    Route::group('user/profile_field', function () {
+        Route::get('lst', '/lst')->name('systemUserProfileFieldLst')->option([
+            '_alias' => '列表',
+        ]);
+        Route::post('create', '/create')->name('systemUserProfileFieldCreate')->option([
+            '_alias' => '新增',
+        ]);
+        Route::post('update/:id', '/update')->name('systemUserProfileFieldUpdate')->option([
+            '_alias' => '编辑',
+        ]);
+        Route::delete('delete/:id', '/delete')->name('systemUserProfileFieldDelete')->option([
+            '_alias' => '删除',
+        ]);
+        Route::post('show/:id', '/setShow')->name('systemUserProfileFieldShow')->option([
+            '_alias' => '主页展示',
+        ]);
+        Route::post('status/:id', '/setStatus')->name('systemUserProfileFieldStatus')->option([
+            '_alias' => '上架下架',
+        ]);
+        Route::post('sort', '/saveSort')->name('systemUserProfileFieldSort')->option([
+            '_alias' => '排序',
+        ]);
+    })->prefix('admin.user.UserProfileField')->option([
+        '_path' => '/user/profile_fields',
+        '_auth' => true,
+    ]);
+
     //用户标签
     Route::group('user/label', function () {
         Route::get('lst', '/lst')->name('systemUserLabelLst')->option([

@@ -15,6 +15,7 @@ namespace app\controller\api\community;
 use app\common\repositories\community\CommunityResumeRepository;
 use app\validate\api\CommunityResumeValidate;
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use think\App;
 use think\exception\ValidateException;
 
@@ -66,6 +67,18 @@ class CommunityResume extends BaseController
         app()->make(CommunityResumeValidate::class)->check($data);
         $data = $this->repository->normalizeResumePayload($data);
 
+        if (!empty($data['self_evaluation'])) {
+            $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
+            ContentSecurityService::checkText(
+                (string)$data['self_evaluation'],
+                ContentSecurityService::SCENE_FORUM,
+                'resume',
+                0,
+                $uid,
+                $openid
+            );
+        }
+
         $resume = $this->repository->create($data, $uid);
         return app('json')->success(['resume_id' => $resume['id']]);
     }
@@ -78,6 +91,18 @@ class CommunityResume extends BaseController
         $uid = $this->request->uid();
         $data = $this->getResumePayload();
         $data = $this->repository->normalizeResumePayload($data);
+
+        if (!empty($data['self_evaluation'])) {
+            $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
+            ContentSecurityService::checkText(
+                (string)$data['self_evaluation'],
+                ContentSecurityService::SCENE_FORUM,
+                'resume',
+                (int)$id,
+                $uid,
+                $openid
+            );
+        }
 
         $this->repository->updateResume((int)$id, $uid, $data);
         return app('json')->success(['resume_id' => (int)$id]);

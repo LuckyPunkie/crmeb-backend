@@ -150,6 +150,34 @@ class MiniProgram extends BaseApplication
     }
 
     /**
+     * 手机号快速验证组件（返回 code，非 encryptedData）
+     * @see https://developers.weixin.qq.com/miniprogram/dev/OpenApiDoc/user-info/phone-number/getPhoneNumber.html
+     */
+    public static function getPhoneNumberByCode(string $phoneCode): array
+    {
+        $phoneCode = trim($phoneCode);
+        if ($phoneCode === '') {
+            throw new ValidateException('手机号授权 code 为空');
+        }
+        try {
+            $response = self::instance()->application()->getClient()->postJson(
+                'wxa/business/getuserphonenumber',
+                ['code' => $phoneCode]
+            );
+            $data = $response->toArray(false);
+            self::logger('getuserphonenumber', compact('phoneCode'), $data);
+            if ((int)($data['errcode'] ?? 0) !== 0) {
+                throw new WechatException($data['errmsg'] ?? '获取手机号失败');
+            }
+            return is_array($data['phone_info'] ?? null) ? $data['phone_info'] : [];
+        } catch (WechatException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new WechatException($e->getMessage());
+        }
+    }
+
+    /**
      * 获取小程序码:适用于需要的码数量极多，或仅临时使用的业务场景
      * @param string $scene
      * @param string $path

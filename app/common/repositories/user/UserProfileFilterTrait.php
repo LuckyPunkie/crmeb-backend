@@ -61,6 +61,14 @@ trait UserProfileFilterTrait
             $hasProfileFilter = true;
             $profileQuery->where('current_city', trim((string)$where['current_city']));
         }
+        if (!empty($where['registered_province'])) {
+            $hasProfileFilter = true;
+            $profileQuery->where('registered_province', trim((string)$where['registered_province']));
+        }
+        if (!empty($where['registered_city'])) {
+            $hasProfileFilter = true;
+            $profileQuery->where('registered_city', trim((string)$where['registered_city']));
+        }
 
         if (!empty($where['annual_income'])) {
             $hasProfileFilter = true;
@@ -83,13 +91,29 @@ trait UserProfileFilterTrait
 
         if (!empty($where['dating_purpose'])) {
             $hasProfileFilter = true;
+            // dating_purpose 是 CSV 字符串（如 "1,2"），用户命中任一 id 即算命中
             $purposes = is_array($where['dating_purpose'])
                 ? $where['dating_purpose']
                 : array_filter(explode(',', (string)$where['dating_purpose']));
             $purposes = array_values(array_filter(array_map('intval', $purposes)));
             if ($purposes) {
-                $profileQuery->whereIn('dating_purpose', $purposes);
+                $conds = array_map(fn($pid) => "FIND_IN_SET('" . (int)$pid . "', dating_purpose)", $purposes);
+                $profileQuery->whereRaw('(' . implode(' OR ', $conds) . ')');
             }
+        }
+        if (!empty($where['dating_purpose_not_in'])) {
+            $hasProfileFilter = true;
+            $exclude = is_array($where['dating_purpose_not_in'])
+                ? $where['dating_purpose_not_in']
+                : array_filter(explode(',', (string)$where['dating_purpose_not_in']));
+            $exclude = array_values(array_filter(array_map('intval', $exclude)));
+            if ($exclude) {
+                foreach ($exclude as $pid) {
+                    $profileQuery->whereRaw("NOT FIND_IN_SET('" . (int)$pid . "', dating_purpose)");
+                }
+            }
+            // 必须已填交友目的
+            $profileQuery->where('dating_purpose', '<>', '');
         }
 
         if (isset($where['car_has']) && $where['car_has'] !== '') {
@@ -194,6 +218,7 @@ trait UserProfileFilterTrait
             'keyword', 'sex', 'age_min', 'age_max', 'education', 'height_min', 'height_max',
             'weight_min', 'weight_max', 'zodiac', 'school_name', 'job_title',
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
+            'registered_province', 'registered_city',
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',

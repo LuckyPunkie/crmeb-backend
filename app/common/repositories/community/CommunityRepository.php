@@ -975,6 +975,32 @@ class CommunityRepository extends BaseRepository
                     'is_self' => false,
                 ];
             }
+            // 主页付费解锁：设置了 homepage_unlock_price 且当前用户未解锁 → 返回锁定态基础信息
+            $homepageLockRow = \think\facade\Db::name('user_profile')
+                ->where('uid', $uid)
+                ->field('homepage_unlock_price')
+                ->find();
+            $homepagePrice = round((float)($homepageLockRow['homepage_unlock_price'] ?? 0), 2);
+            if ($homepagePrice > 0) {
+                $homepageUnlocked = false;
+                if ($self) {
+                    $homepageUnlocked = (bool)\think\facade\Db::name('user_homepage_unlock')
+                        ->where('buyer_uid', $self->uid)
+                        ->where('target_uid', $uid)
+                        ->where('pay_status', 1)
+                        ->count();
+                }
+                if (!$homepageUnlocked) {
+                    return [
+                        'uid' => $uid,
+                        'nickname' => $user->nickname,
+                        'avatar' => $user->avatar,
+                        'is_self' => false,
+                        'homepage_locked' => true,
+                        'homepage_unlock_price' => $homepagePrice,
+                    ];
+                }
+            }
             // $self 为 null 时（未登录）跳过关注状态查询
             if ($self) {
                 $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
@@ -1021,6 +1047,25 @@ class CommunityRepository extends BaseRepository
         $data['profile'] = $profile;
         $data['profile_brief'] = $profile ? $profileRepo->formatProfileBrief($profile) : '';
 
+        $fieldRepo = app()->make(\app\common\repositories\user\UserProfileFieldRepository::class);
+        $profileFields = $fieldRepo->attachValues($fieldRepo->displayFields(), $profile ?: [], [
+            'account_phone' => trim((string)($user->phone ?? '')),
+        ]);
+        // 非本人：隐藏敏感字段；微信号沿用解锁逻辑
+        if (!$is_self) {
+            foreach ($profileFields as &$pf) {
+                $key = (string)($pf['field_key'] ?? '');
+                if ($key === 'id_card' || $key === 'user_phone' || $key === 'contact_phone') {
+                    $pf['value'] = ($pf['type'] ?? '') === 'checkbox' ? [] : '';
+                }
+                if ($key === 'wechat_id') {
+                    $pf['value'] = '';
+                }
+            }
+            unset($pf);
+        }
+        $data['profile_fields'] = $profileFields;
+
         $review = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
             ->buildReviewDisplay(is_array($user) ? $user : $user->toArray());
         $data['review_label'] = $review['review_label'];
@@ -1046,6 +1091,20 @@ class CommunityRepository extends BaseRepository
         $data['wechat_unlock_price'] = $unlockPrice;
         $data['wechat_unlocked'] = $is_self || $wechatUnlocked;
         $data['wechat_id'] = ($is_self || $wechatUnlocked || $unlockPrice <= 0) ? $wechatId : '';
+        // 主页解锁状态（能走到这里说明本人 or 免费 or 已解锁；仅用于前端展示）
+        $homepageUnlockPrice = round((float)($profile['homepage_unlock_price'] ?? 0), 2);
+        $data['homepage_unlock_price'] = $homepageUnlockPrice;
+        $data['homepage_unlocked'] = true;
+        $data['homepage_locked'] = false;
+        // 回填可展示的微信号到 profile_fields
+        if (!empty($data['profile_fields']) && is_array($data['profile_fields'])) {
+            foreach ($data['profile_fields'] as &$pf) {
+                if (($pf['field_key'] ?? '') === 'wechat_id') {
+                    $pf['value'] = $data['wechat_id'];
+                }
+            }
+            unset($pf);
+        }
         // 全网粉丝（用户自填）；未填则为 null，前端不展示
         $networkFans = $profile['network_fans'] ?? null;
         $data['network_fans'] = ($networkFans === null || $networkFans === '') ? null : (int)$networkFans;
@@ -1067,9 +1126,9 @@ class CommunityRepository extends BaseRepository
         }
 
         // 身高·体重
-        if ($profile['height'] && $profile['weight']) {
+        if (!empty($profile['height']) && !empty($profile['weight'])) {
             $items[] = ['icon' => 'icon-ic_user',          'text' => $profile['height'] . 'cm·' . $profile['weight'] . 'kg'];
-        } elseif ($profile['height']) {
+        } elseif (!empty($profile['height'])) {
             $items[] = ['icon' => 'icon-ic_user',          'text' => $profile['height'] . 'cm'];
         }
 

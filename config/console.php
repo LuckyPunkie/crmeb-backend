@@ -57,5 +57,7 @@ return [
         'animal_rescue:monthly_settlement' => 'app\command\AnimalRescueMonthlySettlement',
         //为存量用户批量生成 7 位 user_code
         'user:backfill_code' => 'app\command\BackfillUserCode',
+        // 大客户卡：虚拟充值 / 折扣返还 / 预存周更
+        'major_customer:cron' => 'app\command\MajorCustomerCron',
     ],
 ];

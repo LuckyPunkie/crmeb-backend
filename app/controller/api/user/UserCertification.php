@@ -4,6 +4,7 @@ namespace app\controller\api\user;
 
 use think\App;
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\user\UserCertificationRepository as repository;
 use think\facade\Db;
 
@@ -29,15 +30,22 @@ class UserCertification extends BaseController
         $seen = [];
         foreach ($list as &$item) {
             $item['images'] = $item['images'] ? json_decode($item['images'], true) : [];
-            // 单条展示：已通过统一称 AI审核通过（人工总状态另取）
-            if ((int)$item['status'] === 1) {
+            $type = (string)($item['type'] ?? '');
+            if (in_array($type, ['identity', 'realname', 'real_name'], true)) {
+                if ((int)$item['status'] === 1) {
+                    $item['status_label'] = '已认证';
+                } elseif ((int)$item['status'] === 2) {
+                    $item['status_label'] = '认证失败';
+                } else {
+                    $item['status_label'] = '未认证';
+                }
+            } elseif ((int)$item['status'] === 1) {
                 $item['status_label'] = 'AI审核通过';
             } elseif ((int)$item['status'] === 2) {
                 $item['status_label'] = '认证失败';
             } else {
                 $item['status_label'] = '未认证';
             }
-            $type = (string)($item['type'] ?? '');
             $item['is_latest'] = $type !== '' && !isset($seen[$type]);
             if ($item['is_latest']) {
                 $seen[$type] = true;
@@ -47,9 +55,13 @@ class UserCertification extends BaseController
 
         $user = Db::name('user')->where('uid', $uid)->find() ?: [];
         $review = $this->repository->buildReviewDisplay($user);
-        // 若用户级已人工复审，覆盖通过项文案
+        // 若用户级已人工复审，覆盖通过项文案（不含实名三要素）
         if ((int)($review['profile_review_status'] ?? 0) === repository::REVIEW_MANUAL_PASS) {
             foreach ($list as &$item) {
+                $t = (string)($item['type'] ?? '');
+                if (in_array($t, ['identity', 'realname', 'real_name'], true)) {
+                    continue;
+                }
                 if ((int)$item['status'] === 1) {
                     $item['status_label'] = '人工复审';
                 }
@@ -138,6 +150,29 @@ class UserCertification extends BaseController
     }
 
     /**
+     * 运营商三要素实名核验
+     * POST /api/user/certification/identity_verify
+     */
+    public function identityVerify()
+    {
+        $uid = $this->request->uid();
+        $realName = trim((string)$this->request->post('real_name', ''));
+        $idCard = trim((string)$this->request->post('id_card', ''));
+
+        try {
+            $data = $this->repository->verifyIdentity($uid, $realName, $idCard);
+        } catch (\InvalidArgumentException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+
+        if (!$data['passed']) {
+            return app('json')->fail($data['message'], $data);
+        }
+
+        return app('json')->success($data, $data['message'] ?: '实名认证成功');
+    }
+
+    /**
      * 提交/更新认证（自动视为 AI 通过）
      * POST /api/user/certification/save
      */
@@ -161,6 +196,18 @@ class UserCertification extends BaseController
         $images = array_values(array_filter($images, static function ($url) {
             return is_string($url) && $url !== '';
         }));
+
+        if (!empty($description)) {
+            $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
+            ContentSecurityService::checkText(
+                (string)$description,
+                ContentSecurityService::SCENE_PROFILE,
+                'certification',
+                0,
+                $uid,
+                $openid
+            );
+        }
 
         try {
             $this->repository->save($uid, $type, $description, $images);

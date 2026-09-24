@@ -58,6 +58,8 @@ Route::get('lbs/suggestion', 'api.Common/lbs_suggestion');
 Route::get('common/pay_key/:key', 'api.Common/pay_key');
 //用户反馈类型
 Route::get('common/feedback_type', 'api.user.FeedBackCategory/lst');
+//交友资料字段选项（运营后台可编辑；筛选面板/资料页读取）
+Route::get('user/profile/field_options', 'api.user.UserProfile/fieldOptions');
 //登录
 Route::post('auth/login', 'api.Auth/login');
 //获取小程序登录是否需绑定手机号处理

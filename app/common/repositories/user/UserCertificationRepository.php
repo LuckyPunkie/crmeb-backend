@@ -4,6 +4,7 @@ namespace app\common\repositories\user;
 
 use app\common\dao\user\UserCertificationDao as dao;
 use app\common\repositories\BaseRepository;
+use crmeb\services\identity\AliyunMobileThreeElementService;
 use think\facade\Db;
 
 class UserCertificationRepository extends BaseRepository
@@ -12,6 +13,9 @@ class UserCertificationRepository extends BaseRepository
 
     // 认证类型 → 标签名称（与后台用户标签名称一致）
     private const LABEL_MAP = [
+        'identity'  => '实名认证',
+        'realname'  => '实名认证',
+        'real_name' => '实名认证',
         'education' => '学历认证',
         'work'      => '工作认证',
         'income'    => '收入认证',
@@ -74,9 +78,12 @@ class UserCertificationRepository extends BaseRepository
      */
     public function save(int $uid, string $type, string $description, array $images): void
     {
-        $allowed = ['education', 'work', 'income', 'car', 'house'];
+        $allowed = ['identity', 'realname', 'real_name', 'education', 'work', 'income', 'car', 'house'];
         if (!in_array($type, $allowed)) {
             throw new \InvalidArgumentException('认证类型不合法');
+        }
+        if ($this->isIdentityCertType($type)) {
+            throw new \InvalidArgumentException('请使用运营商三要素完成实名认证');
         }
         $this->dao->upsert($uid, $type, [
             'description' => $description,
@@ -86,6 +93,162 @@ class UserCertificationRepository extends BaseRepository
         ]);
         $this->applyLabel($uid, $type);
         $this->markAiPassed($uid);
+    }
+
+    /**
+     * 运营商三要素实名核验（手机号取 eb_user.phone）
+     *
+     * @return array{passed:bool, message:string, phone_mask?:string}
+     */
+    public function verifyIdentity(int $uid, string $realName, string $idCard): array
+    {
+        $realName = trim($realName);
+        $idCard = strtoupper(trim(str_replace([' ', '　'], '', $idCard)));
+
+        if ($realName === '') {
+            throw new \InvalidArgumentException('请填写姓名');
+        }
+        if (!$this->isValidIdCard($idCard)) {
+            throw new \InvalidArgumentException('身份证号格式不正确');
+        }
+
+        $user = Db::name('user')->where('uid', $uid)->whereNull('cancel_time')->find();
+        if (!$user) {
+            throw new \InvalidArgumentException('用户不存在');
+        }
+
+        $phone = $this->normalizePhone((string)($user['phone'] ?? ''));
+        if ($phone === '') {
+            throw new \InvalidArgumentException('请先绑定手机号');
+        }
+
+        $latest = $this->dao->getByUidType($uid, 'identity');
+        if ($latest && (int)$latest->status === 1) {
+            return [
+                'passed'     => true,
+                'message'    => '已完成实名认证',
+                'phone_mask' => $this->maskPhone($phone),
+            ];
+        }
+
+        $service = app()->make(AliyunMobileThreeElementService::class);
+        $result = $service->verify($realName, $idCard, $phone);
+        $type = 'identity';
+        $desc = '运营商三要素核验';
+
+        if (!$result['ok']) {
+            $this->dao->upsert($uid, $type, [
+                'description' => $desc,
+                'images'      => '[]',
+                'status'      => 2,
+                'remark'      => mb_substr((string)$result['message'], 0, 200),
+            ]);
+            return [
+                'passed'     => false,
+                'message'    => (string)$result['message'],
+                'phone_mask' => $this->maskPhone($phone),
+            ];
+        }
+
+        $this->dao->upsert($uid, $type, [
+            'description' => $desc . '：' . $realName,
+            'images'      => '[]',
+            'status'      => 1,
+            'remark'      => '',
+        ]);
+        Db::name('user')->where('uid', $uid)->update([
+            'real_name' => $realName,
+            'card_id'   => $idCard,
+        ]);
+        $this->syncProfileIdentityFields($uid, $realName, $idCard);
+        $this->applyLabel($uid, $type);
+        // 运营商三要素实名无资料人工审核队列
+
+        return [
+            'passed'     => true,
+            'message'    => (string)$result['message'],
+            'phone_mask' => $this->maskPhone($phone),
+            'real_name'  => $realName,
+            'card_id'    => $idCard,
+        ];
+    }
+
+    /**
+     * 实名通过后：资料页 id_card 等动态字段为空时回填（姓名主数据在 eb_user.real_name）
+     */
+    private function syncProfileIdentityFields(int $uid, string $realName, string $idCard): void
+    {
+        $fieldRepo = app()->make(UserProfileFieldRepository::class);
+        $profileRepo = app()->make(UserProfileRepository::class);
+        $profile = $profileRepo->getByUid($uid);
+        $extra = $profile['extra_fields'] ?? [];
+        if (!is_array($extra)) {
+            $extra = [];
+        }
+
+        $patch = [];
+        foreach ($fieldRepo->enabledFields() as $meta) {
+            $key = (string)($meta['field_key'] ?? '');
+            if ($key === 'id_card' && $idCard !== '' && trim((string)($extra['id_card'] ?? '')) === '') {
+                $patch['id_card'] = $idCard;
+            }
+            if (in_array($key, ['real_name', 'name', 'user_name'], true)
+                && $realName !== ''
+                && trim((string)($extra[$key] ?? '')) === '') {
+                $patch[$key] = $realName;
+            }
+        }
+        if ($patch) {
+            $profileRepo->mergeExtraFields($uid, $patch);
+        }
+    }
+
+    private function isIdentityCertType(string $type): bool
+    {
+        return in_array($type, ['identity', 'realname', 'real_name'], true);
+    }
+
+    /** 是否已通过运营商三要素实名（任一种 type 最新一条为通过） */
+    public function isIdentityVerified(int $uid): bool
+    {
+        foreach (['identity', 'realname', 'real_name'] as $type) {
+            $row = $this->dao->getByUidType($uid, $type);
+            if ($row && (int)$row->status === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function normalizePhone(string $phone): string
+    {
+        $digits = preg_replace('/\D+/', '', $phone);
+        if (strlen($digits) === 11 && $digits[0] === '1') {
+            return $digits;
+        }
+        return '';
+    }
+
+    private function maskPhone(string $phone): string
+    {
+        if (strlen($phone) !== 11) {
+            return $phone;
+        }
+        return substr($phone, 0, 3) . '****' . substr($phone, 7);
+    }
+
+    private function isValidIdCard(string $idCard): bool
+    {
+        if (!preg_match('/^\d{17}[\dX]$/', $idCard)) {
+            return false;
+        }
+        $weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+        $codes = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
+        $sum = 0;
+        for ($i = 0; $i < 17; $i++) {
+            $sum += (int)$idCard[$i] * $weights[$i];
+        }
+        return $codes[$sum % 11] === $idCard[17];
     }
 
     /**

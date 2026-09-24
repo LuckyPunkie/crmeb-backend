@@ -49,7 +49,7 @@ class Merchant extends BaseController
         [$page, $limit] = $this->getPage();
 
         // 从请求中获取查询参数
-        $where = $this->request->params(['keyword', 'order', 'is_best', 'location', 'category_id', 'type_id','is_trader']);
+        $where = $this->request->params(['keyword', 'order', 'is_best', 'location', 'category_id', 'type_id', 'is_trader', 'store_type']);
 
         // 调用getList方法获取数据列表，并返回成功响应的JSON对象
         return app('json')->success($this->repository->getList($where, $page, $limit, $this->userInfo));
@@ -151,6 +151,18 @@ class Merchant extends BaseController
         $where = $this->request->params(['keyword', 'order', 'is_best', 'location', 'category_id', 'type_id']);
         $where['delivery_way'] = 1;
         return app('json')->success($this->repository->getList($where, $page, $limit, $this->userInfo));
+    }
+
+    /**
+     * 线上店铺商品瀑布流（服务页「逛网店」Tab）
+     * GET /api/store/merchant/online_product/lst
+     */
+    public function onlineProductLst()
+    {
+        [$page, $limit] = $this->getPage();
+        $data = $this->repository->getOnlineStoreProductFeed($page, $limit);
+
+        return app('json')->success($data);
     }
 
     public function localDetail(int $id)

@@ -20,7 +20,7 @@ use app\common\repositories\user\UserRelationRepository;
 use app\common\repositories\user\UserRepository;
 use app\validate\api\CommunityValidate;
 use crmeb\basic\BaseController;
-use crmeb\services\wechat\MiniProgram;
+use crmeb\services\security\ContentSecurityService;
 use think\App;
 use app\common\repositories\community\CommunityRepository as repository;
 use think\exception\ValidateException;
@@ -133,12 +133,36 @@ class Community extends BaseController
             'keyword', 'sex', 'age_min', 'age_max', 'education', 'height_min', 'height_max',
             'weight_min', 'weight_max', 'zodiac', 'school_name', 'job_title',
             'hometown_province', 'hometown_city', 'current_province', 'current_city',
+            'registered_province', 'registered_city',
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
-            'hobby',
+            'hobby', 'social_tab', 'latitude', 'longitude',
         ]);
         [$page, $limit] = $this->getPage();
+
+        // 邂逅 Tab：登录用户上报了合法坐标 → 写入 eb_user_profile，用于后续距离查询
+        $lat = isset($where['latitude']) ? (float)$where['latitude'] : 0;
+        $lng = isset($where['longitude']) ? (float)$where['longitude'] : 0;
+        $isEncounter = strtolower(trim((string)($where['social_tab'] ?? ''))) === 'encounter';
+        if ($isEncounter && $this->user && $lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180 && ($lat != 0 || $lng != 0)) {
+            try {
+                $exists = \think\facade\Db::name('user_profile')->where('uid', $this->user->uid)->count();
+                $payload = [
+                    'latitude' => $lat,
+                    'longitude' => $lng,
+                    'last_located_at' => date('Y-m-d H:i:s'),
+                ];
+                if ($exists) {
+                    \think\facade\Db::name('user_profile')->where('uid', $this->user->uid)->update($payload);
+                } else {
+                    $payload['uid'] = $this->user->uid;
+                    \think\facade\Db::name('user_profile')->insert($payload);
+                }
+            } catch (\Throwable $e) {
+                // 写位置失败不阻塞列表查询
+            }
+        }
 
         $userRepository = app()->make(UserRepository::class);
 
@@ -421,11 +445,14 @@ class Community extends BaseController
 
         $data['content'] = filter_emoji($data['content']);
         if (!empty($data['content'])) {
-            MiniProgram::msgSecCheck(
+            $user = $this->request->userInfo();
+            ContentSecurityService::checkText(
                 $data['content'],
-                3,
-                $this->request->userInfo()->wechat->routine_openid ?? '',
-                0
+                ContentSecurityService::SCENE_FORUM,
+                'community_post',
+                0,
+                $user->uid,
+                $user->wechat->routine_openid ?? ''
             );
         }
         if ($data['is_type'] == 1 && empty($data['image'])) {

@@ -235,6 +235,10 @@ class Menu extends BaseController
             if ($path === '/product/blindbox/exclusive') {
                 return !$isBlindboxShop;
             }
+            // 附近好店 mer 端已下线（店铺展示开关迁至「设置→店铺信息」，收款码迁至「财务→收款方式」）
+            if ($path === '/nearby' || strpos($path, '/nearby/') === 0) {
+                return false;
+            }
             return true;
         });
         foreach ($menus as $k => $menu) {

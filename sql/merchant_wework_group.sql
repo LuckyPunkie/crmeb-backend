@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS `eb_merchant_wework_group` (
   `group_num` int(10) unsigned NOT NULL DEFAULT 0 COMMENT '群人数',
   `group_last_msg` varchar(100) NOT NULL DEFAULT '' COMMENT '最新消息预览',
   `qrcode_url` varchar(255) NOT NULL DEFAULT '' COMMENT '群活码图片',
+  `group_avatar` varchar(500) NOT NULL DEFAULT '' COMMENT '群头像',
   `group_link` varchar(255) NOT NULL DEFAULT '' COMMENT '群活码跳转链接',
   `status` tinyint(1) NOT NULL DEFAULT 1 COMMENT '1启用 0禁用',
   `create_time` datetime DEFAULT NULL COMMENT '创建时间',

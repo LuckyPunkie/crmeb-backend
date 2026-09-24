@@ -53,7 +53,7 @@ class Financial extends BaseController
     public function getMarginLst()
     {
         [$page, $limit] = $this->getPage();
-        $where = $this->request->params(['date', 'status', 'keyword', 'is_trader', 'mer_id', 'type_id', 'category_id']);
+        $where = $this->request->params(['date', 'status', 'keyword', 'is_trader', 'mer_id', 'type_id', 'category_id', 'label_only']);
         $where['type'] = 1;
         $data = $this->repository->getAdminList($where, $page, $limit);
         return app('json')->success($data);

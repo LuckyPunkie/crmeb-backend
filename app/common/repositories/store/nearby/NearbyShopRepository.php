@@ -117,10 +117,11 @@ class NearbyShopRepository extends BaseRepository
                 if (!empty($where['latitude']) && !empty($where['longitude'])) {
                     $lat = (float)$where['latitude'];
                     $lng = (float)$where['longitude'];
-                    $query->fieldRaw("*, 
-                        ROUND(6371 * acos(cos(radians(?)) * cos(radians(nearby_latitude)) 
-                        * cos(radians(nearby_longitude) - radians(?)) 
-                        + sin(radians(?)) * sin(radians(nearby_latitude))), 2) as distance",
+                    // 距离统一以 eb_merchant.lat / `long` 为准（原 nearby_latitude / nearby_longitude 已下线，改由店铺信息维护）
+                    $query->fieldRaw("*,
+                        ROUND(6371 * acos(cos(radians(?)) * cos(radians(m.lat))
+                        * cos(radians(m.`long`) - radians(?))
+                        + sin(radians(?)) * sin(radians(m.lat))), 2) as distance",
                         [$lat, $lng, $lat])
                         ->order('distance', 'ASC');
                 } else {
@@ -201,11 +202,12 @@ class NearbyShopRepository extends BaseRepository
         $data = $this->formatDetailItem($data, $where);
 
         // 距离计算（如有经纬度）
+        // 经纬度统一以 eb_merchant.lat / `long`（店铺信息）为准
         if (!empty($where['latitude']) && !empty($where['longitude'])
-            && !empty($data['nearby_latitude']) && !empty($data['nearby_longitude'])) {
+            && !empty($data['lat']) && !empty($data['long'])) {
             $data['distance'] = $this->haversine(
                 (float)$where['latitude'], (float)$where['longitude'],
-                (float)$data['nearby_latitude'], (float)$data['nearby_longitude']
+                (float)$data['lat'], (float)$data['long']
             );
         } else {
             $data['distance'] = 0;
@@ -223,6 +225,9 @@ class NearbyShopRepository extends BaseRepository
         $storeTags = $this->resolveTagsByMerId((int)$data['mer_id']);
         $data['tags'] = !empty($storeTags) ? $storeTags : $this->resolveTags($data['nearby_tags'] ?? '');
         $data['tags'] = $this->appendWelfareTag($data['tags'] ?? [], $data);
+
+        // 联盟标签（用于详情页胶囊 + 公告气泡），含色值 / 公告说明 / 商家自定义公告
+        $data['labels'] = $this->resolveLabelsByMerId((int)$data['mer_id']);
 
         // 分类名称 / 是否餐饮店（父级或自身名为「餐饮美食」）
         $data['nearby_category_name'] = '';
@@ -249,29 +254,69 @@ class NearbyShopRepository extends BaseRepository
             }
         }
 
+        // 营业时间：统一以 店铺信息 → mer_take_time 为准（附近好店独立字段 nearby_business_hours 已下线）
+        $takeTime = merchantConfig((int)$data['mer_id'], 'mer_take_time');
+        if (is_array($takeTime) && count($takeTime) >= 2 && !empty($takeTime[0]) && !empty($takeTime[1])) {
+            $data['nearby_business_hours'] = $takeTime[0] . '-' . $takeTime[1];
+        } else {
+            $data['nearby_business_hours'] = '';
+        }
+
         // 是否营业中
         $data['is_open'] = $this->checkIsOpen($data['nearby_business_hours'] ?? '');
 
         // 微信号
         $data['wechat'] = $data['nearby_wechat'] ?? '';
 
-        // 商家公告
-        $data['announcement'] = $data['nearby_announcement'] ?? '';
+        // 商家公告：字段已下线（改由「商家标签 → 我的公告」承载）
+        $data['announcement'] = '';
 
         // 评分星数（转换为1-5的星级格式，保留真实0分）
         $data['star'] = round($data['product_score'] ?? 5, 1);
 
-        // 人均消费
-        $data['avg_price'] = $data['nearby_avg_price'] ?? 0;
+        // 人均消费：mer_avg_price 列尚未添加，此处暂返回 0（待"店铺信息"表新增字段后再对接）
+        $data['avg_price'] = isset($data['mer_avg_price']) ? (float)$data['mer_avg_price'] : 0;
 
-        // 店铺头图（多图轮播）
-        $data['hero_images'] = $this->resolveHeroImages($data);
+        // 店铺头图（多图轮播）：优先取 mer_banners(JSON 数组)；退化取 [mer_banner] 单图；再退化走 resolveHeroImages
+        $banners = [];
+        if (!empty($data['mer_banners'])) {
+            $decoded = is_array($data['mer_banners']) ? $data['mer_banners'] : json_decode($data['mer_banners'], true);
+            if (is_array($decoded)) {
+                $banners = array_values(array_filter($decoded, fn($u) => is_string($u) && $u !== ''));
+            }
+        }
+        if (!$banners && !empty($data['mer_banner'])) {
+            $banners = [$data['mer_banner']];
+        }
+        $data['hero_images'] = $banners ?: $this->resolveHeroImages($data);
 
-        // 推荐菜（通过RecommendRepository获取）
+        // 推荐菜/推荐商品：改为从当前店铺"商品推荐"（is_hot / is_good / is_best）勾选的商品中筛选
+        // 商户后台「附近好店 → 推荐菜管理」入口已下线；旧 nearby_shop_recommend 表暂保留
         try {
-            $recommendRepo = app()->make(\app\common\repositories\store\nearby\NearbyShopRecommendRepository::class);
-            $data['recommends'] = $recommendRepo->getTopList($data['mer_id'], 6)->toArray();
-        } catch (\think\db\exception\DbException $e) {
+            $rows = \app\common\model\store\product\Product::getDB()
+                ->where('mer_id', $data['mer_id'])
+                ->where('is_show', 1)
+                ->where('is_del', 0)
+                ->where('status', 1)
+                ->where(function ($q) {
+                    $q->where('is_hot', 1)
+                        ->whereOr('is_good', 1)
+                        ->whereOr('is_best', 1);
+                })
+                ->field('product_id, store_name, image, rank')
+                ->order('rank DESC, product_id DESC')
+                ->limit(10)
+                ->select()
+                ->toArray();
+            $data['recommends'] = array_map(function ($p) {
+                return [
+                    'id'         => $p['product_id'],
+                    'product_id' => $p['product_id'],
+                    'name'       => $p['store_name'],
+                    'image'      => $p['image'],
+                ];
+            }, $rows);
+        } catch (\Throwable $e) {
             \think\facade\Log::warning('NearbyShop getDetail recommends failed: ' . $e->getMessage());
             $data['recommends'] = [];
         }
@@ -394,6 +439,14 @@ class NearbyShopRepository extends BaseRepository
             $data['nearby_category_name'] = $categories[$data['category_id']]['category_name'] ?? '';
         }
 
+        // 营业时间：nearby_business_hours 为空时回退到 mer_take_time（店铺设置里配的）
+        if (empty($data['nearby_business_hours'])) {
+            $takeTime = merchantConfig((int)$data['mer_id'], 'mer_take_time');
+            if (is_array($takeTime) && count($takeTime) >= 2 && !empty($takeTime[0]) && !empty($takeTime[1])) {
+                $data['nearby_business_hours'] = $takeTime[0] . '-' . $takeTime[1];
+            }
+        }
+
         // 是否营业中
         $data['is_open'] = $this->checkIsOpen($data['nearby_business_hours'] ?? '');
 
@@ -401,11 +454,12 @@ class NearbyShopRepository extends BaseRepository
         $data['wechat'] = $data['nearby_wechat'] ?? '';
 
         // 距离计算（保留2位小数，与SQL Haversine精度一致）
+        // 经纬度统一以 eb_merchant.lat / `long`（店铺信息）为准
         if (!empty($where['latitude']) && !empty($where['longitude'])
-            && !empty($data['nearby_latitude']) && !empty($data['nearby_longitude'])) {
+            && !empty($data['lat']) && !empty($data['long'])) {
             $data['distance'] = $this->haversine(
                 (float)$where['latitude'], (float)$where['longitude'],
-                (float)$data['nearby_latitude'], (float)$data['nearby_longitude']
+                (float)$data['lat'], (float)$data['long']
             );
         } else {
             $data['distance'] = 0;
@@ -417,8 +471,8 @@ class NearbyShopRepository extends BaseRepository
         // 评价数（从批量预取的 reply 表统计中取）
         $data['reply_count'] = $replyCountMap[$merId] ?? 0;
 
-        // 人均消费
-        $data['avg_price'] = $data['nearby_avg_price'] ?? 0;
+        // 人均消费：待"店铺信息"表新增 mer_avg_price 字段后再对接（现暂用 0）
+        $data['avg_price'] = isset($data['mer_avg_price']) ? (float)$data['mer_avg_price'] : 0;
 
         return $data;
     }
@@ -478,8 +532,30 @@ class NearbyShopRepository extends BaseRepository
             ->alias('s')
             ->join('merchant_label l', 's.label_id = l.id')
             ->where('s.mer_id', $merId)
-            ->where('s.is_margin', '<>', 1)
+            ->whereIn('s.is_margin', [0, 10])
             ->column('l.label_name');
+    }
+
+    /**
+     * 联盟标签（含色值 / 平台公告说明 / 商家自定义公告）
+     * 仅返回已加入并有效的标签（is_margin 0 或 10；退款审核/已退款不再展示）
+     */
+    protected function resolveLabelsByMerId(int $merId): array
+    {
+        if (!$merId) return [];
+        $rows = \app\common\model\system\merchant\MerchantLabelStore::getDB()
+            ->alias('s')
+            ->join('merchant_label l', 's.label_id = l.id')
+            ->where('s.mer_id', $merId)
+            ->whereIn('s.is_margin', [0, 10])
+            ->field('l.id as label_id, l.label_name, l.logo as color, l.description, s.announcement_content')
+            ->select()->toArray();
+        foreach ($rows as &$row) {
+            $row['color'] = $row['color'] ?: '';
+            $row['description'] = $row['description'] ?: '';
+            $row['announcement_content'] = $row['announcement_content'] ?: '';
+        }
+        return $rows;
     }
 
     /**

@@ -2571,8 +2571,23 @@ class UserRepository extends BaseRepository
      */
     public function getCommunityUserList(array $where = [], int $page = 1, int $limit = 10)
     {
-        $query = $this->dao->search($where)
-            ->field('User.uid,User.nickname,User.real_name,User.avatar,User.sex,User.birthday,User.phone,User.label_id,User.count_start,User.count_fans,User.count_content');
+        // 邂逅 Tab + 合法坐标 → 按 haversine 距离排序，并把 pfsort 上报过位置的人筛出来
+        $socialTab = strtolower(trim((string)($where['social_tab'] ?? '')));
+        $lat = isset($where['latitude']) ? (float)$where['latitude'] : 0.0;
+        $lng = isset($where['longitude']) ? (float)$where['longitude'] : 0.0;
+        $isEncounter = $socialTab === 'encounter' && ($lat != 0 || $lng != 0)
+            && $lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180;
+
+        $distanceExpr = null;
+        $fields = 'User.uid,User.nickname,User.real_name,User.avatar,User.sex,User.birthday,User.phone,User.label_id,User.count_start,User.count_fans,User.count_content';
+        if ($isEncounter) {
+            $latF = sprintf('%.7f', $lat);
+            $lngF = sprintf('%.7f', $lng);
+            // 6371 = 地球半径(km)；返回 km，前端按 <1 转 m
+            $distanceExpr = "(6371 * acos(cos(radians({$latF})) * cos(radians(pfsort.latitude)) * cos(radians(pfsort.longitude) - radians({$lngF})) + sin(radians({$latF})) * sin(radians(pfsort.latitude))))";
+            $fields .= ", {$distanceExpr} AS distance";
+        }
+        $query = $this->dao->search($where)->field($fields);
 
         if (!empty($where['age_min']) || !empty($where['age_max'])) {
             $ageMin = max(0, intval($where['age_min'] ?? 0));
@@ -2643,7 +2658,7 @@ class UserRepository extends BaseRepository
             $query->whereIn('User.uid', $heightUids ?: [0]);
         }
 
-        // 脱单/人脉/邂逅硬规则：交友目标仅 找对象(1)/交朋友(2)；至少一项资料；已更换头像
+        // 脱单/人脉/邂逅硬规则：按 social_tab 拆分交友目的；至少一项资料；已更换头像
         $where = $this->normalizeCommunitySocialFeedWhere($where);
         $this->applyCommunitySocialFeedVisibility($query, $where);
 
@@ -2653,10 +2668,18 @@ class UserRepository extends BaseRepository
         }
 
         // 资料完善度 DESC 排序：user_profile 里 birth_month/height/education/zodiac 任一非空排前面
-        $query->leftJoin('user_profile pfsort', 'pfsort.uid = User.uid')
-            ->removeOption('order')
-            ->orderRaw("CASE WHEN (pfsort.birth_month IS NOT NULL AND pfsort.birth_month <> '') OR pfsort.height > 0 OR pfsort.education > 0 OR pfsort.zodiac > 0 THEN 1 ELSE 0 END DESC")
-            ->order('User.uid', 'desc');
+        $query->leftJoin('user_profile pfsort', 'pfsort.uid = User.uid');
+        if ($isEncounter) {
+            // 邂逅：只保留上报过位置的用户，按距离升序（COUNT 查询不会保留 field 别名，故直接重复表达式）
+            $query->whereNotNull('pfsort.latitude')
+                ->whereNotNull('pfsort.longitude')
+                ->removeOption('order')
+                ->orderRaw($distanceExpr . ' ASC');
+        } else {
+            $query->removeOption('order')
+                ->orderRaw("CASE WHEN (pfsort.birth_month IS NOT NULL AND pfsort.birth_month <> '') OR pfsort.height > 0 OR pfsort.education > 0 OR pfsort.zodiac > 0 THEN 1 ELSE 0 END DESC")
+                ->order('User.uid', 'desc');
+        }
 
         $count = $query->count('User.uid');
         $list = $query->page($page, $limit)->select()->toArray();
@@ -2752,6 +2775,10 @@ class UserRepository extends BaseRepository
                     $tags[] = $profile['current_city'];
                 }
                 $item['tags'] = array_values(array_unique(array_filter($tags)));
+                // 邂逅 Tab：把 SELECT 里 haversine 表达式的 distance(km) 规整成 3 位小数返回
+                if ($isEncounter && isset($item['distance'])) {
+                    $item['distance'] = round((float)$item['distance'], 3);
+                }
             }
             unset($item);
         }
@@ -2760,20 +2787,68 @@ class UserRepository extends BaseRepository
     }
 
     /**
-     * 社交流交友目标：仅允许 找对象(1) / 交朋友(2)；筛选项再与之取交集
+     * 社交流交友目标（按 Tab）：
+     * - dating(脱单)：仅找对象(1)
+     * - network(人脉)：已填目的且不是找对象(1)、不是不交朋友(3)（含交朋友及后续新增）
+     * - encounter(邂逅)：已填目的且不是不交朋友(3)
+     * 用户筛选 dating_purpose 再与上述硬规则取交集
      */
     protected function normalizeCommunitySocialFeedWhere(array $where): array
     {
-        $allowed = [1, 2];
+        $tab = strtolower(trim((string)($where['social_tab'] ?? '')));
+        $userPurposes = [];
         if (!empty($where['dating_purpose'])) {
-            $purposes = is_array($where['dating_purpose'])
+            $userPurposes = is_array($where['dating_purpose'])
                 ? $where['dating_purpose']
                 : array_filter(explode(',', (string)$where['dating_purpose']));
-            $purposes = array_values(array_intersect(array_map('intval', $purposes), $allowed));
-            $where['dating_purpose'] = $purposes ?: $allowed;
-        } else {
-            $where['dating_purpose'] = $allowed;
+            $userPurposes = array_values(array_filter(array_map('intval', $userPurposes)));
         }
+
+        unset($where['dating_purpose_not_in']);
+
+        if ($tab === 'dating') {
+            $allowed = [1];
+            $purposes = $userPurposes
+                ? array_values(array_intersect($userPurposes, $allowed))
+                : $allowed;
+            $where['dating_purpose'] = $purposes ?: [0];
+            return $where;
+        }
+
+        if ($tab === 'network') {
+            // 排除找对象(1)、不交朋友(3)
+            if ($userPurposes) {
+                $purposes = array_values(array_filter($userPurposes, function ($v) {
+                    return $v > 0 && $v !== 1 && $v !== 3;
+                }));
+                $where['dating_purpose'] = $purposes ?: [0];
+            } else {
+                unset($where['dating_purpose']);
+                $where['dating_purpose_not_in'] = [1, 3];
+            }
+            return $where;
+        }
+
+        if ($tab === 'encounter') {
+            // 排除不交朋友(3)
+            if ($userPurposes) {
+                $purposes = array_values(array_filter($userPurposes, function ($v) {
+                    return $v > 0 && $v !== 3;
+                }));
+                $where['dating_purpose'] = $purposes ?: [0];
+            } else {
+                unset($where['dating_purpose']);
+                $where['dating_purpose_not_in'] = [3];
+            }
+            return $where;
+        }
+
+        // 未传 social_tab：兼容旧逻辑，仅 找对象/交朋友
+        $allowed = [1, 2];
+        $purposes = $userPurposes
+            ? array_values(array_intersect($userPurposes, $allowed))
+            : $allowed;
+        $where['dating_purpose'] = $purposes ?: $allowed;
         return $where;
     }
 

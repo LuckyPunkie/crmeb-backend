@@ -52,6 +52,7 @@ class MerchantWeworkGroupRepository extends BaseRepository
             'group_num' => 0,
             'group_last_msg' => (string)($data['group_last_msg'] ?? ''),
             'qrcode_url' => (string)($data['qrcode_url'] ?? ''),
+            'group_avatar' => (string)($data['group_avatar'] ?? ''),
             'group_link' => '',
             'status' => isset($data['status']) ? ((int)$data['status'] ? 1 : 0) : 0,
             'update_time' => date('Y-m-d H:i:s'),
@@ -89,6 +90,7 @@ class MerchantWeworkGroupRepository extends BaseRepository
             'group_name' => (string)($row['group_name'] ?? ''),
             'group_last_msg' => (string)($row['group_last_msg'] ?? ''),
             'qrcode_url' => $qrcode,
+            'group_avatar' => (string)($row['group_avatar'] ?? ''),
         ];
     }
 }

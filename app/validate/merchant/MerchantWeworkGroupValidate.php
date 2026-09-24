@@ -21,6 +21,7 @@ class MerchantWeworkGroupValidate extends Validate
         'group_name|群名称' => 'max:50',
         'group_last_msg|最新消息' => 'max:100',
         'qrcode_url|入群二维码' => 'max:500',
+        'group_avatar|群头像' => 'max:500',
         'branch_id|分店ID' => 'integer|>=:0',
         'status|状态' => 'in:0,1',
     ];

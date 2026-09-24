@@ -208,10 +208,14 @@ Route::group(function () {
         // 付费解锁微信号
         Route::post('wechat_unlock/:uid', 'UserProfile/wechatUnlock');
         Route::get('wechat_unlock_check/:uid', 'UserProfile/wechatUnlockCheck');
+        // 付费解锁主页
+        Route::post('homepage_unlock/:uid', 'UserProfile/homepageUnlock');
+        Route::get('homepage_unlock_check/:uid', 'UserProfile/homepageUnlockCheck');
 
         // 资质认证
         Route::get('certification', 'UserCertification/list');
         Route::post('certification/save', 'UserCertification/save');
+        Route::post('certification/identity_verify', 'UserCertification/identityVerify');
         Route::post('certification/chsi_verify', 'UserCertification/chsiVerify');
         Route::get('review_status', 'UserCertification/reviewStatus');
         Route::post('review_urgent/:uid', 'UserCertification/applyUrgent');
@@ -469,6 +473,7 @@ Route::group(function () {
     //商户
     Route::group('store/merchant/', function () {
         Route::get('/lst', 'Merchant/lst');
+        Route::get('/online_product/lst', 'Merchant/onlineProductLst');
         Route::get('/product/lst/:id', 'Merchant/productList');
         Route::get('/category/lst/:id', 'Merchant/categoryList');
         Route::get('/detail/0', 'Merchant/systemDetail');

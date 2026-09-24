@@ -88,12 +88,15 @@ class Merchant extends BaseController
                 'service_phone',
                 'mer_avatar',
                 'mer_banner',
+                'mer_banners',
                 'mer_state',
                 'mini_banner',
                 'mer_keyword',
                 'mer_address',
                 'long',
                 'lat',
+                'mer_avg_price',
+                'nearby_wechat',
                 ['delivery_way', [2]],
             ]);
             // 对获取到的数据进行验证
@@ -109,6 +112,19 @@ class Merchant extends BaseController
             ], $this->request->merId());
             // 删除 $data 数组中的 mer_certificate 和 services_type 两个元素
             unset($data['mer_certificate']);
+            // 店铺背景图多图：JSON 编码存 mer_banners；首图同步给 mer_banner 兼容旧消费点
+            if (isset($data['mer_banners'])) {
+                $banners = $data['mer_banners'];
+                if (is_string($banners)) {
+                    $decoded = json_decode($banners, true);
+                    $banners = is_array($decoded) ? $decoded : ($banners !== '' ? [$banners] : []);
+                }
+                $banners = array_values(array_filter(array_map('strval', (array)$banners), fn($u) => $u !== ''));
+                $data['mer_banners'] = $banners ? json_encode($banners, JSON_UNESCAPED_UNICODE) : null;
+                if ($banners) {
+                    $data['mer_banner'] = $banners[0];
+                }
+            }
             $takeData = $this->request->params(['mer_take_day', 'mer_take_time']);
             $repository->set($this->request->merId(), $takeData);
 
@@ -121,7 +137,8 @@ class Merchant extends BaseController
             }
             $data['delivery_way'] = $delivery_way;
         } else {
-            $data = $this->request->params(['mer_state']);
+            $data = $this->request->params(['mer_state', 'nearby_is_show']);
+            $data['nearby_is_show'] = !empty($data['nearby_is_show']) ? 1 : 0;
 
             if ($merchant->is_margin == 1 && $data['mer_state'] == 1)
                 return app('json')->fail('开启店铺前请先支付保证金');
@@ -161,6 +178,13 @@ class Merchant extends BaseController
             $append[] = 'refundMarginOrder';
 
         $data = $merchant->append($append)->hidden(['mark', 'reg_admin_id', 'sort'])->toArray();
+        // 店铺背景图多图：DB 存 JSON 字符串，返回给前端时解码为数组；空则给单图兜底
+        if (!empty($data['mer_banners'])) {
+            $decoded = json_decode($data['mer_banners'], true);
+            $data['mer_banners'] = is_array($decoded) ? array_values(array_filter($decoded)) : [];
+        } else {
+            $data['mer_banners'] = !empty($data['mer_banner']) ? [$data['mer_banner']] : [];
+        }
         $delivery = $repository->get($this->request->merId()) + systemConfig(['tx_map_key']);
         $data = array_merge($data,$delivery);
         $data['sys_bases_status'] = systemConfig('sys_bases_status') == 0 ? 0 : 1;

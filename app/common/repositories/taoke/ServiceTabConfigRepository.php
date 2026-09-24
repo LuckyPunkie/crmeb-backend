@@ -3,8 +3,10 @@
 namespace app\common\repositories\taoke;
 
 use app\common\dao\taoke\ServiceTabConfigDao;
+use app\common\model\system\config\SystemConfigValue;
 use app\common\repositories\BaseRepository;
 use think\exception\ValidateException;
+use think\facade\Cache;
 
 class ServiceTabConfigRepository extends BaseRepository
 {
@@ -14,6 +16,9 @@ class ServiceTabConfigRepository extends BaseRepository
     const CHANNEL_LEGACY   = 'legacy';
     const CHANNEL_OFFICIAL = 'official';
 
+    /** 服务页「逛网店」内置 Tab（跳转店铺街，非商品平台） */
+    const TAB_KEY_SHOP_STREET = 'shop_street';
+
     public function __construct(ServiceTabConfigDao $dao)
     {
         $this->dao = $dao;
@@ -22,12 +27,18 @@ class ServiceTabConfigRepository extends BaseRepository
     public function listAll(string $channel = self::CHANNEL_LEGACY): array
     {
         $channel = $this->normalizeChannel($channel);
+        if ($channel === self::CHANNEL_OFFICIAL) {
+            $this->ensureShopStreetTab($channel);
+        }
         return array_map([$this, 'format'], $this->dao->all($channel));
     }
 
     public function listEnabled(string $channel = self::CHANNEL_LEGACY): array
     {
         $channel = $this->normalizeChannel($channel);
+        if ($channel === self::CHANNEL_OFFICIAL) {
+            $this->ensureShopStreetTab($channel);
+        }
         return array_map([$this, 'format'], $this->dao->enabled($channel));
     }
 
@@ -80,6 +91,9 @@ class ServiceTabConfigRepository extends BaseRepository
                 'sort'   => $sort,
                 'brands' => json_encode(array_values($cleanBrands), JSON_UNESCAPED_UNICODE),
             ]);
+            if ((string) ($existing['tab_key'] ?? '') === self::TAB_KEY_SHOP_STREET) {
+                $this->syncShopStreetConfigValue($status);
+            }
             $row = $this->dao->findById($id);
             return $this->format(is_array($row) ? $row : $row->toArray());
         }
@@ -137,6 +151,61 @@ class ServiceTabConfigRepository extends BaseRepository
     protected function normalizeChannel(string $channel): string
     {
         return $channel === self::CHANNEL_OFFICIAL ? self::CHANNEL_OFFICIAL : self::CHANNEL_LEGACY;
+    }
+
+    /** official 通道保证存在「逛网店」一行，与 eb_system_config shop_street_switch 对齐 */
+    public function ensureShopStreetTab(string $channel = self::CHANNEL_OFFICIAL): void
+    {
+        $channel = $this->normalizeChannel($channel);
+        if ($channel !== self::CHANNEL_OFFICIAL) {
+            return;
+        }
+        if ($this->dao->findByKey(self::TAB_KEY_SHOP_STREET, $channel)) {
+            return;
+        }
+        $status = (int) systemConfigNoCache('shop_street_switch') ? 1 : 0;
+        $this->dao->insert([
+            'channel'  => $channel,
+            'tab_key'  => self::TAB_KEY_SHOP_STREET,
+            'tab_type' => self::TYPE_BUILTIN,
+            'name'     => '逛网店',
+            'brands'   => json_encode([], JSON_UNESCAPED_UNICODE),
+            'status'   => $status,
+            'sort'     => 50,
+        ]);
+    }
+
+    /** 表格开关与 App /api/config 共用 shop_street_switch */
+    public function syncShopStreetConfigValue(int $status): void
+    {
+        $value = $status ? 1 : 0;
+        $row = SystemConfigValue::where('config_key', 'shop_street_switch')
+            ->where('mer_id', 0)
+            ->find();
+        if ($row) {
+            $row->value = (string) $value;
+            $row->save();
+        } else {
+            SystemConfigValue::create([
+                'config_key' => 'shop_street_switch',
+                'value'      => (string) $value,
+                'mer_id'     => 0,
+            ]);
+        }
+        Cache::delete('get_api_config');
+    }
+
+    public function setShopStreetEnabled(int $status): void
+    {
+        $this->ensureShopStreetTab(self::CHANNEL_OFFICIAL);
+        $rowRaw = $this->dao->findByKey(self::TAB_KEY_SHOP_STREET, self::CHANNEL_OFFICIAL);
+        if (!$rowRaw) {
+            return;
+        }
+        $row = is_array($rowRaw) ? $rowRaw : $rowRaw->toArray();
+        $status = $status ? 1 : 0;
+        $this->dao->updateById((int) $row['id'], ['status' => $status]);
+        $this->syncShopStreetConfigValue($status);
     }
 
     protected function cleanBrands(array $brands): array

@@ -17,6 +17,7 @@ namespace app\common\repositories\system\merchant;
 use think\facade\Log;
 use crmeb\services\pay\Pay;
 use crmeb\services\wechat\OfficialAccount;
+use app\common\dao\store\product\ProductDao;
 use app\common\dao\system\merchant\MerchantDao;
 use app\common\model\store\order\StoreOrder;
 use app\common\model\store\product\ProductReply;
@@ -616,6 +617,23 @@ class MerchantRepository extends BaseRepository
         $where['mer_state'] = 1;
         $where['is_del'] = 0;
 
+        // 店铺类型通道：online=线上店 / offline=实体店线下店（按 merchant_type.type_name）
+        if (!empty($where['store_type'])) {
+            $resolved = $this->resolveStoreTypeIds((string)$where['store_type']);
+            unset($where['store_type']);
+            if ($resolved === []) {
+                return ['count' => 0, 'list' => []];
+            }
+            if (!empty($where['type_id'])) {
+                $requested = array_map('intval', explode(',', (string)$where['type_id']));
+                $resolved = array_values(array_intersect($resolved, $requested));
+                if ($resolved === []) {
+                    return ['count' => 0, 'list' => []];
+                }
+            }
+            $where['type_id'] = implode(',', $resolved);
+        }
+
         // 处理位置查询条件
         if (isset($where['location'])) {
             $data = @explode(',', (string)$where['location']);
@@ -661,6 +679,27 @@ class MerchantRepository extends BaseRepository
 
         // 返回商家总数和列表
         return compact('count', 'list');
+    }
+
+    /**
+     * 按店铺类型名称解析 type_id
+     * online → 线上店；offline → 实体店/线下店
+     *
+     * @return int[]
+     */
+    protected function resolveStoreTypeIds(string $storeType): array
+    {
+        $query = \app\common\model\system\merchant\MerchantType::getDB();
+        if ($storeType === 'online') {
+            $query->where('type_name', 'like', '%线上%');
+        } else {
+            $query->where(function ($q) {
+                $q->where('type_name', 'like', '%实体%')
+                    ->whereOr('type_name', 'like', '%线下%');
+            });
+        }
+
+        return array_map('intval', $query->column('mer_type_id') ?: []);
     }
 
     public function getDistance(int $id, array $params) : array
@@ -785,6 +824,49 @@ class MerchantRepository extends BaseRepository
     {
         // 通过依赖注入获取ProductRepository实例，并调用其getApiSearch方法查询产品列表
         return app()->make(ProductRepository::class)->getApiSearch($merId, $where, $page, $limit, $userInfo);
+    }
+
+    /**
+     * 逛网店 / 线上店：全平台线上店铺在售商品（服务页瀑布流）
+     *
+     * @return array{count:int,list:array<int,array<string,mixed>>}
+     */
+    public function getOnlineStoreProductFeed(int $page, int $limit): array
+    {
+        $typeIds = $this->resolveStoreTypeIds('online');
+        if ($typeIds === []) {
+            return ['count' => 0, 'list' => []];
+        }
+        $merIds = $this->dao->search([
+            'status'    => 1,
+            'mer_state' => 1,
+            'is_del'    => 0,
+        ])->whereIn('type_id', $typeIds)->column('mer_id');
+        $merIds = array_values(array_filter(array_map('intval', $merIds ?: [])));
+        if ($merIds === []) {
+            return ['count' => 0, 'list' => []];
+        }
+
+        /** @var ProductDao $productDao */
+        $productDao = app()->make(ProductDao::class);
+        $where = $productDao->productShow();
+        $query = $productDao->search($merIds, $where);
+        $count = (clone $query)->count();
+        $field = 'Product.product_id,Product.mer_id,Product.image,Product.store_name,Product.price,Product.ot_price,Product.sales,Product.is_hot,Product.is_new';
+        $list = $query->page($page, $limit)
+            ->order('Product.sort DESC,Product.create_time DESC')
+            ->setOption('field', [])
+            ->field($field)
+            ->select();
+
+        $rows = [];
+        foreach ($list as $item) {
+            $row = is_array($item) ? $item : $item->toArray();
+            $row['item_kind'] = 'mall';
+            $rows[] = $row;
+        }
+
+        return ['count' => (int) $count, 'list' => $rows];
     }
 
     /**

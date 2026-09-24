@@ -15,7 +15,7 @@ namespace app\controller\api\community;
 use app\common\repositories\community\CommunityRepository;
 use app\common\repositories\system\RelevanceRepository;
 use crmeb\basic\BaseController;
-use crmeb\services\wechat\MiniProgram;
+use crmeb\services\security\ContentSecurityService;
 use think\App;
 use app\common\repositories\community\CommunityReplyRepository as repository;
 use think\exception\ValidateException;
@@ -83,13 +83,16 @@ class CommunityReply extends BaseController
 
         $data = $this->request->params(['content']);
         if (empty($data['content'])) return app('json')->fail('请输入回复内容');
-        MiniProgram::msgSecCheck(
+        $user = $this->request->userInfo();
+        ContentSecurityService::checkText(
             $data['content'],
-            2,
-            $this->request->userInfo()->wechat->routine_openid ?? '',
-            0
+            ContentSecurityService::SCENE_COMMENT,
+            'community_reply',
+            (int)$id,
+            $user->uid,
+            $user->wechat->routine_openid ?? ''
         );
-        $data['uid'] = $this->request->userInfo()->uid;
+        $data['uid'] = $user->uid;
         $data['community_id'] = $id;
 
         $data['status'] = 1;

@@ -6,6 +6,7 @@ use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
 use crmeb\services\taoke\KuaishouOfficialService;
+use crmeb\services\taoke\HaodankuDouyinService;
 use crmeb\services\taoke\PddOfficialService;
 use crmeb\services\taoke\TaobaoOfficialService;
 use crmeb\services\taoke\VipOfficialService;
@@ -26,6 +27,7 @@ class ServiceGoodsRepository
     protected PddOfficialService $pddOfficial;
     protected KuaishouOfficialService $kuaishouOfficial;
     protected VipOfficialService $vipOfficial;
+    protected HaodankuDouyinService $haodankuDouyin;
 
     public function __construct(
         DingDanXiaService $dingdanxia,
@@ -34,7 +36,8 @@ class ServiceGoodsRepository
         TaobaoOfficialService $taobaoOfficial,
         PddOfficialService $pddOfficial,
         KuaishouOfficialService $kuaishouOfficial,
-        VipOfficialService $vipOfficial
+        VipOfficialService $vipOfficial,
+        HaodankuDouyinService $haodankuDouyin
     ) {
         $this->dingdanxia = $dingdanxia;
         $this->jutuike = $jutuike;
@@ -43,6 +46,7 @@ class ServiceGoodsRepository
         $this->pddOfficial = $pddOfficial;
         $this->kuaishouOfficial = $kuaishouOfficial;
         $this->vipOfficial = $vipOfficial;
+        $this->haodankuDouyin = $haodankuDouyin;
     }
 
     public function withDriverChannel(string $channel): self
@@ -223,6 +227,14 @@ class ServiceGoodsRepository
             return [];
         }
         return $this->taobaoOfficial->fetchTopCategoryTags();
+    }
+
+    public function getWphCategoryTags(): array
+    {
+        if (!$this->isWphOfficial()) {
+            return [];
+        }
+        return $this->vipOfficial->fetchTopCategoryTags();
     }
 
     public function getKuaishouChannelTags(): array
@@ -862,6 +874,55 @@ class ServiceGoodsRepository
     }
 
     /**
+     * 逛网店 Tab：各平台商品交错混排（含唯品会/抖音，与单平台 Tab 列表同源）
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function aggregateShopStreet(int $page = 1, int $limit = 20): array
+    {
+        $platforms = ['taobao', 'jd', 'pdd', 'kuaishou', 'wph', 'douyin'];
+        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        $buckets = [];
+        foreach ($platforms as $item) {
+            if ($item === 'douyin' || $item === 'wph') {
+                $buckets[] = $this->safePlatformSearch($item, '热销', $page, $per);
+            } else {
+                $buckets[] = $this->safePlatformFeed($item, $page, $per);
+            }
+        }
+
+        return array_slice($this->uniqueList($this->interleavePlatformBuckets($buckets)), 0, $limit);
+    }
+
+    /**
+     * 平台直连 service_tabs 探活：与列表首屏同逻辑，limit=1
+     */
+    public function probeOfficialTabHasGoods(array $tab): bool
+    {
+        if ($this->driverChannel !== 'official') {
+            return true;
+        }
+        $tabKey = strtolower(trim((string) ($tab['tab_key'] ?? '')));
+        if ($tabKey === ServiceTabConfigRepository::TAB_KEY_SHOP_STREET) {
+            $feed = app()->make(\app\common\repositories\system\merchant\MerchantRepository::class)
+                ->getOnlineStoreProductFeed(1, 1);
+
+            return !empty($feed['list']);
+        }
+        if ((int) ($tab['tab_type'] ?? 0) === ServiceTabConfigRepository::TYPE_CUSTOM) {
+            $brands = $tab['brands'] ?? [];
+
+            return !empty($this->searchByBrands(is_array($brands) ? $brands : [], 1, 1));
+        }
+        if ($tabKey === '') {
+            return false;
+        }
+        $keyword = in_array($tabKey, ['douyin', 'wph'], true) ? '热销' : '';
+
+        return !empty($this->searchPlatform($tabKey, $keyword, 1, 1, 0));
+    }
+
+    /**
      * 品牌 Tab：按品牌名跨平台检索
      */
     public function searchByBrand(string $keyword, int $page = 1, int $limit = 20): array
@@ -966,6 +1027,11 @@ class ServiceGoodsRepository
                     return [];
                 case 'wph':
                     if ($this->isWphOfficial()) {
+                        $cateId = (int) $cate;
+                        if ($cateId > 0) {
+                            $parsed = $this->vipOfficial->fetchSearch('热销', $page, $limit, '', true, $cateId);
+                            return $this->normalizeWph($parsed['list'] ?? [], true);
+                        }
                         $parsed = $this->vipOfficial->fetchFeed($page, $limit);
                         return $this->normalizeWph($parsed['list'] ?? [], true);
                     }
@@ -1045,8 +1111,21 @@ class ServiceGoodsRepository
                     return $this->fetchDouyinList($keyword, $page, $limit);
                 case 'wph':
                     if ($this->isWphOfficial()) {
-                        $parsed = $this->vipOfficial->fetchSearch($keyword ?: '热销', $page, $limit);
-                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                        $cateId = (int) $cate;
+                        $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                            ? min(50, max($limit * 3, $limit))
+                            : $limit;
+                        $q = trim($keyword);
+                        if ($q === '' && $cateId > 0) {
+                            $q = '热销';
+                        }
+                        if ($q === '') {
+                            $q = '热销';
+                        }
+                        $parsed = $this->vipOfficial->fetchSearch($q, $page, $fetchLimit, '', true, $cateId);
+                        $list = $this->normalizeWph($parsed['list'] ?? [], true);
+                        $list = $this->filterItemsByPriceKeyword($list, $keyword, 'wph');
+                        return array_slice($list, 0, $limit);
                     }
                     if ($this->blocksLegacyAggregator()) {
                         return [];
@@ -1094,6 +1173,13 @@ class ServiceGoodsRepository
                 }
                 if (!empty($val['destUrl'])) {
                     $row['dest_url'] = (string) $val['destUrl'];
+                }
+                if (!empty($val['cpsInfo']) && is_array($val['cpsInfo'])) {
+                    $row['cps_info'] = $val['cpsInfo'];
+                    $wxPath = (string) ($val['cpsInfo']['2'] ?? ($val['cpsInfo'][2] ?? ''));
+                    if ($wxPath !== '') {
+                        $row['vip_wx_url'] = $wxPath;
+                    }
                 }
             }
             $list[] = $row;
@@ -1143,6 +1229,7 @@ class ServiceGoodsRepository
             return $this->vipOfficial->generateLinkByGoodsId($goodsId, $openId, '', [
                 'adCode' => (string) ($context['ad_code'] ?? ($context['adCode'] ?? '')),
                 'destUrl' => (string) ($context['dest_url'] ?? ($context['destUrl'] ?? '')),
+                'goodsName' => (string) ($context['goods_name'] ?? ($context['goodsName'] ?? '')),
                 'statParam' => (string) ($context['stat_param'] ?? ''),
             ]);
         }
@@ -1526,22 +1613,298 @@ class ServiceGoodsRepository
         return $list;
     }
 
-    protected function fetchDouyinList(string $keyword, int $page, int $limit): array
+    public function isDouyinHaodanku(): bool
     {
-        if ($this->blocksLegacyAggregator()) {
+        $driver = (string) config('taoke.driver.douyin');
+        if ($this->driverChannel === 'legacy') {
+            return $driver === 'haodanku';
+        }
+        return $driver !== 'legacy' && $driver !== 'jutuike';
+    }
+
+    public function getDouyinDataSource(): string
+    {
+        if ($this->isDouyinHaodanku()) {
+            return 'haodanku';
+        }
+        return $this->blocksLegacyAggregator() ? 'haodanku' : 'legacy';
+    }
+
+    public function fetchDouyinDetail(string $goodsId): array
+    {
+        if (!$this->isDouyinHaodanku() || !$this->haodankuDouyin->isConfigured()) {
             return [];
         }
+        $resp = $this->haodankuDouyin->fetchItemInfo($goodsId);
+        if (!$resp['ok']) {
+            return [];
+        }
+        $row = is_array($resp['data']) ? $resp['data'] : [];
+        if (isset($row[0]) && is_array($row[0])) {
+            $row = $row[0];
+        }
+        $list = $this->normalizeDouyin([$row]);
+        return $list[0] ?? [];
+    }
+
+    /**
+     * @return array{list:array<int,array<string,mixed>>,total:int,code:int,message:string,min_id:mixed}
+     */
+    public function fetchDouyinLiveList(int $page, int $limit, array $filters = []): array
+    {
+        $empty = ['list' => [], 'total' => 0, 'code' => 0, 'message' => '', 'min_id' => null];
+        if (!$this->isDouyinHaodanku() || !$this->haodankuDouyin->isConfigured()) {
+            $empty['code'] = -1;
+            $empty['message'] = 'haodanku_not_configured';
+            return $empty;
+        }
+
+        $minId = $filters['min_id'] ?? $page;
+        $extra = [];
+        if (!empty($filters['keyword'])) {
+            $extra['keyword'] = (string) $filters['keyword'];
+        }
+
+        $resp = $this->haodankuDouyin->fetchLiveList($minId, $limit, $extra);
+        if (!$resp['ok']) {
+            return [
+                'list' => [],
+                'total' => 0,
+                'code' => (int) ($resp['code'] ?? -1),
+                'message' => (string) ($resp['msg'] ?? 'live_list_failed'),
+                'min_id' => $resp['min_id'] ?? null,
+            ];
+        }
+
+        $rows = $resp['data'];
+        if (!is_array($rows)) {
+            $rows = [];
+        }
+
+        return [
+            'list' => $this->normalizeDouyinLiveHaodanku($rows),
+            'total' => count($rows),
+            'code' => 0,
+            'message' => '',
+            'min_id' => $resp['min_id'] ?? null,
+        ];
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    public function createDouyinLivePromotion(array $context): array
+    {
+        if (!$this->isDouyinHaodanku() || !$this->haodankuDouyin->isConfigured()) {
+            return ['code' => -1, 'message' => 'haodanku_not_configured'];
+        }
+
+        $options = [
+            'room_id' => (string) ($context['room_id'] ?? ''),
+            'author_id' => (string) ($context['author_id'] ?? ($context['author_openid'] ?? '')),
+            'buyin_id' => (string) ($context['buyin_id'] ?? ($context['author_buyin_id'] ?? '')),
+            'author_buyin_id' => (string) ($context['author_buyin_id'] ?? ($context['buyin_id'] ?? '')),
+            'product_id' => (string) ($context['product_id'] ?? ''),
+            'share_type' => $context['share_type'] ?? '1,3',
+            'channel' => (string) ($context['channel'] ?? ($context['external_info'] ?? ($context['external_id'] ?? ''))),
+            'platform' => $context['platform'] ?? null,
+        ];
+
+        $resp = $this->haodankuDouyin->createLiveLink($options);
+        if (!$resp['ok']) {
+            return [
+                'code' => (int) ($resp['code'] ?? -1),
+                'message' => (string) ($resp['msg'] ?? 'live_link_failed'),
+            ];
+        }
+        $data = is_array($resp['data']) ? $resp['data'] : [];
+        return array_merge(['code' => 0, 'message' => 'ok'], $data);
+    }
+
+    /**
+     * @param array<string,mixed> $context
+     */
+    public function createDouyinProductPromotion(array $context): array
+    {
+        if (!$this->isDouyinHaodanku() || !$this->haodankuDouyin->isConfigured()) {
+            return ['code' => -1, 'message' => 'haodanku_not_configured'];
+        }
+
+        $itemId = trim((string) ($context['itemid'] ?? ($context['goods_id'] ?? ($context['product_id'] ?? ''))));
+        if ($itemId === '') {
+            return ['code' => -1, 'message' => 'missing_itemid'];
+        }
+
+        $resp = $this->haodankuDouyin->createProductLink($itemId, [
+            'share_type' => $context['share_type'] ?? '1,3',
+            'channel' => (string) ($context['channel'] ?? ($context['external_info'] ?? ($context['external_id'] ?? ''))),
+            'platform' => $context['platform'] ?? null,
+        ]);
+        if (!$resp['ok']) {
+            return [
+                'code' => (int) ($resp['code'] ?? -1),
+                'message' => (string) ($resp['msg'] ?? 'product_link_failed'),
+            ];
+        }
+        $data = is_array($resp['data']) ? $resp['data'] : [];
+        return array_merge(['code' => 0, 'message' => 'ok'], $data);
+    }
+
+    /**
+     * @param array{price_min?:mixed,price_max?:mixed,sort?:int} $filters
+     * @return array<int, array<string, mixed>>
+     */
+    public function fetchDouyinListWithFilters(string $keyword, int $page, int $limit, array $filters = []): array
+    {
+        return $this->fetchDouyinList($keyword, $page, $limit, $filters);
+    }
+
+    protected function fetchDouyinList(string $keyword, int $page, int $limit, array $extra = []): array
+    {
         $keyword = trim($keyword);
+
+        if ($this->isDouyinHaodanku() && $this->haodankuDouyin->isConfigured()) {
+            $queryExtra = [];
+            foreach (['price_min', 'price_max', 'sort', 'sales_min', 'sales_max'] as $key) {
+                if (isset($extra[$key]) && $extra[$key] !== '' && $extra[$key] !== null) {
+                    $queryExtra[$key] = $extra[$key];
+                }
+            }
+            $resp = $this->haodankuDouyin->fetchItemList($keyword, $page, $limit, $queryExtra);
+            if ($resp['ok']) {
+                $rows = $resp['data'];
+                return $this->normalizeDouyin(is_array($rows) ? $rows : []);
+            }
+            Log::warning('好单库抖音商品列表失败', ['msg' => $resp['msg'] ?? '', 'code' => $resp['code'] ?? '']);
+            if ($this->blocksLegacyAggregator()) {
+                return [];
+            }
+        } elseif ($this->blocksLegacyAggregator()) {
+            return [];
+        }
+
         if ($keyword === '') {
             $keyword = '热销';
         }
-        // [官方直连切换 2026-09-21] 原订单侠调用：
-        // $list = $this->normalizeDouyin($this->dingdanxia->douyinGoodsSearch($keyword, $page, $limit));
-        // if (!empty($list)) {
-        //     return $list;
-        // }
-        // 抖音暂无官方直连，仍可用聚推客兜底（非订单侠）
         return $this->normalizeDouyin($this->jutuike->douyinProductSearch($keyword, $page, $limit));
+    }
+
+    /**
+     * 好单库 dy_live_list
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function normalizeDouyinLiveHaodanku(array $rows): array
+    {
+        $list = [];
+        foreach ($rows as $val) {
+            if (!is_array($val)) {
+                continue;
+            }
+            $roomId = (string) ($val['room_id'] ?? ($val['live_id'] ?? ''));
+            $buyinId = (string) ($val['buyin_id'] ?? ($val['author_buyin_id'] ?? ''));
+            $authorId = (string) ($val['author_id'] ?? ($val['author_openid'] ?? ''));
+            if ($roomId === '' && $buyinId === '' && $authorId === '') {
+                continue;
+            }
+            $products = [];
+            foreach ((array) ($val['products'] ?? ($val['product_list'] ?? [])) as $p) {
+                if (!is_array($p)) {
+                    continue;
+                }
+                $pid = (string) ($p['product_id'] ?? ($p['itemid'] ?? ''));
+                if ($pid === '') {
+                    continue;
+                }
+                $price = $p['end_price'] ?? ($p['price'] ?? 0);
+                $products[] = [
+                    'product_id' => $pid,
+                    'title' => (string) ($p['product_title'] ?? ($p['title'] ?? '')),
+                    'cover' => (string) ($p['item_pic'] ?? ($p['cover'] ?? '')),
+                    'price' => $price,
+                    'sales' => (int) ($p['sales'] ?? 0),
+                ];
+            }
+            $list[] = [
+                'platform' => 'douyin',
+                'live' => true,
+                'room_id' => $roomId,
+                'author_id' => $authorId,
+                'author_openid' => $authorId,
+                'author_buyin_id' => $buyinId,
+                'buyin_id' => $buyinId,
+                'author_name' => (string) ($val['author_name'] ?? ($val['nickname'] ?? '')),
+                'author_pic' => (string) ($val['author_pic'] ?? ($val['avatar'] ?? '')),
+                'fans_num' => (int) ($val['fans_num'] ?? ($val['fans'] ?? 0)),
+                'online_num' => (int) ($val['online_num'] ?? ($val['online'] ?? 0)),
+                'average_gmv' => (string) ($val['average_gmv'] ?? ''),
+                'products' => $products,
+                '_source' => 'haodanku',
+            ];
+        }
+        return $list;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    protected function normalizeDouyinLive(array $rows): array
+    {
+        $list = [];
+        foreach ($rows as $val) {
+            if (!is_array($val)) {
+                continue;
+            }
+            $buyinId = (string) ($val['author_buyin_id'] ?? ($val['buyin_id'] ?? ''));
+            $openid = (string) ($val['author_openid'] ?? '');
+            $roomId = (string) ($val['room_id'] ?? '');
+            if ($buyinId === '' && $openid === '' && $roomId === '') {
+                continue;
+            }
+            $products = [];
+            foreach ((array) ($val['products'] ?? []) as $p) {
+                if (!is_array($p)) {
+                    continue;
+                }
+                $pid = (string) ($p['product_id'] ?? '');
+                if ($pid === '') {
+                    continue;
+                }
+                $price = $p['price'] ?? 0;
+                if (is_numeric($price) && (float) $price >= 100) {
+                    $price = number_format(((float) $price) / 100, 2, '.', '');
+                }
+                $products[] = [
+                    'product_id' => $pid,
+                    'title' => (string) ($p['title'] ?? ''),
+                    'cover' => (string) ($p['cover'] ?? ''),
+                    'price' => $price,
+                    'sales' => (int) ($p['sales'] ?? 0),
+                ];
+            }
+            $list[] = [
+                'platform' => 'douyin',
+                'live' => true,
+                'room_id' => $roomId,
+                'author_openid' => $openid,
+                'author_buyin_id' => $buyinId,
+                'author_name' => (string) ($val['author_name'] ?? ''),
+                'author_pic' => (string) ($val['author_pic'] ?? ''),
+                'author_level' => (int) ($val['author_level'] ?? 0),
+                'fans_num' => (int) ($val['fans_num'] ?? 0),
+                'online_num' => (int) ($val['online_num'] ?? 0),
+                'average_gmv' => (string) ($val['average_gmv'] ?? ''),
+                'average_commission_rate' => (string) ($val['average_commission_rate'] ?? ''),
+                'product_category' => $val['product_category'] ?? [],
+                'live_ext' => (string) ($val['ext'] ?? ''),
+                'create_time' => (int) ($val['create_time'] ?? 0),
+                'products' => $products,
+                '_source' => 'haodanku',
+            ];
+        }
+        return $list;
     }
 
     protected function normalizeDouyin($result): array
@@ -1559,27 +1922,30 @@ class ServiceGoodsRepository
             if (!is_array($val)) {
                 continue;
             }
-            $goodsId = (string)($val['product_id'] ?? ($val['productId'] ?? ($val['goods_id'] ?? '')));
+            $goodsId = (string)($val['product_id'] ?? ($val['productId'] ?? ($val['goods_id'] ?? ($val['itemid'] ?? ''))));
             if ($goodsId === '') {
                 continue;
             }
-            $price = $val['price'] ?? 0;
-            // 抖音价格多为分
-            if (is_numeric($price) && (float)$price >= 100) {
-                $price = number_format(((float)$price) / 100, 2, '.', '');
+            $title = $val['product_title'] ?? ($val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? '')));
+            $image = $val['item_pic'] ?? ($val['cover'] ?? ($val['cover_url'] ?? ($val['image'] ?? ($val['img'] ?? ''))));
+            $price = $val['end_price'] ?? ($val['price'] ?? 0);
+            if (is_numeric($price) && (float) $price >= 100 && empty($val['end_price'])) {
+                $price = number_format(((float) $price) / 100, 2, '.', '');
             }
+            $otPrice = $val['price'] ?? $price;
             $list[] = [
                 'platform' => 'douyin',
                 'goods_id' => $goodsId,
-                'title' => $val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? '')),
-                'store_name' => $val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? '')),
-                'image' => $val['cover'] ?? ($val['cover_url'] ?? ($val['image'] ?? ($val['img'] ?? ''))),
+                'title' => $title,
+                'store_name' => $title,
+                'image' => $image,
                 'sales' => (int)($val['sales'] ?? ($val['sell_num'] ?? 0)),
                 'sales_text' => (string)($val['sell_num_text'] ?? ($val['sales_text'] ?? '')),
                 'price' => $price ?: '0.00',
-                'ot_price' => '0.00',
+                'ot_price' => is_numeric($otPrice) ? (string) $otPrice : '0.00',
                 'shop_name' => $val['shop_name'] ?? '',
                 'detail_url' => $val['detail_url'] ?? ($val['product_url'] ?? ''),
+                '_source' => 'haodanku',
             ];
         }
         return $list;

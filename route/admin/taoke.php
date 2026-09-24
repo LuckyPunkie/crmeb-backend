@@ -40,6 +40,14 @@ Route::group(function () {
         ->name('officialServiceTabConfigDelete')
         ->option(['_alias' => '删除平台直连Tab配置', '_auth' => true, '_path' => '/serviceOfficialTab/index']);
 
+    Route::get('official_service_tab_config/shop_street_switch', 'admin.taoke.OfficialServiceTabConfig/getShopStreetSwitch')
+        ->name('officialServiceTabConfigShopStreetGet')
+        ->option(['_alias' => '获取逛网店入口开关', '_auth' => false, '_path' => '/serviceOfficialTab/index']);
+
+    Route::post('official_service_tab_config/shop_street_switch', 'admin.taoke.OfficialServiceTabConfig/saveShopStreetSwitch')
+        ->name('officialServiceTabConfigShopStreetSave')
+        ->option(['_alias' => '保存逛网店入口开关', '_auth' => true, '_path' => '/serviceOfficialTab/index']);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

@@ -76,18 +76,24 @@ return [
 
     // ==================== 唯品会唯享客联盟 ====================
     'vip' => [
-        'appkey' => env('taoke.vip_appkey', ''),
-        'appsecret' => env('taoke.vip_appsecret', ''),
-        'chan_tag' => env('taoke.vip_chan_tag', 'default_pid'),
+        'appkey' => env('taoke.vip_appkey', env('VIP_APPKEY', '')),
+        'appsecret' => env('taoke.vip_appsecret', env('VIP_APPSECRET', '')),
+        'chan_tag' => env('taoke.vip_chan_tag', env('VIP_CHAN_TAG', 'default_pid')),
         'api_url' => env('taoke.vip_api_url', 'https://vop.vipapis.com/'),
     ],
 
-    // ==================== 抖音穿山甲 CPS 配置 ====================
+    // ==================== 抖音 — 好单库 API ====================
+    'haodanku' => [
+        'apikey' => env('taoke.haodanku_apikey', env('HAODANKU_APIKEY', '')),
+        'api_url' => env('taoke.haodanku_api_url', env('HAODANKU_API_URL', 'https://v3.api.haodanku.com')),
+    ],
+
+    // 穿山甲（已弃用，仅历史兼容；抖音请用好单库）
     'pangle' => [
-        'app_id' => env('taoke.pangle_app_id', ''),
-        'secure_key' => env('taoke.pangle_secure_key', ''),
-        'role_id' => env('taoke.pangle_role_id', ''),
-        'api_url' => env('taoke.pangle_api_url', 'https://ecom.pangolin-sdk-toutiao.com'),
+        'app_id' => env('taoke.pangle_app_id', env('PANGLE_APP_ID', '')),
+        'secure_key' => env('taoke.pangle_secure_key', env('PANGLE_SECURE_KEY', '')),
+        'role_id' => env('taoke.pangle_role_id', env('PANGLE_ROLE_ID', '')),
+        'api_url' => env('taoke.pangle_api_url', env('PANGLE_API_URL', 'https://ecom.pangolin-sdk-toutiao.com')),
     ],
 
     // ==================== 平台数据源开关 ====================
@@ -97,7 +103,7 @@ return [
         'taobao'   => env('taoke.driver_taobao', 'legacy'),
         'jd'       => env('taoke.driver_jd', 'legacy'),
         'pdd'      => env('taoke.driver_pdd', 'legacy'),
-        'douyin'   => env('taoke.driver_douyin', 'pangle'),
+        'douyin'   => env('taoke.driver_douyin', env('driver_douyin', 'haodanku')),
         'kuaishou' => env('taoke.driver_kuaishou', 'legacy'),
         'wph'      => env('taoke.driver_wph', 'legacy'),
     ],

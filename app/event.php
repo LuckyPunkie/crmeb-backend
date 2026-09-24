@@ -113,6 +113,7 @@ return [
             \crmeb\listens\pay\GiftOrderPaySuccessListen::class,
             \crmeb\listens\pay\CommunityPaidPaySuccessListen::class,
             \crmeb\listens\pay\WechatUnlockPaySuccessListen::class,
+            \crmeb\listens\pay\HomepageUnlockPaySuccessListen::class,
         ],
         'pay_success_bill' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
         'pay_success_bill_pay' => [\crmeb\listens\pay\NearbyBillPayNotifyListen::class],
@@ -122,6 +123,7 @@ return [
         'pay_success_gift_order' => [\crmeb\listens\pay\GiftOrderPaySuccessListen::class],
         'pay_success_community_paid' => [\crmeb\listens\pay\CommunityPaidPaySuccessListen::class],
         'pay_success_wechat_unlock' => [\crmeb\listens\pay\WechatUnlockPaySuccessListen::class],
+        'pay_success_homepage_unlock' => [\crmeb\listens\pay\HomepageUnlockPaySuccessListen::class],
         'pay_success_order' => [
             \crmeb\listens\pay\OrderPaySuccessListen::class,
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,

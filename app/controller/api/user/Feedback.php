@@ -14,6 +14,7 @@
 namespace app\controller\api\user;
 
 use crmeb\basic\BaseController;
+use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\user\FeedbackRepository;
 use app\validate\api\FeedbackValidate;
 use think\App;
@@ -41,6 +42,17 @@ class Feedback extends BaseController
         $data = $this->request->params(['type', 'content', ['images', []], 'realname', 'contact',['status',0]]);
         $validate->check($data);
         $data['uid'] = $this->request->uid();
+        if (!empty($data['content'])) {
+            $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
+            ContentSecurityService::checkText(
+                $data['content'],
+                ContentSecurityService::SCENE_SOCIAL,
+                'feedback',
+                0,
+                $data['uid'],
+                $openid
+            );
+        }
         $FeedBack = $this->repository->create($data);
 
         event('user.feedback',compact('FeedBack'));

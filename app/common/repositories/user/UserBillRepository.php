@@ -45,6 +45,7 @@ class UserBillRepository extends BaseRepository
             'brokerage/refund_one' => '退还一级佣金',
             'brokerage/refund_two' => '退还二级佣金',
             'brokerage/gift_income' => '收到礼物收益',
+            'brokerage/major_customer_referrer' => '大客户卡推荐佣金',
         ],
         'integral' => [
             'integral/cancel' => '退回积分',
@@ -72,6 +73,7 @@ class UserBillRepository extends BaseRepository
            'now_money/sys_dec_money' => '系统减少余额',
            'now_money/sys_inc_money' => '系统增加余额',
            'now_money/paid_content_income' => '付费内容收益',
+           'now_money/major_customer_rebate' => '大客户卡折扣返还',
            'svip_pay/svip_pay' => '付费会员支付'
        ],
         'mer_margin' => [
