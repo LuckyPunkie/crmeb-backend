@@ -22,6 +22,8 @@ Route::any('notice/mchNotify/:type', 'api.Common/mchNotify')->name('mchNotify');
 Route::any('notice/pay/alipay', 'api.Common/alipayNotify')->name('alipayNotify');
 
 Route::any('notice/callback', 'api.Common/deliveryNotify');
+//小程序消息推送（内容安全异步检测结果等），不能挂在 notice/ 下，否则会被 notice/:type 截走
+Route::any('routine/msg_push', 'WechatNotice/routineServe');
 Route::any('order_call_back', 'api.Common/callBackNotify')->name('mchNotify');
 
 //城市列表
@@ -50,6 +52,10 @@ Route::get('common/menus', 'api.Common/menus');
 Route::get('common/home', 'api.Common/home');
 //经纬度转位置信息
 Route::get('lbs/geocoder', 'api.Common/lbs_geocoder');
+//经纬度转位置信息（天地图）
+Route::get('lbs/tianditu_geocoder', 'api.Common/tianditu_geocoder');
+//地点搜索（天地图）
+Route::get('lbs/tianditu_suggestion', 'api.Common/tianditu_suggestion');
 //位置信息转经纬度
 Route::get('lbs/address', 'api.Common/lbs_address');
 //地点输入提示（多 POI，可按城市限制）

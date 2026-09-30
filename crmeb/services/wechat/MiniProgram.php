@@ -98,11 +98,14 @@ class MiniProgram extends BaseApplication
      * @email 136327134@qq.com
      * @date 2023/10/7
      */
-    public static function serve(): \think\Response
+    public static function serve($handler = null): \think\Response
     {
         $make = self::instance();
         $server = $make->application()->getServer();
-        $server->with($make->pushMessageHandler);
+        $pushMessageHandler = $handler ?: (isset($make->pushMessageHandler) ? $make->pushMessageHandler : null);
+        if ($pushMessageHandler) {
+            $server->with($pushMessageHandler);
+        }
         $response = $server->serve();
         return response($response->getBody());
     }

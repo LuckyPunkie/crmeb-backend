@@ -84,13 +84,14 @@ class CommunityReply extends BaseController
         $data = $this->request->params(['content']);
         if (empty($data['content'])) return app('json')->fail('请输入回复内容');
         $user = $this->request->userInfo();
-        ContentSecurityService::checkText(
+        $check = ContentSecurityService::checkText(
             $data['content'],
             ContentSecurityService::SCENE_COMMENT,
             'community_reply',
-            (int)$id,
+            0,
             $user->uid,
-            $user->wechat->routine_openid ?? ''
+            $user->wechat->routine_openid ?? '',
+            false
         );
         $data['uid'] = $user->uid;
         $data['community_id'] = $id;
@@ -101,7 +102,20 @@ class CommunityReply extends BaseController
             $data['status'] = 0;
             $msg = '回复成功,正在审核中';
         }
+        // risky：入库为未通过（不公开、通知评论者）；review：进待审队列；pass：沿用后台审核开关
+        if ($check['suggest'] === 'risky') {
+            $data['status'] = -1;
+            $data['refusal'] = '内容包含违规信息';
+            $msg = '评论未通过审核，未能公开展示';
+        } elseif ($check['suggest'] !== 'pass') {
+            $data['status'] = 0;
+            $msg = '回复成功,正在审核中';
+        }
         $ret = $this->repository->create($replyId, $data);
+        ContentSecurityService::bindBizId((int)($check['log_id'] ?? 0), (int)($ret['reply_id'] ?? 0));
+        if ($data['status'] === -1) {
+            ContentSecurityService::notifyRejected((int)$user->uid, '评论');
+        }
         return app('json')->success($msg, $ret);
     }
 

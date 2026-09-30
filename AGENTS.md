@@ -1,6 +1,8 @@
 # AGENTS.md
 
-本文件为 Codex（Codex.ai/code）在本仓库中工作时提供项目说明和协作约定。
+本文件说明 **ThinkPHP / CRMEB 后端** 的架构与编码约定（面向 Codex 等在本子目录工作时使用）。
+
+**部署、淘客、服务器、前端同步** → 见仓库根 [AGENTS.md](../../AGENTS.md)（不要与本文件重复维护）。
 
 ## 项目概览
 
@@ -90,6 +92,8 @@ php -l path/to/file.php
 ```
 
 注意：当前 think-swoole 命令为 `php think swoole`。不要默认存在 `php think swoole restart/status/stop` 子命令，实际以 `php think help swoole` 为准。
+
+线上 Swoole 由宝塔 supervisor 托管（程序 `queue:queue_00`），重启用 `supervisorctl restart queue:queue_00`，不要 `pkill` 后再 `nohup php think swoole`，否则会出现多套实例（详见仓库根目录 AGENTS.md「代码同步规则」）。
 
 ## JSON 响应格式
 

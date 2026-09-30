@@ -152,4 +152,26 @@ class MerchantCategoryRepository extends BaseRepository
         }
         return $tree;
     }
+
+    /**
+     * 解析某个分类实际生效的手续费率（小数，如 0.05 表示 5%）
+     *
+     * 2026-09-24：手续费只在一级分类上设置，子分类没有自己独立的手续费——
+     * 不管子分类自己 commission_rate 字段里填了什么，都一律忽略，直接用它父级（一级分类）的费率。
+     * 商户分配到哪个分类（不管是一级还是子级），走的都是这个函数得到的费率。
+     *
+     * @param int $categoryId
+     * @return float 小数形式（数据库原始存储单位）
+     */
+    public function resolveCommissionRate(int $categoryId): float
+    {
+        if (!$categoryId) return 0;
+        $category = $this->dao->get($categoryId);
+        if (!$category) return 0;
+        if ((int)$category['pid'] > 0) {
+            $parent = $this->dao->get((int)$category['pid']);
+            return $parent ? (float)$parent['commission_rate'] : 0;
+        }
+        return (float)$category['commission_rate'];
+    }
 }

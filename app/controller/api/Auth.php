@@ -292,6 +292,9 @@ class Auth extends BaseController
                 ->updateLevel($user['uid'], ['member_level' => 1], 1, false);
         }
         $data['staff_mer'] = !empty($data['staffs']) ? array_column($data['staffs'] instanceof \think\Collection ? $data['staffs']->toArray() : (array)$data['staffs'], 'mer_id') : [];
+        // App 端：是否应优先走微信 V2 媒体异步审（true=不跑端侧 NSFW 主路径）
+        $data['ugc_wechat_media_available'] = \crmeb\services\security\ContentSecurityService::mediaCheckEnabled()
+            && (string)($this->request->userInfo()->wechat->routine_openid ?? '') !== '';
         return app('json')->success($data);
     }
 

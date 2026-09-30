@@ -86,6 +86,13 @@ if (strtolower(substr(PHP_OS, 0, 3)) === 'win') {
                     'timeout'    => (int)env('SWOOLE_TASK_TIMEOUT', 60),
                     'sleep'      => (int)env('SWOOLE_TASK_SLEEP', 1),
                 ],
+                // 内容审核：按 high → normal → low 顺序取任务（P0 聊天 / P1 笔记 / P2 评论），失败重试 3 次
+                'moderation:queue:high,moderation:queue:normal,moderation:queue:low@moderation' => [
+                    'worker_num' => 1,
+                    'tries'      => 3,
+                    'timeout'    => 120,
+                    'sleep'      => 1,
+                ],
             ],
         ],
         'hot_update' => [

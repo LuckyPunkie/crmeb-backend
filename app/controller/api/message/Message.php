@@ -16,6 +16,8 @@ use app\common\repositories\user\UserDialogRepository;
 use app\common\repositories\user\UserMessageRepository;
 use app\common\repositories\community\CommunityReportRepository;
 use crmeb\basic\BaseController;
+use crmeb\jobs\ChatModerationJob;
+use crmeb\jobs\MediaCheckSubmitJob;
 use crmeb\services\security\ContentSecurityService;
 use crmeb\services\UploadService;
 use think\App;
@@ -92,15 +94,20 @@ class Message extends BaseController
         if (!$data['msn'] && $data['msn_type'] == 1) {
             return app('json')->fail('内容字符无效');
         }
-        if ($data['msn_type'] == 1) {
-            $user = $this->request->userInfo();
-            ContentSecurityService::checkText(
+        // 《内容安全阈值确定版》5.3：熟人私聊先发后审；陌生人首次对话、被举报过的会话（及开关关闭时）先审后发
+        $openid = (string)($this->request->userInfo()->wechat->routine_openid ?? '');
+        $isText = (int)$data['msn_type'] === 1;
+        $asyncText = $isText && ContentSecurityService::chatAsyncEnabled()
+            && !$this->messageRepository->requiresPreReview($myUid, $toUid);
+        $syncCheck = null;
+        if ($isText && !$asyncText) {
+            $syncCheck = ContentSecurityService::checkText(
                 $data['msn'],
                 ContentSecurityService::SCENE_SOCIAL,
                 'chat_msg',
-                $toUid,
+                0,
                 $myUid,
-                $user->wechat->routine_openid ?? ''
+                $openid
             );
         }
 
@@ -109,10 +116,41 @@ class Message extends BaseController
 
         try {
             $result = $this->messageRepository->sendMessage($myUid, $toUid, $data);
-            return app('json')->success($result);
         } catch (ValidateException $e) {
             return app('json')->fail($e->getMessage());
         }
+
+        $messageId = (int)($result['message_id'] ?? 0);
+        if ($syncCheck) {
+            ContentSecurityService::bindBizId((int)($syncCheck['log_id'] ?? 0), $messageId);
+        }
+        try {
+            if ($asyncText) {
+                ContentSecurityService::pushModeration(ChatModerationJob::class, [
+                    'message_id' => $messageId,
+                    'openid' => $openid,
+                ], ContentSecurityService::QUEUE_HIGH);
+            }
+            // 图片/语音：微信只能异步检测（5~30 分钟回调），一律先发后审，违规撤回
+            $msnType = (int)$data['msn_type'];
+            if (in_array($msnType, [3, 9], true) && $openid !== '' && ContentSecurityService::mediaCheckEnabled()) {
+                ContentSecurityService::pushModeration(MediaCheckSubmitJob::class, [
+                    'biz_type' => 'chat_msg',
+                    'biz_id' => $messageId,
+                    'uid' => $myUid,
+                    'openid' => $openid,
+                    'scene' => ContentSecurityService::SCENE_SOCIAL,
+                    'images' => $msnType === 3 ? [$data['msn']] : [],
+                    'audio' => $msnType === 9 ? [$data['msn']] : [],
+                    'video' => '',
+                ], ContentSecurityService::QUEUE_HIGH);
+            }
+        } catch (\Throwable $e) {
+            // 入队失败不影响消息发送（文档 5.4：服务不可用时放行并记录日志）
+            \think\facade\Log::error("私聊审核入队失败(message#{$messageId}): " . $e->getMessage());
+            ContentSecurityService::recordFailure('chat_msg', $e->getMessage());
+        }
+        return app('json')->success($result);
     }
 
     public function recallMessage($messageId)

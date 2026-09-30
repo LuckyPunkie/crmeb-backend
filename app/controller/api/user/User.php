@@ -706,6 +706,11 @@ class User extends BaseController
             $data['avatar'] = $avatar;
         }
         $this->repository->updateBaseInfo($data,$user);
+        if (!empty($avatar)) {
+            // 头像先发后审，违规时恢复默认头像
+            ContentSecurityService::dispatchMediaCheck('avatar', (int)$user->uid, (int)$user->uid,
+                $user->wechat->routine_openid ?? '', [$avatar], ContentSecurityService::SCENE_PROFILE);
+        }
         return app('json')->success('修改成功');
     }
 

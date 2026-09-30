@@ -42,6 +42,7 @@ use crmeb\basic\BaseController;
 use crmeb\services\AlipayService;
 use crmeb\services\CopyCommand;
 use crmeb\services\ImageWaterMarkService;
+use crmeb\services\HttpService;
 use crmeb\services\UploadService;
 use Exception;
 use Joypack\Tencent\Map\Bundle\Location;
@@ -61,6 +62,8 @@ use app\controller\api\store\product\BindSpreadTrait;
 class Common extends BaseController
 {
     use BindSpreadTrait;
+
+    private const TIANDITU_TK = '91a7ee6b3cbe75e8ede856ffeb3e5fe1';
 
     /**
      * @return mixed
@@ -441,8 +444,19 @@ class Common extends BaseController
     public function lbs_geocoder()
     {
         $data = explode(',', $this->request->param('location/s', ''));
+        $lat = $data[0] ?? '';
+        $lng = $data[1] ?? '';
+
+        // 逆地理结果按 3 位小数（约 100 米）分桶缓存一天，
+        // 避免同一片区域的用户反复消耗 tx_map_key 的每日调用额度
+        $cacheKey = 'lbs_geocoder_' . round((float)$lat, 3) . '_' . round((float)$lng, 3);
+        $cache = Cache::store();
+        if ($cache->has($cacheKey)) {
+            return app('json')->success($cache->get($cacheKey));
+        }
+
         $locationOption = new LocationOption(systemConfig('tx_map_key'));
-        $locationOption->setLocation($data[0] ?? '', $data[1] ?? '');
+        $locationOption->setLocation($lat, $lng);
         $location = new Location($locationOption);
         $res = $location->request();
         if ($res->error) {
@@ -454,7 +468,289 @@ class Common extends BaseController
         if (!$res->result) {
             return app('json')->fail('获取失败');
         }
+        $cache->set($cacheKey, $res->result, 86400);
         return app('json')->success($res->result);
+    }
+
+    /**
+     * 天地图逆地理编码（替代额度紧张的腾讯 tx_map_key）
+     * 天地图坐标系是 CGCS2000（约等于 WGS-84），微信 wx.getLocation 拿到的是 GCJ-02（火星坐标），
+     * 必须先转换坐标，否则解析出来的地址会偏移几十到几百米
+     */
+    public function tianditu_geocoder()
+    {
+        $data = explode(',', $this->request->param('location/s', ''));
+        $lat = (float)($data[0] ?? 0);
+        $lng = (float)($data[1] ?? 0);
+        if (!$lat || !$lng) {
+            return app('json')->fail('缺少经纬度');
+        }
+
+        $cacheKey = 'tianditu_geocoder_' . round($lat, 3) . '_' . round($lng, 3);
+        $cache = Cache::store();
+        if ($cache->has($cacheKey)) {
+            return app('json')->success($cache->get($cacheKey));
+        }
+
+        [$wgsLng, $wgsLat] = $this->gcj02ToWgs84($lng, $lat);
+
+        $json = $this->tiandituGet('http://api.tianditu.gov.cn/geocoder', [
+            'postStr' => json_encode(['lon' => $wgsLng, 'lat' => $wgsLat, 'ver' => 1]),
+            'type' => 'geocode',
+        ]);
+        if (!$json || (string)($json['status'] ?? '') !== '0') {
+            return app('json')->fail('天地图解析失败');
+        }
+        $result = $json['result'] ?? [];
+        $cache->set($cacheKey, $result, 86400);
+        return app('json')->success($result);
+    }
+
+    /**
+     * 天地图地点搜索，返回结构对齐腾讯 lbs_suggestion（title/address/city/location/_distance），前端映射不用改
+     * 市内优先：行政区搜 → 周边搜 → 视野搜 → 普通搜；有坐标时按距离排序
+     */
+    public function tianditu_suggestion()
+    {
+        $keyword = trim((string)$this->request->param('keyword/s', ''));
+        if ($keyword === '') {
+            return app('json')->fail('请输入搜索关键词');
+        }
+        $region = trim((string)$this->request->param('region/s', ''));
+        $location = trim((string)$this->request->param('location/s', ''));
+        $regionFix = (int)$this->request->param('region_fix/d', 1);
+
+        $originWgs = null;
+        $loc = explode(',', $location);
+        if (count($loc) === 2 && (float)$loc[0] && (float)$loc[1]) {
+            $originWgs = $this->gcj02ToWgs84((float)$loc[1], (float)$loc[0]);
+        }
+
+        $adminCode = $region !== '' ? $this->tiandituAdminCode($region) : '';
+        $scopedCity = ($region !== '' && $regionFix);
+        $base = ['keyWord' => $keyword, 'start' => 0, 'count' => 20, 'show' => 2];
+        $pois = [];
+
+        if ($adminCode !== '' && $scopedCity) {
+            $pois = $this->tiandituSearchPois($base + ['queryType' => 12, 'specify' => $adminCode]);
+        }
+
+        if (!$pois && $originWgs) {
+            [$wLng, $wLat] = $originWgs;
+            $pois = $this->tiandituSearchPois($base + [
+                'queryType' => 3,
+                'level' => 12,
+                'pointLonlat' => $wLng . ',' . $wLat,
+                'queryRadius' => $scopedCity ? 50000 : 200000,
+            ]);
+        }
+
+        if (!$pois && $originWgs) {
+            [$wLng, $wLat] = $originWgs;
+            $post = $base + [
+                'queryType' => 2,
+                'level' => 12,
+                'mapBound' => $this->tiandituMapBoundWgs($wLng, $wLat, $scopedCity ? 0.35 : 1.2),
+            ];
+            if ($adminCode !== '' && $scopedCity) {
+                $post['specify'] = $adminCode;
+            }
+            $pois = $this->tiandituSearchPois($post);
+        }
+
+        if (!$pois) {
+            $post = $base + ['queryType' => 1, 'level' => 12];
+            if ($originWgs && $scopedCity) {
+                [$wLng, $wLat] = $originWgs;
+                $post['mapBound'] = $this->tiandituMapBoundWgs($wLng, $wLat, 0.45);
+                if ($adminCode !== '') {
+                    $post['specify'] = $adminCode;
+                }
+            } else {
+                // 扩大范围（含「查看其他地区」）：全国检索，靠坐标距离排序
+                $post['mapBound'] = '73,3,135,54';
+            }
+            $pois = $this->tiandituSearchPois($post);
+        }
+
+        if ($region !== '' && $regionFix && $pois) {
+            $filtered = array_values(array_filter($pois, function ($p) use ($region) {
+                return $this->tiandituPoiMatchesRegion($p, $region);
+            }));
+            if ($filtered) {
+                $pois = $filtered;
+            }
+        }
+
+        $list = $this->tiandituFormatSuggestionList($pois, $originWgs);
+        if ($originWgs && count($list) > 1) {
+            usort($list, static function ($a, $b) {
+                return ($a['_distance'] ?? PHP_INT_MAX) <=> ($b['_distance'] ?? PHP_INT_MAX);
+            });
+        }
+        return app('json')->success($list);
+    }
+
+    /** @return array<int, array> */
+    private function tiandituSearchPois(array $post): array
+    {
+        $json = $this->tiandituGet('http://api.tianditu.gov.cn/v2/search', [
+            'postStr' => json_encode($post, JSON_UNESCAPED_UNICODE),
+            'type' => 'query',
+        ]);
+        if (!$json || (int)($json['status']['infocode'] ?? 0) !== 1000) {
+            return [];
+        }
+        return is_array($json['pois'] ?? null) ? $json['pois'] : [];
+    }
+
+    private function tiandituMapBoundWgs(float $lng, float $lat, float $deltaDeg): string
+    {
+        return sprintf(
+            '%s,%s,%s,%s',
+            $lng - $deltaDeg,
+            $lat - $deltaDeg,
+            $lng + $deltaDeg,
+            $lat + $deltaDeg
+        );
+    }
+
+    private function tiandituPoiMatchesRegion(array $poi, string $region): bool
+    {
+        $region = trim($region);
+        if ($region === '') {
+            return true;
+        }
+        $regionCore = preg_replace('/(市|自治州|地区|盟)$/', '', $region);
+        $city = (string)($poi['city'] ?? '');
+        if ($city === '' && mb_substr((string)($poi['province'] ?? ''), -1) === '市') {
+            $city = (string)$poi['province'];
+        }
+        $cityCore = preg_replace('/(市|自治州|地区|盟)$/', '', $city);
+        if ($cityCore !== '' && ($cityCore === $regionCore || mb_strpos($city, $region) !== false)) {
+            return true;
+        }
+        $address = (string)($poi['address'] ?? '');
+        return $address !== '' && mb_strpos($address, $regionCore) !== false;
+    }
+
+    /** @return array<int, array> */
+    private function tiandituFormatSuggestionList(array $pois, ?array $originWgs): array
+    {
+        $list = [];
+        foreach ($pois as $poi) {
+            $lonlat = explode(',', (string)($poi['lonlat'] ?? ''));
+            if (count($lonlat) !== 2) {
+                continue;
+            }
+            $wLng = (float)$lonlat[0];
+            $wLat = (float)$lonlat[1];
+            [$gLng, $gLat] = $this->wgs84ToGcj02($wLng, $wLat);
+            $address = (string)($poi['address'] ?? '');
+            $city = (string)($poi['city'] ?? '');
+            if ($city === '' && mb_substr((string)($poi['province'] ?? ''), -1) === '市') {
+                $city = (string)$poi['province'];
+            }
+            $item = [
+                'id' => (string)($poi['hotPointID'] ?? ''),
+                'title' => (string)($poi['name'] ?? ''),
+                'address' => $address,
+                'city' => $city,
+                'location' => ['lat' => $gLat, 'lng' => $gLng],
+            ];
+            if ($originWgs) {
+                $item['_distance'] = $this->distanceMeters($originWgs[1], $originWgs[0], $wLat, $wLng);
+            }
+            $list[] = $item;
+        }
+        return $list;
+    }
+
+    private function tiandituGet($url, array $params)
+    {
+        $params['tk'] = self::TIANDITU_TK;
+        $content = HttpService::getRequest($url, $params);
+        return $content === false ? null : json_decode($content, true);
+    }
+
+    /** 城市名（如「广州市」）转天地图行政区国标码，搜索按行政区限定时必须用码 */
+    private function tiandituAdminCode($region)
+    {
+        $cacheKey = 'tianditu_admin_' . md5($region);
+        $cache = Cache::store();
+        if ($cache->has($cacheKey)) {
+            return $cache->get($cacheKey);
+        }
+        $json = $this->tiandituGet('http://api.tianditu.gov.cn/v2/administrative', [
+            'keyword' => $region,
+            'childLevel' => 0,
+            'extensions' => 'false',
+        ]);
+        $code = (string)($json['data']['district'][0]['gb'] ?? '');
+        if ($code) {
+            $cache->set($cacheKey, $code, 86400 * 30);
+        }
+        return $code;
+    }
+
+    private function distanceMeters($lat1, $lng1, $lat2, $lng2)
+    {
+        $rad = M_PI / 180;
+        $a = sin(($lat2 - $lat1) * $rad / 2) ** 2
+            + cos($lat1 * $rad) * cos($lat2 * $rad) * sin(($lng2 - $lng1) * $rad / 2) ** 2;
+        return (int)round(12742000 * asin(sqrt($a)));
+    }
+
+    private function gcj02ToWgs84($lng, $lat)
+    {
+        [$dLng, $dLat] = $this->gcj02Offset($lng, $lat);
+        return [$lng - $dLng, $lat - $dLat];
+    }
+
+    private function wgs84ToGcj02($lng, $lat)
+    {
+        [$dLng, $dLat] = $this->gcj02Offset($lng, $lat);
+        return [$lng + $dLng, $lat + $dLat];
+    }
+
+    /**
+     * GCJ-02 与 WGS-84（天地图 CGCS2000 近似等同）之间的偏移量
+     * 公开算法，国内地图开发通用（如 coordtransform / eviltransform）
+     */
+    private function gcj02Offset($lng, $lat)
+    {
+        $a = 6378245.0;
+        $ee = 0.00669342162296594323;
+
+        $outOfChina = ($lng < 72.004 || $lng > 137.8347) || ($lat < 0.8293 || $lat > 55.8271);
+        if ($outOfChina) {
+            return [0, 0];
+        }
+
+        $transformLat = function ($x, $y) {
+            $ret = -100.0 + 2.0 * $x + 3.0 * $y + 0.2 * $y * $y + 0.1 * $x * $y + 0.2 * sqrt(abs($x));
+            $ret += (20.0 * sin(6.0 * $x * M_PI) + 20.0 * sin(2.0 * $x * M_PI)) * 2.0 / 3.0;
+            $ret += (20.0 * sin($y * M_PI) + 40.0 * sin($y / 3.0 * M_PI)) * 2.0 / 3.0;
+            $ret += (160.0 * sin($y / 12.0 * M_PI) + 320 * sin($y * M_PI / 30.0)) * 2.0 / 3.0;
+            return $ret;
+        };
+        $transformLng = function ($x, $y) {
+            $ret = 300.0 + $x + 2.0 * $y + 0.1 * $x * $x + 0.1 * $x * $y + 0.1 * sqrt(abs($x));
+            $ret += (20.0 * sin(6.0 * $x * M_PI) + 20.0 * sin(2.0 * $x * M_PI)) * 2.0 / 3.0;
+            $ret += (20.0 * sin($x * M_PI) + 40.0 * sin($x / 3.0 * M_PI)) * 2.0 / 3.0;
+            $ret += (150.0 * sin($x / 12.0 * M_PI) + 300.0 * sin($x / 30.0 * M_PI)) * 2.0 / 3.0;
+            return $ret;
+        };
+
+        $dLat = $transformLat($lng - 105.0, $lat - 35.0);
+        $dLng = $transformLng($lng - 105.0, $lat - 35.0);
+        $radLat = $lat / 180.0 * M_PI;
+        $magic = sin($radLat);
+        $magic = 1 - $ee * $magic * $magic;
+        $sqrtMagic = sqrt($magic);
+        $dLat = ($dLat * 180.0) / (($a * (1 - $ee)) / ($magic * $sqrtMagic) * M_PI);
+        $dLng = ($dLng * 180.0) / ($a / $sqrtMagic * cos($radLat) * M_PI);
+        return [$dLng, $dLat];
     }
 
     public function lbs_address()

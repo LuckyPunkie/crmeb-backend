@@ -199,6 +199,13 @@ class VipOfficialService extends BaseServices
         }
         $request = $this->baseGoodsRequest($openId, $realCall);
         $request['goodsIds'] = [$goodsId];
+        // 默认 false 时不返 goodsCarouselPictures / goodsDetailPictures（见 VOP getByGoodsIdsV2）
+        $request['queryDetail'] = true;
+        $request['queryPMSAct'] = true;
+        $request['queryPrepay'] = true;
+        $request['queryReputation'] = true;
+        $request['queryStoreServiceCapability'] = true;
+        $request['queryStock'] = true;
         $raw = $this->invoke($this->goodsService, 'getByGoodsIdsV2', ['request' => $request]);
         if (($raw['returnCode'] ?? '') !== '0') {
             Log::warning('唯品会详情失败', ['goodsId' => $goodsId, 'raw' => $raw]);

@@ -31,7 +31,13 @@ class UserMessageRepository extends BaseRepository
 
     public function getHistory(int $dialogId, int $myUid, int $page, int $limit): array
     {
-        $list = $this->dao->getHistory($dialogId, $page, $limit);
+        $dialogDao = app()->make(UserDialogDao::class);
+        $dialog = $dialogDao->get($dialogId);
+        if (!$dialog) {
+            return [];
+        }
+        $sinceTime = $this->getClearSinceForUser($dialog, $myUid);
+        $list = $this->dao->getHistory($dialogId, $page, $limit, $sinceTime);
         $result = [];
         foreach ($list as $msg) {
             $item = $msg->toArray();
@@ -100,12 +106,6 @@ class UserMessageRepository extends BaseRepository
         } else {
             $dialog->unread_b += 1;
         }
-        if ($dialog->uid_a == $toUid && $dialog->is_clear_a) {
-            $dialog->is_clear_a = 0;
-        }
-        if ($dialog->uid_b == $toUid && $dialog->is_clear_b) {
-            $dialog->is_clear_b = 0;
-        }
         $dialog->save();
 
         $userInfo = Db::name('user')->field('uid,nickname,avatar')->where('uid', $fromUid)->find();
@@ -154,6 +154,57 @@ class UserMessageRepository extends BaseRepository
         ]);
     }
 
+    /**
+     * 私聊是否必须先审后发（文档 5.3）：陌生人首次对话（未关注且对方未回复，与 3 条消息限制同一口径），
+     * 或双方之间有过用户举报
+     */
+    public function requiresPreReview(int $fromUid, int $toUid): bool
+    {
+        $reported = Db::name('community_report')
+            ->where('report_type', 'user')
+            ->where(function ($q) use ($fromUid, $toUid) {
+                $q->where(['reporter_uid' => $fromUid, 'target_uid' => $toUid])
+                    ->whereOr(function ($q2) use ($fromUid, $toUid) {
+                        $q2->where(['reporter_uid' => $toUid, 'target_uid' => $fromUid]);
+                    });
+            })
+            ->count();
+        if ($reported > 0) {
+            return true;
+        }
+        $dialog = app()->make(UserDialogDao::class)->getOrCreate($fromUid, $toUid);
+        return $this->isStrangerMessageLimited($dialog, $fromUid);
+    }
+
+    /**
+     * 审核不通过时由系统撤回（不受 2 分钟、本人限制），双方都会收到撤回事件
+     */
+    public function systemRecallMessage(int $messageId): bool
+    {
+        $msg = $this->dao->get($messageId);
+        if (!$msg || (int)$msg->msn_type === 100) {
+            return false;
+        }
+        $msg->msn_type = 100;
+        // 标记为系统撤回，前端据此显示"该消息已被撤回"（文档 5.3），区别于用户自己撤回
+        $msg->msn = '__system_recall__';
+        $msg->save();
+
+        // 被撤回的是会话最后一条时替换预览，避免违规内容留在会话列表里
+        $latestId = (int)Db::name('user_message')->where('dialog_id', $msg->dialog_id)->max('message_id');
+        if ($latestId === $messageId) {
+            Db::name('user_dialog')->where('dialog_id', $msg->dialog_id)->update(['last_message' => '该消息已被撤回']);
+        }
+
+        foreach ([(int)$msg->to_uid, (int)$msg->from_uid] as $uid) {
+            SwooleTaskService::user($uid, [
+                'type' => 'user_message_recall',
+                'data' => ['message_id' => $messageId, 'dialog_id' => $msg->dialog_id],
+            ]);
+        }
+        return true;
+    }
+
     public function markAsRead(int $dialogId, int $toUid): void
     {
         $this->dao->markAsRead($dialogId, $toUid);
@@ -166,7 +217,12 @@ class UserMessageRepository extends BaseRepository
         if ($keyword === '') {
             throw new ValidateException('请输入搜索关键词');
         }
-        $list = $this->dao->searchInDialog($dialogId, $keyword, $page, $limit);
+        $dialog = app()->make(UserDialogDao::class)->get($dialogId);
+        if (!$dialog) {
+            return [];
+        }
+        $sinceTime = $this->getClearSinceForUser($dialog, $myUid);
+        $list = $this->dao->searchInDialog($dialogId, $keyword, $page, $limit, $sinceTime);
         $result = [];
         foreach ($list as $msg) {
             $item = $msg->toArray();
@@ -175,6 +231,28 @@ class UserMessageRepository extends BaseRepository
             $result[] = $item;
         }
         return $result;
+    }
+
+    /**
+     * 用户清空聊天记录后，仅展示 clear_time 之后的消息（不再因发新消息恢复全部历史）
+     */
+    private function getClearSinceForUser($dialog, int $myUid): ?string
+    {
+        if ((int)$dialog->uid_a === $myUid) {
+            if (!(int)$dialog->is_clear_a) {
+                return null;
+            }
+            $t = trim((string)($dialog->clear_time_a ?? ''));
+            return $t !== '' ? $t : '1970-01-01 00:00:00';
+        }
+        if ((int)$dialog->uid_b === $myUid) {
+            if (!(int)$dialog->is_clear_b) {
+                return null;
+            }
+            $t = trim((string)($dialog->clear_time_b ?? ''));
+            return $t !== '' ? $t : '1970-01-01 00:00:00';
+        }
+        return null;
     }
 
     private function getMyRelationType($dialog, int $myUid): int

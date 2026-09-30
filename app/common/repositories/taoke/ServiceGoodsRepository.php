@@ -10,13 +10,20 @@ use crmeb\services\taoke\HaodankuDouyinService;
 use crmeb\services\taoke\PddOfficialService;
 use crmeb\services\taoke\TaobaoOfficialService;
 use crmeb\services\taoke\VipOfficialService;
+use crmeb\jobs\ServiceTabProbeJob;
+use think\facade\Cache;
 use think\facade\Log;
+use think\facade\Queue;
 
 /**
  * 服务页联盟商品聚合 / 品牌检索
  */
 class ServiceGoodsRepository
 {
+    private const TAB_PROBE_TTL_HIT = 600;
+    private const TAB_PROBE_TTL_MISS = 180;
+    private const TAB_PROBE_HIDE_AFTER_MISSES = 2;
+
     /** null=读 .env；legacy|official=API 通道锁定（与 /taoke/goods vs /taoke/official/goods 对应） */
     protected ?string $driverChannel = null;
 
@@ -895,6 +902,66 @@ class ServiceGoodsRepository
     }
 
     /**
+     * service_tabs 用：只读缓存的探活结果，不在请求内调上游。
+     * 从未探活过 → 默认展示；结果过期 → 投递队列后台刷新，本次仍用旧结果。
+     */
+    public function isOfficialTabVisible(array $tab): bool
+    {
+        $state = Cache::get($this->tabProbeCacheKey($tab));
+        $state = is_array($state) ? $state : [];
+        $visible = !array_key_exists('visible', $state) || (bool) $state['visible'];
+        $misses = (int) ($state['misses'] ?? 0);
+        $ttl = ($visible && $misses === 0) ? self::TAB_PROBE_TTL_HIT : self::TAB_PROBE_TTL_MISS;
+        if (time() - (int) ($state['checked_at'] ?? 0) >= $ttl) {
+            $this->scheduleOfficialTabProbe($tab);
+        }
+
+        return $visible;
+    }
+
+    /**
+     * 队列内执行真实探活并写缓存；连续 TAB_PROBE_HIDE_AFTER_MISSES 次无货才隐藏，避免上游偶发超时把 Tab 刷掉
+     */
+    public function refreshOfficialTabProbe(array $tab): bool
+    {
+        $key = $this->tabProbeCacheKey($tab);
+        $state = Cache::get($key);
+        $misses = is_array($state) ? (int) ($state['misses'] ?? 0) : 0;
+        try {
+            $has = $this->probeOfficialTabHasGoods($tab);
+        } catch (\Throwable $e) {
+            Log::warning('服务页 Tab 探活失败', ['tab_key' => $tab['tab_key'] ?? '', 'error' => $e->getMessage()]);
+            $has = false;
+        }
+        $misses = $has ? 0 : $misses + 1;
+        $visible = $has || $misses < self::TAB_PROBE_HIDE_AFTER_MISSES;
+        Cache::set($key, ['visible' => $visible, 'misses' => $misses, 'checked_at' => time()], 86400);
+        Cache::delete($key . ':lock');
+
+        return $visible;
+    }
+
+    protected function scheduleOfficialTabProbe(array $tab): void
+    {
+        $lockKey = $this->tabProbeCacheKey($tab) . ':lock';
+        if (Cache::get($lockKey)) {
+            return;
+        }
+        Cache::set($lockKey, 1, 120);
+        try {
+            Queue::push(ServiceTabProbeJob::class, $tab);
+        } catch (\Throwable $e) {
+            Cache::delete($lockKey);
+            Log::warning('服务页 Tab 探活投递失败', ['tab_key' => $tab['tab_key'] ?? '', 'error' => $e->getMessage()]);
+        }
+    }
+
+    protected function tabProbeCacheKey(array $tab): string
+    {
+        return 'taoke_official_tab_probe_v2:' . md5((string) ($tab['tab_key'] ?? '') . ':' . (int) ($tab['id'] ?? 0));
+    }
+
+    /**
      * 平台直连 service_tabs 探活：与列表首屏同逻辑，limit=1
      */
     public function probeOfficialTabHasGoods(array $tab): bool
@@ -903,11 +970,18 @@ class ServiceGoodsRepository
             return true;
         }
         $tabKey = strtolower(trim((string) ($tab['tab_key'] ?? '')));
+        if ($tabKey === ServiceTabConfigRepository::TAB_KEY_RECOMMEND) {
+            return !empty($this->aggregateRecommend(1, 1, ''));
+        }
         if ($tabKey === ServiceTabConfigRepository::TAB_KEY_SHOP_STREET) {
             $feed = app()->make(\app\common\repositories\system\merchant\MerchantRepository::class)
                 ->getOnlineStoreProductFeed(1, 1);
 
             return !empty($feed['list']);
+        }
+        // 快手选品/列表接口偶发空页，探活失败不应隐藏 Tab（是否展示由后台 status 控制）
+        if ($tabKey === 'kuaishou') {
+            return true;
         }
         if ((int) ($tab['tab_type'] ?? 0) === ServiceTabConfigRepository::TYPE_CUSTOM) {
             $brands = $tab['brands'] ?? [];
@@ -932,7 +1006,8 @@ class ServiceGoodsRepository
             return [];
         }
         $platforms = $this->crossPlatformKeys('');
-        $per = $this->perPlatformLimitForMix($limit, $platforms);
+        // 各平台按完整 page_size 拉取再交错截断，避免 limit/平台数 导致「全部」只有十几条且无法翻页
+        $per = max(1, $limit);
         $buckets = [];
         foreach ($platforms as $platform) {
             $buckets[] = $this->safePlatformSearch($platform, $keyword, $page, $per);
@@ -1057,14 +1132,17 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
-                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
-                        ? min(50, max($limit * 3, $limit))
+                    $tierLabel = $this->resolvePriceTierLabel($keyword, 'taobao');
+                    $fetchLimit = $tierLabel !== null
+                        ? min(80, max($limit * 5, $limit))
                         : $limit;
-                    $rows = $this->taobaoOfficial->fetchSearch($keyword, $page, $fetchLimit, (int) $cate);
+                    // 价格 pill：联盟关键词召回面窄，用「包邮」拉池再按券后价分档
+                    $searchQ = $tierLabel !== null ? '包邮' : $keyword;
+                    $rows = $this->taobaoOfficial->fetchSearch($searchQ, $page, $fetchLimit, (int) $cate);
                     $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'taobao');
                     return $this->normalizeTaobao(array_slice($rows, 0, $limit));
                 case 'jd':
-                    $tierLabel = $this->resolvePriceTierLabel($keyword);
+                    $tierLabel = $this->resolvePriceTierLabel($keyword, 'jd');
                     $fetchLimit = $tierLabel !== null
                         ? min(50, max($limit * 3, $limit))
                         : $limit;
@@ -1086,7 +1164,7 @@ class ServiceGoodsRepository
                     $list = $this->filterItemsByPriceKeyword($list, $keyword, 'jd');
                     return array_slice($list, 0, $limit);
                 case 'pdd':
-                    $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                    $fetchLimit = $this->resolvePriceTierLabel($keyword, 'pdd') !== null
                         ? min(50, max($limit * 3, $limit))
                         : $limit;
                     if ($this->isPddOfficial()) {
@@ -1112,7 +1190,7 @@ class ServiceGoodsRepository
                 case 'wph':
                     if ($this->isWphOfficial()) {
                         $cateId = (int) $cate;
-                        $fetchLimit = $this->resolvePriceTierLabel($keyword) !== null
+                        $fetchLimit = $this->resolvePriceTierLabel($keyword, 'wph') !== null
                             ? min(50, max($limit * 3, $limit))
                             : $limit;
                         $q = trim($keyword);
@@ -1367,47 +1445,118 @@ class ServiceGoodsRepository
     }
 
     /** @return list<string> */
-    protected function priceTierLabelsAsc(): array
+    protected function defaultPriceTierLabelsAsc(): array
     {
         return ['9.9', '19.9', '29.9', '39.9'];
     }
 
     /**
-     * 从 pill 文案解析档位（长串优先，避免 29.9 命中 9.9）
+     * 内置 Tab 后台配置的价格档位（升序）；无配置时用默认四档
+     *
+     * @return list<string>
      */
-    protected function resolvePriceTierLabel(string $keyword): ?string
+    protected function priceTierLabelsAscForPlatform(string $platform): array
+    {
+        $platform = strtolower(trim($platform));
+        if ($platform === '') {
+            return $this->defaultPriceTierLabelsAsc();
+        }
+        $channel = $this->driverChannel === 'official'
+            ? ServiceTabConfigRepository::CHANNEL_OFFICIAL
+            : ServiceTabConfigRepository::CHANNEL_LEGACY;
+        static $cache = [];
+        $cacheKey = $platform . ':' . $channel;
+        if (isset($cache[$cacheKey])) {
+            return $cache[$cacheKey];
+        }
+        try {
+            /** @var ServiceTabConfigRepository $repo */
+            $repo = app()->make(ServiceTabConfigRepository::class);
+            $brands = $repo->getBuiltinBrands($platform, $channel);
+        } catch (\Throwable $e) {
+            $brands = [];
+        }
+        $tiers = [];
+        foreach ($brands as $label) {
+            $yuan = $this->parsePriceKeywordYuan((string) $label);
+            if ($yuan === null || $yuan <= 0) {
+                continue;
+            }
+            $tiers[] = $this->formatPriceTierLabel($yuan);
+        }
+        if ($tiers === []) {
+            $cache[$cacheKey] = $this->defaultPriceTierLabelsAsc();
+            return $cache[$cacheKey];
+        }
+        usort($tiers, function ($a, $b) {
+            return (float) $a <=> (float) $b;
+        });
+        $tiers = array_values(array_unique($tiers));
+        $cache[$cacheKey] = $tiers;
+
+        return $tiers;
+    }
+
+    protected function formatPriceTierLabel(float $yuan): string
+    {
+        return rtrim(rtrim(sprintf('%.2F', $yuan), '0'), '.');
+    }
+
+    /** 从 pill 关键词/文案解析价格（元），如 1.9包邮、1.9元包邮 */
+    protected function parsePriceKeywordYuan(string $keyword): ?float
     {
         $keyword = trim($keyword);
         if ($keyword === '') {
             return null;
         }
-        foreach (array_reverse($this->priceTierLabelsAsc()) as $label) {
-            if (strpos($keyword, $label) !== false) {
-                return $label;
-            }
+        if (preg_match('/(\d+(?:\.\d+)?)\s*(?:元)?\s*包邮/u', $keyword, $m)) {
+            return (float) $m[1];
         }
+        if (preg_match('/(\d+(?:\.\d+)?)/u', $keyword, $m)) {
+            return (float) $m[1];
+        }
+
         return null;
     }
 
     /**
-     * 互斥价格带：等价于「先取 ≤最大档，再逐级从剩余里剥小档」
-     * 9.9 → (0, 9.9]；19.9 → (9.9, 19.9]；29.9 → (19.9, 29.9]；39.9 → (29.9, 39.9]
+     * 是否命中价格 pill（用于放大召回条数）
+     */
+    protected function resolvePriceTierLabel(string $keyword, string $platform = ''): ?string
+    {
+        $bounds = $this->resolvePriceTierBounds($keyword, $platform);
+        if ($bounds === null) {
+            return null;
+        }
+
+        return $this->formatPriceTierLabel((float) $bounds[1]);
+    }
+
+    /**
+     * 互斥价格带：按后台档位升序，第 n 档 → (第 n-1 档, 第 n 档]
      *
      * @return array{0: float, 1: float, 2: bool}|null min, max, minExclusive
      */
-    protected function resolvePriceTierBounds(string $keyword): ?array
+    protected function resolvePriceTierBounds(string $keyword, string $platform = ''): ?array
     {
-        $label = $this->resolvePriceTierLabel($keyword);
-        if ($label === null) {
+        $yuan = $this->parsePriceKeywordYuan($keyword);
+        if ($yuan === null) {
             return null;
         }
-        $order = $this->priceTierLabelsAsc();
-        $idx = array_search($label, $order, true);
-        if ($idx === false) {
+        $order = $this->priceTierLabelsAscForPlatform($platform);
+        $idx = null;
+        foreach ($order as $i => $label) {
+            if (abs((float) $label - $yuan) < 0.001) {
+                $idx = $i;
+                break;
+            }
+        }
+        if ($idx === null) {
             return null;
         }
-        $max = (float) $label;
+        $max = (float) $order[$idx];
         $min = $idx > 0 ? (float) $order[$idx - 1] : 0.0;
+
         return [$min, $max, $idx > 0];
     }
 
@@ -1468,11 +1617,11 @@ class ServiceGoodsRepository
 
     protected function filterItemsByPriceKeyword(array $list, string $keyword, string $platform = ''): array
     {
-        $bounds = $this->resolvePriceTierBounds($keyword);
+        $platform = strtolower(trim($platform));
+        $bounds = $this->resolvePriceTierBounds($keyword, $platform);
         if ($bounds === null || $list === []) {
             return $list;
         }
-        $platform = strtolower(trim($platform));
         $out = [];
         $seen = [];
         foreach ($list as $item) {

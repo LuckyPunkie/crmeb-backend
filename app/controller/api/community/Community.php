@@ -20,7 +20,9 @@ use app\common\repositories\user\UserRelationRepository;
 use app\common\repositories\user\UserRepository;
 use app\validate\api\CommunityValidate;
 use crmeb\basic\BaseController;
+use crmeb\jobs\MediaCheckSubmitJob;
 use crmeb\services\security\ContentSecurityService;
+use crmeb\services\security\ModerationDecision;
 use think\App;
 use app\common\repositories\community\CommunityRepository as repository;
 use think\exception\ValidateException;
@@ -37,6 +39,10 @@ class Community extends BaseController
      */
     protected $repository;
     protected $user;
+    protected $moderationLogId = 0;
+    protected $moderationSuggest = 'pass';
+    protected $mediaHold = null;
+    protected $nsfwLogId = 0;
 
     /**
      * User constructor.
@@ -358,7 +364,13 @@ class Community extends BaseController
         $this->checkUserAuth();
         $data['uid'] = $this->request->uid();
         $res = $this->repository->create($data);
-        return app('json')->success(['community_id' => $res]);
+        ContentSecurityService::bindBizId($this->moderationLogId, (int)$res);
+        ContentSecurityService::bindBizId($this->nsfwLogId, (int)$res);
+        if ((int)$data['status'] === -1) {
+            ContentSecurityService::notifyRejected((int)$data['uid'], '笔记');
+        }
+        $this->dispatchMediaCheck((int)$res, (int)$data['uid']);
+        return app('json')->success(['community_id' => $res, 'status' => (int)$data['status']]);
     }
 
     /**
@@ -395,7 +407,53 @@ class Community extends BaseController
         if(!$this->repository->uidExists($id, $this->user->uid))
             return app('json')->success('内容不存在或不属于您');
         $this->repository->edit($id, $data);
-        return app('json')->success(['community_id' => $id]);
+        ContentSecurityService::bindBizId($this->moderationLogId, (int)$id);
+        ContentSecurityService::bindBizId($this->nsfwLogId, (int)$id);
+        if ((int)$data['status'] === -1) {
+            ContentSecurityService::notifyRejected((int)$this->user->uid, '笔记');
+        }
+        $this->dispatchMediaCheck((int)$id, (int)$this->user->uid);
+        return app('json')->success(['community_id' => $id, 'status' => (int)$data['status']]);
+    }
+
+    /**
+     * 读取客户端上报的分数列表：支持数组、JSON 字符串、逗号分隔；只保留 0~1 之间的数值
+     * @return float[]
+     */
+    protected function scoreList(string $key): array
+    {
+        $raw = $this->request->param($key, []);
+        if (is_string($raw)) {
+            $decoded = json_decode($raw, true);
+            $raw = is_array($decoded) ? $decoded : explode(',', $raw);
+        }
+        $scores = [];
+        foreach ((array)$raw as $v) {
+            if (is_numeric($v) && (float)$v >= 0 && (float)$v <= 1) {
+                $scores[] = (float)$v;
+            }
+        }
+        return array_slice($scores, 0, 50);
+    }
+
+    protected function dispatchMediaCheck(int $communityId, int $uid): void
+    {
+        if (!$this->mediaHold || $communityId <= 0) {
+            return;
+        }
+        // 编辑后重新审核：清掉旧任务，避免旧图的结果影响新内容
+        \think\facade\Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
+        ContentSecurityService::pushModeration(MediaCheckSubmitJob::class, [
+            'biz_type' => 'community_post',
+            'biz_id' => $communityId,
+            'uid' => $uid,
+            'openid' => $this->mediaHold['openid'],
+            'scene' => ContentSecurityService::SCENE_FORUM,
+            'images' => $this->mediaHold['images'],
+            'video' => $this->mediaHold['video'],
+            'fallback_image_scores' => $this->mediaHold['fallback_image_scores'] ?? [],
+            'fallback_frame_scores' => $this->mediaHold['fallback_frame_scores'] ?? [],
+        ], ContentSecurityService::QUEUE_NORMAL);
     }
 
     /**
@@ -444,19 +502,73 @@ class Community extends BaseController
         }
 
         $data['content'] = filter_emoji($data['content']);
+        $this->moderationLogId = 0;
+        $this->moderationSuggest = 'pass';
         if (!empty($data['content'])) {
             $user = $this->request->userInfo();
-            ContentSecurityService::checkText(
+            $check = ContentSecurityService::checkText(
                 $data['content'],
                 ContentSecurityService::SCENE_FORUM,
                 'community_post',
                 0,
                 $user->uid,
-                $user->wechat->routine_openid ?? ''
+                $user->wechat->routine_openid ?? '',
+                false
             );
+            $this->moderationLogId = (int)($check['log_id'] ?? 0);
+            $this->moderationSuggest = (string)$check['suggest'];
+            // risky：入库为未通过（不公开、通知作者）；review：进待审队列；pass：沿用免审配置
+            if ($this->moderationSuggest !== 'pass') {
+                $data['status'] = $this->moderationSuggest === 'risky' ? -1 : 0;
+                $data['is_show'] = 0;
+                unset($data['status_time']);
+                if ($data['status'] === -1) {
+                    $data['refusal'] = '内容包含违规信息';
+                }
+            }
         }
         if ($data['is_type'] == 1 && empty($data['image'])) {
             throw new ValidateException('图片不能为空');
+        }
+        // App 端侧 NSFW：仅 V2 媒体审核不可用时的降级（§一：默认微信 V2）
+        $this->nsfwLogId = 0;
+        $openid = (string)($this->request->userInfo()->wechat->routine_openid ?? '');
+        $images = is_array($data['image']) ? array_values(array_filter($data['image'])) : array_filter(explode(',', (string)$data['image']));
+        $video = $data['is_type'] == 1 ? '' : (string)$data['video_link'];
+        $hasMedia = (bool)($images || $video !== '');
+        $imageScores = $this->scoreList('nsfw_scores');
+        $frameScores = $data['is_type'] == 1 ? [] : $this->scoreList('video_frame_scores');
+        $useWechatMedia = (int)$data['status'] !== -1
+            && ContentSecurityService::mediaCheckEnabled()
+            && $openid !== ''
+            && $hasMedia;
+
+        if (!$useWechatMedia && (int)$data['status'] !== -1 && ($imageScores || $frameScores)) {
+            $judge = ContentSecurityService::judgeAppMediaScores($imageScores, $frameScores, 'community_post', (int)$this->request->uid());
+            $this->nsfwLogId = $judge['log_id'];
+            if ($judge['verdict'] !== ModerationDecision::PASS) {
+                $data['status'] = $judge['verdict'] === ModerationDecision::BLOCK ? -1 : 0;
+                $data['is_show'] = 0;
+                unset($data['status_time']);
+                if ($data['status'] === -1) {
+                    $data['refusal'] = '图片包含违规内容';
+                }
+            }
+        }
+
+        // 图片/视频异步审核（V2）：有 openid 时优先走微信 media_check_async
+        $this->mediaHold = null;
+        if ($useWechatMedia) {
+            $data['status'] = 0;
+            $data['is_show'] = 0;
+            unset($data['status_time']);
+            $this->mediaHold = [
+                'openid' => $openid,
+                'images' => $images,
+                'video' => $video,
+                'fallback_image_scores' => $imageScores,
+                'fallback_frame_scores' => $frameScores,
+            ];
         }
         app()->make(CommunityValidate::class)->check($data);
         // 优先使用用户填写的标题；未填时再取正文首行

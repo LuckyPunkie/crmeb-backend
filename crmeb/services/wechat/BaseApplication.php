@@ -173,6 +173,10 @@ abstract class BaseApplication implements BaseApplicationInterface
     protected function setRequest(PayApplication|OfficialAccountApplication|MiniAppApplication|Application $application)
     {
         $request = request();
+        // 命令行/队列进程没有 HTTP 请求，构造 PSR 请求会抛 "Unable to parse URI"；调用微信 API 本身不依赖请求对象
+        if (!$request->server('HTTP_HOST') && !$request->server('SERVER_NAME') && !$request->server('SERVER_ADDR')) {
+            return;
+        }
         $symfonyRequest = new SymfonyRequest($request->get(), $request->post(), [], $request->cookie(), [], $request->server(), $request->getContent());
         $symfonyRequest->headers = new HeaderBag($request->header());
         $application->setRequestFromSymfonyRequest($symfonyRequest);

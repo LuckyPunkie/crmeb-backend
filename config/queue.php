@@ -30,6 +30,18 @@ return [
             'timeout'    => 0,
             'persistent' => false,
         ],
+        // 内容审核三级优先队列（《内容安全阈值确定版》5.4）：任务 600 秒未完成自动重新入队
+        'moderation' => [
+            'type'        => 'redis',
+            'queue'       => 'moderation:queue:normal',
+            'host'        => env('redis.redis_hostname', '127.0.0.1'),
+            'port'        => env('redis.port', 6379),
+            'password'    => env('redis.redis_password', ''),
+            'select'      => (int)env('redis.select', 0),
+            'timeout'     => 0,
+            'persistent'  => false,
+            'retry_after' => 600,
+        ],
     ],
     'failed'      => [
         'type'  => 'none',

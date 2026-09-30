@@ -15,6 +15,7 @@ use crmeb\services\wechat\Payment;
 use app\common\dao\system\financial\FinancialDao;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\repositories\system\merchant\FinancialRecordRepository;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use app\common\repositories\user\UserBillRepository;
 use crmeb\jobs\ChangeMerchantStatusJob;
@@ -157,12 +158,14 @@ class FinancialRepository extends BaseRepository
      */
     public function applyForm(int $merId)
     {
-        $merchant = app()->make(MerchantRepository::class)->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay,financial_type')->find();
+        $merchant = app()->make(MerchantRepository::class)->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay,financial_type,commission_rate,commission_switch,category_id')->with(['merchantCategory'])->find();
         $extract_minimum_line = systemConfig('extract_minimum_line') ?: 0;
         $extract_minimum_num = systemConfig('extract_minimum_num');
         $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
         $_extract = ($_line < 0) ? 0 : $_line;
         $welfareMoney = (float)($merchant->mer_welfare_money ?? 0);
+        // 2026-09-24：手续费改在提现环节收取，这里只做展示，真正计算在 saveApply() 里
+        $withdrawRate = $this->getWithdrawFeeRate($merchant);
         $form = Elm::createForm(Route::buildUrl('merchantFinancialCreateSave')->build());
         $form->setRule([
             [
@@ -210,6 +213,12 @@ class FinancialRepository extends BaseRepository
                 ['value' => 'balance', 'label' => '可用余额'],
                 ['value' => 'welfare', 'label' => '公益分销余额'],
             ]),
+            [
+                'type' => 'span',
+                'title' => '提现手续费率：',
+                'native' => false,
+                'children' => [$withdrawRate > 0 ? "{$withdrawRate}%（仅可用余额提现收取，公益分销余额不收）" : '0%']
+            ],
 
             Elm::radio('financial_type', '转账类型：', $merchant->financial_type)
                 ->setOptions([
@@ -296,6 +305,35 @@ class FinancialRepository extends BaseRepository
     }
 
     /**
+     * 解析商户提现应使用的手续费率（百分比，0-100）
+     *
+     * 规则与下单时商户手续费的解析口径一致（见 StoreOrderCreateRepository::createOrder 里的 commission_rate 解析）：
+     * 商户自己开了 commission_switch 就用商户自己的费率，否则用商户所属店铺分类的默认费率。
+     * 二者存储单位不同：商户自身 commission_rate 存的就是百分比（如 5 表示 5%），
+     * 店铺分类 commission_rate 存的是小数（如 0.05 表示 5%，MerchantCategory::checkParams 里 /100 存的），这里统一换算成百分比。
+     *
+     * 2026-09-24：这条费率原来是订单支付时用来扣手续费，现在改成提现时才用。
+     * 2026-09-24：手续费只在一级分类上设置，子分类不单独设置手续费，一律跟着自己的父级走
+     *（子分类自己的 commission_rate 字段直接忽略，不管填没填），见 MerchantCategoryRepository::resolveCommissionRate。
+     *
+     * @param object $merchant 需要携带 commission_rate / commission_switch / merchantCategory 关联
+     * @return float
+     */
+    protected function getWithdrawFeeRate($merchant): float
+    {
+        if (!empty($merchant['commission_switch'])) {
+            return (float)$merchant['commission_rate'];
+        }
+        if (empty($merchant['category_id'])) return 0;
+        $categoryRate = app()->make(\app\common\repositories\system\merchant\MerchantCategoryRepository::class)
+            ->resolveCommissionRate((int)$merchant['category_id']);
+        if ($categoryRate > 0) {
+            return (float)bcmul((string)$categoryRate, '100', 4);
+        }
+        return 0;
+    }
+
+    /**
      * 保存申请
      * @param int $merId
      * @param array $data
@@ -305,7 +343,7 @@ class FinancialRepository extends BaseRepository
     public function saveApply(int $merId, array $data)
     {
         $make = app()->make(MerchantRepository::class);
-        $merchant = $make->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay')->find();
+        $merchant = $make->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay,commission_rate,commission_switch,category_id')->with(['merchantCategory'])->find();
         $moneyType = ($data['money_type'] ?? 'balance') === 'welfare' ? 'welfare' : 'balance';
 
         if ($data['financial_type'] == 1) {
@@ -338,6 +376,12 @@ class FinancialRepository extends BaseRepository
             $_money = bcsub($merchant['mer_money'], $data['extract_money'], 2);
         }
 
+        // 2026-09-24：手续费改为提现时收取（原来是订单支付时从商户收入里先扣，见 StoreOrderRepository）。
+        // 公益分销余额提现不收（该笔钱性质不同于订单收入，不走商户手续费）。
+        $withdrawRate = $moneyType === 'balance' ? $this->getWithdrawFeeRate($merchant) : 0;
+        $withdrawFee = $withdrawRate > 0 ? bcmul($data['extract_money'], bcdiv((string)$withdrawRate, '100', 6), 2) : '0.00';
+        $actualMoney = bcsub($data['extract_money'], $withdrawFee, 2);
+
         $sn = date('YmdHis' . $merId);
         $ret = [
             'status' => 0,
@@ -345,6 +389,9 @@ class FinancialRepository extends BaseRepository
             'mer_money' => $_money,
             'financial_sn' => $sn,
             'extract_money' => $data['extract_money'],
+            'withdraw_fee_rate' => $withdrawRate,
+            'withdraw_fee' => $withdrawFee,
+            'actual_money' => $actualMoney,
             'financial_type' => $data['financial_type'],
             'financial_account' => json_encode($financial_account, JSON_UNESCAPED_UNICODE),
             'financial_status' => 0,
@@ -352,12 +399,26 @@ class FinancialRepository extends BaseRepository
             'mark' => ($data['mark'] ?? '') . ($moneyType === 'welfare' ? '[公益分销]' : ''),
             'refusal' => '',
         ];
-        Db::transaction(function () use ($merId, $ret, $data, $make, $moneyType) {
+        Db::transaction(function () use ($merId, $ret, $data, $make, $moneyType, $withdrawFee, $sn) {
             $this->dao->create($ret);
             if ($moneyType === 'welfare') {
                 \think\facade\Db::name('merchant')->where('mer_id', $merId)->dec('mer_welfare_money', (float)$data['extract_money'])->update([]);
             } else {
                 $make->subMoney($merId, (float)$data['extract_money']);
+            }
+            // 2026-09-24：手续费流水沿用 order_charge 类型，跟以前订单支付时扣手续费记的类型一致，
+            // 这样"财务→平台账单"里"平台手续费"卡片、日/月账单详情不用改代码，来源从订单变成提现也能继续汇总到。
+            if (bccomp($withdrawFee, '0', 2) > 0) {
+                app()->make(FinancialRecordRepository::class)->dec([
+                    'order_id' => 0,
+                    'order_sn' => $sn,
+                    'user_info' => '商户提现手续费',
+                    'user_id' => 0,
+                    'financial_type' => FinancialRecordRepository::FINANCIA_TYPE_ORDER_CHARGE,
+                    'number' => $withdrawFee,
+                    'type' => 1,
+                    'pay_type' => 0,
+                ], $merId);
             }
         });
     }

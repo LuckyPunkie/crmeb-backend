@@ -96,7 +96,7 @@ class Goods extends BaseController
             $data = $this->getDouyinCategoryTags();
         } elseif ($type == 'recommend') {
             // 推荐 Tab 仅跨平台价格筛选，不带各平台类目
-            $data = $this->getTaobaoPriceTags();
+            $data = $this->resolveBuiltinPriceTags('recommend', $this->getRecommendPriceTagDefaults());
         } elseif ($type == 'brand') {
             $config = $this->serviceBrandTabRepository->getPublicConfig();
             foreach ($config['brands'] as $idx => $brand) {
@@ -150,24 +150,11 @@ class Goods extends BaseController
     }
 
     /**
-     * 平台直连：Tab 已开启但当前无货 / 探活失败 → 不下发（App 隐藏 Tab）
+     * 平台直连：Tab 已开启但持续无货 → 不下发（App 隐藏 Tab）；探活在队列里跑，这里只读缓存
      */
     protected function probeOfficialTabHasGoods(array $tab): bool
     {
-        $tabKey = (string) ($tab['tab_key'] ?? '');
-        $cacheKey = 'taoke_official_tab_probe:' . md5($tabKey . ':' . (int) ($tab['id'] ?? 0));
-        $cached = Cache::get($cacheKey);
-        if ($cached !== null && $cached !== '') {
-            return (int) $cached === 1;
-        }
-        try {
-            $has = $this->serviceGoodsRepository->probeOfficialTabHasGoods($tab);
-        } catch (\Throwable $e) {
-            Log::warning('服务页 Tab 探活失败', ['tab_key' => $tabKey, 'error' => $e->getMessage()]);
-            $has = false;
-        }
-        Cache::set($cacheKey, $has ? 1 : 0, $has ? 600 : 180);
-        return $has;
+        return $this->serviceGoodsRepository->isOfficialTabVisible($tab);
     }
 
     /**
@@ -577,14 +564,114 @@ class Goods extends BaseController
      *
      * @return list<array{id: string, text: string, keyword: string}>
      */
-    protected function getTaobaoPriceTags(): array
+    /**
+     * @return list<array{id: string, text: string, keyword: string}>
+     */
+    protected function getRecommendPriceTagDefaults(): array
     {
         return [
+            ['id' => 'rec_p19', 'text' => '1.9元包邮', 'keyword' => '1.9包邮'],
+            ['id' => 'rec_p39', 'text' => '3.9元包邮', 'keyword' => '3.9包邮'],
+            ['id' => 'rec_p69', 'text' => '6.9元包邮', 'keyword' => '6.9包邮'],
+            ['id' => 'rec_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
+        ];
+    }
+
+    protected function getTaobaoPriceTags(): array
+    {
+        $defaults = [
             ['id' => 'tb_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
             ['id' => 'tb_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
             ['id' => 'tb_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
             ['id' => 'tb_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
         ];
+
+        return $this->resolveBuiltinPriceTags('taobao', $defaults);
+    }
+
+    /**
+     * 内置联盟 Tab：价格 pill 读 eb_service_tab_config.brands；类目仍由各平台接口/代码追加
+     */
+    protected function resolveBuiltinPriceTags(string $tabKey, array $defaults): array
+    {
+        $channel = $this->goodsDriverChannel === 'official'
+            ? ServiceTabConfigRepository::CHANNEL_OFFICIAL
+            : ServiceTabConfigRepository::CHANNEL_LEGACY;
+        $brands = $this->serviceTabConfigRepository->getBuiltinBrands($tabKey, $channel);
+        if ($brands === []) {
+            return $defaults;
+        }
+        $built = $this->buildPriceTagsFromAdminBrands($brands, $tabKey);
+        return $built !== [] ? $built : $defaults;
+    }
+
+    /**
+     * @param list<string> $brands 后台「筛选标签」文案，如 1.9元包邮
+     * @return list<array<string, mixed>>
+     */
+    protected function buildPriceTagsFromAdminBrands(array $brands, string $tabKey): array
+    {
+        $tags = [];
+        foreach (array_values($brands) as $i => $label) {
+            $text = trim((string) $label);
+            if ($text === '') {
+                continue;
+            }
+            $yuan = $this->parseYuanFromPriceLabel($text);
+            $idSuffix = (string) $i;
+            if ($tabKey === 'kuaishou') {
+                $tags[] = [
+                    'id'           => 'ks_p' . $idSuffix,
+                    'text'         => $text,
+                    'range_id'     => 'PRICE',
+                    'range_from'   => 0,
+                    'range_to'     => $yuan !== null ? (int) round($yuan * 100) : 0,
+                ];
+                continue;
+            }
+            if ($tabKey === 'douyin') {
+                $tags[] = [
+                    'id'           => 'dy_p' . $idSuffix,
+                    'text'         => $text,
+                    'range_id'     => 'PRICE',
+                    'range_from'   => 0,
+                    'range_to'     => $yuan ?? 0,
+                ];
+                continue;
+            }
+            $keyword = $yuan !== null ? $this->formatTaokePriceKeyword($yuan) : $text;
+            $idPrefix = [
+                'taobao'   => 'tb_p',
+                'jd'       => 'jd_p',
+                'pdd'      => 'p',
+                'wph'      => 'wph_p',
+            ][$tabKey] ?? ('pr_p');
+            $tags[] = [
+                'id'      => $idPrefix . $idSuffix,
+                'text'    => $text,
+                'keyword' => $keyword,
+            ];
+        }
+        return $tags;
+    }
+
+    protected function parseYuanFromPriceLabel(string $text): ?float
+    {
+        if (preg_match('/(\d+(?:\.\d+)?)\s*元/u', $text, $m)) {
+            return (float) $m[1];
+        }
+        if (preg_match('/(\d+(?:\.\d+)?)/u', $text, $m)) {
+            return (float) $m[1];
+        }
+
+        return null;
+    }
+
+    protected function formatTaokePriceKeyword(float $yuan): string
+    {
+        $s = rtrim(rtrim(sprintf('%.2F', $yuan), '0'), '.');
+
+        return $s . '包邮';
     }
 
     /**
@@ -607,12 +694,12 @@ class Goods extends BaseController
      */
     protected function getWphCategoryTags(): array
     {
-        $priceTags = [
+        $priceTags = $this->resolveBuiltinPriceTags('wph', [
             ['id' => 'wph_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
             ['id' => 'wph_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
             ['id' => 'wph_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
             ['id' => 'wph_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
-        ];
+        ]);
         try {
             $cats = $this->serviceGoodsRepository->getWphCategoryTags();
             return array_merge($priceTags, $cats ?: []);
@@ -647,12 +734,14 @@ class Goods extends BaseController
      */
     protected function getKuaishouPriceTags(): array
     {
-        return [
+        $defaults = [
             ['id' => 'ks_p99', 'text' => '9.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 990],
             ['id' => 'ks_p199', 'text' => '19.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 1990],
             ['id' => 'ks_p299', 'text' => '29.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 2990],
             ['id' => 'ks_p399', 'text' => '39.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 3990],
         ];
+
+        return $this->resolveBuiltinPriceTags('kuaishou', $defaults);
     }
 
     /**
@@ -660,12 +749,12 @@ class Goods extends BaseController
      */
     protected function getJdCategoryTags(): array
     {
-        $priceTags = [
+        $priceTags = $this->resolveBuiltinPriceTags('jd', [
             ['id' => 'jd_p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
             ['id' => 'jd_p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
             ['id' => 'jd_p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
             ['id' => 'jd_p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
-        ];
+        ]);
         // jd union jingfen/material eliteId
         $eliteTags = [
             ['id' => 1, 'text' => '猜你喜欢'],
@@ -721,12 +810,12 @@ class Goods extends BaseController
      */
     protected function getDouyinCategoryTags(): array
     {
-        $priceTags = [
+        $priceTags = $this->resolveBuiltinPriceTags('douyin', [
             ['id' => 'dy_p99', 'text' => '9.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 9.9],
             ['id' => 'dy_p199', 'text' => '19.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 19.9],
             ['id' => 'dy_p299', 'text' => '29.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 29.9],
             ['id' => 'dy_p399', 'text' => '39.9元包邮', 'range_id' => 'PRICE', 'range_from' => 0, 'range_to' => 39.9],
-        ];
+        ]);
         $categoryTags = [
             ['id' => 1, 'text' => '热销爆款', 'keyword' => '热销'],
             ['id' => 2, 'text' => '美妆护肤', 'keyword' => '美妆护肤'],
@@ -740,12 +829,12 @@ class Goods extends BaseController
     protected function getPddCategoryTags(): array
     {
         // 带 keyword：走 pdd.ddk.goods.search；仅 id：走 activity_tags（多多进宝活动标）
-        $priceTags = [
+        $priceTags = $this->resolveBuiltinPriceTags('pdd', [
             ['id' => 'p99', 'text' => '9.9元包邮', 'keyword' => '9.9包邮'],
             ['id' => 'p199', 'text' => '19.9元包邮', 'keyword' => '19.9包邮'],
             ['id' => 'p299', 'text' => '29.9元包邮', 'keyword' => '29.9包邮'],
             ['id' => 'p399', 'text' => '39.9元包邮', 'keyword' => '39.9包邮'],
-        ];
+        ]);
         $activityTags = [
             ['id' => 4, 'text' => '秒杀'],
             ['id' => 7, 'text' => '百亿补贴'],

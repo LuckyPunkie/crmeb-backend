@@ -430,12 +430,9 @@ class StoreOrderRepository extends BaseRepository
                     }
                 }
 
-                $_order_rate = 0;
-                if ($order['commission_rate'] > 0) {
-                    $commission_rate = bcdiv((string)$order['commission_rate'], '100', 6);
-                    $_order_rate = bcmul($_payPrice, (string)$commission_rate, 2);
-                    $_payPrice = bcsub($_payPrice, $_order_rate, 2);
-                }
+                // 2026-09-24：手续费改为商户提现时收取（FinancialRepository::saveApply），
+                // 订单支付环节不再从 $_payPrice 里扣除，商户到账余额=订单全额（扣完分销佣金后）。
+                // $order['commission_rate'] 快照仍保留在订单上，仅作为历史费率参考，不再参与本次计算。
                 if (!$presell) {
                     if ($order['extension_one'] > 0) {
                         $finance[] = [
@@ -467,21 +464,7 @@ class StoreOrderRepository extends BaseRepository
                             'pay_type' => $order->pay_type,
                         ];
                     }
-                    if ($order['commission_rate'] > 0) {
-                        $finance[] = [
-                            'order_id' => $order->order_id,
-                            'order_sn' => $order->order_sn,
-                            'user_info' => $groupOrder->user->nickname ?? '游客',
-                            'user_id' => $uid,
-                            'financial_type' => $financialRecordRepository::FINANCIA_TYPE_ORDER_CHARGE,
-                            'financial_pm' => 0,
-                            'type' => 1,
-                            'number' => $_order_rate,
-                            'mer_id' => $order->mer_id,
-                            'financial_record_sn' => $financeSn . ($i++),
-                            'pay_type' => $groupOrder->pay_type
-                        ];
-                    }
+                    // 2026-09-24：手续费（order_charge）流水不再在订单支付时生成，改为提现时记 withdraw_charge，见 FinancialRepository::saveApply
                     $finance[] = [
                         'order_id' => $order->order_id,
                         'order_sn' => $order->order_sn,

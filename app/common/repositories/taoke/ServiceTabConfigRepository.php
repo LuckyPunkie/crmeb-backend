@@ -19,6 +19,9 @@ class ServiceTabConfigRepository extends BaseRepository
     /** 服务页「逛网店」内置 Tab（跳转店铺街，非商品平台） */
     const TAB_KEY_SHOP_STREET = 'shop_street';
 
+    /** 服务页全平台汇总「推荐」Tab */
+    const TAB_KEY_RECOMMEND = 'recommend';
+
     public function __construct(ServiceTabConfigDao $dao)
     {
         $this->dao = $dao;
@@ -27,6 +30,7 @@ class ServiceTabConfigRepository extends BaseRepository
     public function listAll(string $channel = self::CHANNEL_LEGACY): array
     {
         $channel = $this->normalizeChannel($channel);
+        $this->ensureRecommendTab($channel);
         if ($channel === self::CHANNEL_OFFICIAL) {
             $this->ensureShopStreetTab($channel);
         }
@@ -36,10 +40,30 @@ class ServiceTabConfigRepository extends BaseRepository
     public function listEnabled(string $channel = self::CHANNEL_LEGACY): array
     {
         $channel = $this->normalizeChannel($channel);
+        $this->ensureRecommendTab($channel);
         if ($channel === self::CHANNEL_OFFICIAL) {
             $this->ensureShopStreetTab($channel);
         }
         return array_map([$this, 'format'], $this->dao->enabled($channel));
+    }
+
+    /** 内置平台 Tab 在后台配置的筛选标签（价格 pill 文案） */
+    public function getBuiltinBrands(string $tabKey, string $channel = self::CHANNEL_LEGACY): array
+    {
+        $channel = $this->normalizeChannel($channel);
+        $tabKey = trim($tabKey);
+        if ($tabKey === '') {
+            return [];
+        }
+        $rowRaw = $this->dao->findByKey($tabKey, $channel);
+        if (!$rowRaw) {
+            return [];
+        }
+        $row = is_array($rowRaw) ? $rowRaw : $rowRaw->toArray();
+        if ((int) ($row['tab_type'] ?? 0) !== self::TYPE_BUILTIN) {
+            return [];
+        }
+        return $this->format($row)['brands'] ?? [];
     }
 
     public function findCustomByKey(string $tabKey, string $channel = self::CHANNEL_LEGACY): ?array
@@ -151,6 +175,25 @@ class ServiceTabConfigRepository extends BaseRepository
     protected function normalizeChannel(string $channel): string
     {
         return $channel === self::CHANNEL_OFFICIAL ? self::CHANNEL_OFFICIAL : self::CHANNEL_LEGACY;
+    }
+
+    /** 各通道保证存在「推荐」一行（排序默认高于各平台 Tab，显示在抖音等前面） */
+    public function ensureRecommendTab(string $channel = self::CHANNEL_OFFICIAL): void
+    {
+        $channel = $this->normalizeChannel($channel);
+        if ($this->dao->findByKey(self::TAB_KEY_RECOMMEND, $channel)) {
+            return;
+        }
+        $defaultBrands = ['1.9元包邮', '3.9元包邮', '6.9元包邮', '9.9元包邮'];
+        $this->dao->insert([
+            'channel'  => $channel,
+            'tab_key'  => self::TAB_KEY_RECOMMEND,
+            'tab_type' => self::TYPE_BUILTIN,
+            'name'     => '推荐',
+            'brands'   => json_encode($defaultBrands, JSON_UNESCAPED_UNICODE),
+            'status'   => 1,
+            'sort'     => 1000,
+        ]);
     }
 
     /** official 通道保证存在「逛网店」一行，与 eb_system_config shop_street_switch 对齐 */

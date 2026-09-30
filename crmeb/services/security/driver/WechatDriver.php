@@ -51,4 +51,29 @@ class WechatDriver
             'trace_id' => (string)($response->trace_id ?? ''),
         ];
     }
+
+    /**
+     * 提交图片/音频异步检测（media_check_async V2），结果由微信推送到小程序消息推送地址
+     *
+     * @param int $mediaType 1 音频 / 2 图片（微信不支持视频，视频需先抽帧）
+     * @return string trace_id
+     * @throws \Throwable 3 次均失败时抛出最后一次异常
+     */
+    public static function submitMediaAsync(string $mediaUrl, int $mediaType, int $scene, string $openid): string
+    {
+        $lastError = null;
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            try {
+                $response = MiniProgram::msgSecCheck($mediaUrl, $scene, $openid, $mediaType);
+                $traceId = $response instanceof WechatResponse ? (string)($response->trace_id ?? '') : '';
+                if ($traceId !== '') {
+                    return $traceId;
+                }
+                $lastError = new \RuntimeException('media_check_async 未返回 trace_id');
+            } catch (\Throwable $e) {
+                $lastError = $e;
+            }
+        }
+        throw $lastError;
+    }
 }

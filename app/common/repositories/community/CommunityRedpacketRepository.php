@@ -286,22 +286,10 @@ class CommunityRedpacketRepository extends BaseRepository
         if ($redpacket['uid'] != $uid) throw new ValidateException('非发布者无权审核', 10007);
         if ($task['status'] != 1) throw new ValidateException('当前状态不可审核');
 
-        Db::transaction(function () use ($taskDao, $taskId, $task, $redpacket, $isValid, $remark) {
-            if ($isValid) {
-                $taskDao->update($taskId, [
-                    'status' => 2,
-                    'review_remark' => $remark,
-                    'review_time' => date('Y-m-d H:i:s'),
-                ]);
-                $this->dao->update($redpacket['id'], [
-                    'completed_count' => Db::raw('completed_count + 1'),
-                ]);
-
-                $updated = $this->dao->get($redpacket['id']);
-                if ($updated['completed_count'] >= $updated['total_count']) {
-                    $this->dao->update($redpacket['id'], ['status' => 1]);
-                }
-            } else {
+        if ($isValid) {
+            $this->payoutTask($task, $redpacket, $remark, false);
+        } else {
+            Db::transaction(function () use ($taskDao, $taskId, $redpacket, $remark) {
                 $deadlinePassed = strtotime($redpacket['deadline']) < time();
                 $newStatus = $deadlinePassed ? 3 : 6;
                 $taskDao->update($taskId, [
@@ -312,11 +300,9 @@ class CommunityRedpacketRepository extends BaseRepository
                 $this->dao->update($redpacket['id'], [
                     'taken_count' => Db::raw('taken_count - 1'),
                 ]);
-            }
-        });
+            });
 
-        // 驳回时通知领取者
-        if (!$isValid) {
+            // 驳回时通知领取者
             $desc = '你的红包任务提交未通过审核';
             if ($remark !== '') {
                 $desc .= '：' . mb_substr($remark, 0, 80);
@@ -331,6 +317,156 @@ class CommunityRedpacketRepository extends BaseRepository
                 $desc
             );
         }
+    }
+
+    /**
+     * 红包任务打款：把红包金额真正发给领取者（分销余额），并通知领取者
+     *
+     * 2026-09-24：新建。原来审核通过只改状态、不给钱，这里补上真正的资金转移。
+     * 手动审核通过（confirmTask）和 72 小时超时自动确认（autoConfirmTimeoutTasks）共用这一段逻辑。
+     *
+     * @param array|\think\Model $task
+     * @param array|\think\Model $redpacket
+     * @param string $remark
+     * @param bool $auto 是否为系统自动确认（用于备注区分 + 通知文案区分）
+     */
+    protected function payoutTask($task, $redpacket, string $remark, bool $auto): void
+    {
+        $taskDao = app()->make(CommunityRedpacketTaskDao::class);
+        $amount = (string)$redpacket['amount_per_person'];
+        $receiverUid = (int)$task['uid'];
+
+        Db::transaction(function () use ($taskDao, $task, $redpacket, $remark, $amount, $receiverUid) {
+            $taskDao->update($task['id'], [
+                'status' => 2,
+                'review_remark' => $remark,
+                'review_time' => date('Y-m-d H:i:s'),
+            ]);
+            $this->dao->update($redpacket['id'], [
+                'completed_count' => Db::raw('completed_count + 1'),
+            ]);
+
+            // 红包金额从托管账户转入领取者账户——落分销余额，跟礼物/付费内容收益一致，走同一套提现通道
+            $receiver = app()->make(UserRepository::class)->get($receiverUid);
+            if ($receiver) {
+                $receiver->brokerage_price = bcadd((string)$receiver->brokerage_price, $amount, 2);
+                $receiver->save();
+                app()->make(UserBillRepository::class)->incBill($receiverUid, 'brokerage', 'redpacket_income', [
+                    'link_id' => $task['id'],
+                    'status' => 1,
+                    'title' => '红包任务收益',
+                    'number' => $amount,
+                    'mark' => '完成红包任务，获得 ¥' . number_format((float)$amount, 2, '.', ''),
+                    'balance' => $receiver->brokerage_price,
+                ]);
+            }
+
+            $updated = $this->dao->get($redpacket['id']);
+            if ($updated['completed_count'] >= $updated['total_count']) {
+                $this->dao->update($redpacket['id'], ['status' => 1]);
+            }
+        });
+
+        $desc = $auto ? '超过72小时未审核，系统自动确认，¥' . number_format((float)$amount, 2, '.', '') . '已到账'
+            : '恭喜！您的任务已通过审核，¥' . number_format((float)$amount, 2, '.', '') . '已到账';
+        $this->notifyRedpacketOwner(
+            $receiverUid,
+            (int)$redpacket['uid'],
+            'redpacket_confirm',
+            '红包任务审核通过',
+            (int)$redpacket['community_id'],
+            (int)$task['id'],
+            $desc
+        );
+    }
+
+    /**
+     * 72 小时超时未审核，系统自动确认发放
+     *
+     * 2026-09-24：新建，定时任务（见 crmeb/listens/AutoSettleRedpacketListen.php）调用。
+     * 只处理"已提交待审核"（status=1）且提交时间超过 72 小时的任务，跟红包本身是否已过截止时间无关——
+     * 审核窗口和领取窗口是两回事，红包过期不影响已提交任务的审核结算。
+     */
+    public function autoConfirmTimeoutTasks(int $limit = 200): int
+    {
+        $deadline = date('Y-m-d H:i:s', strtotime('-72 hours'));
+        $tasks = Db::name('community_redpacket_task')
+            ->where('status', 1)
+            ->where('submit_time', '<=', $deadline)
+            ->limit($limit)
+            ->select();
+
+        $count = 0;
+        foreach ($tasks as $task) {
+            $redpacket = $this->dao->get($task['redpacket_id']);
+            if (!$redpacket) continue;
+            $this->payoutTask($task, $redpacket, '超时未审核，系统自动确认', true);
+            $count++;
+        }
+        return $count;
+    }
+
+    /**
+     * 红包到期结算：把没发出去的钱退还给发布者
+     *
+     * 2026-09-24：新建，定时任务调用。只处理两种"确定不会再有人拿到钱"的名额：
+     * 1. 从未被领取的名额（total_count - taken_count）
+     * 2. 已领取但从未提交答案就到期的任务（status=0）
+     * "已提交待审核"（status=1）的任务不在这里处理，留给 autoConfirmTimeoutTasks 走 72 小时超时自动确认，
+     * 避免红包一过期就把还在审核窗口内的钱强行退回，抢在审核之前把钱收走。
+     */
+    public function settleExpiredRedpackets(int $limit = 200): int
+    {
+        $now = date('Y-m-d H:i:s');
+        $redpackets = $this->dao->search(['status' => 0])
+            ->where('pay_status', 1)
+            ->where('deadline', '<', $now)
+            ->limit($limit)
+            ->select();
+
+        $taskDao = app()->make(CommunityRedpacketTaskDao::class);
+        $count = 0;
+        foreach ($redpackets as $redpacket) {
+            Db::transaction(function () use ($redpacket, $taskDao) {
+                // 已领取但从未提交的任务，标记过期，释放名额（不再计入 taken_count，避免和"从未领取"的名额重复退款）
+                $neverSubmitted = Db::name('community_redpacket_task')
+                    ->where('redpacket_id', $redpacket['id'])
+                    ->where('status', 0)
+                    ->select();
+                foreach ($neverSubmitted as $t) {
+                    $taskDao->update($t['id'], ['status' => 5, 'review_time' => date('Y-m-d H:i:s')]);
+                }
+
+                // 未领取的名额 + 领取但从未提交的名额，都属于"确定发不出去的钱"
+                $unclaimedCount = max(0, (int)$redpacket['total_count'] - (int)$redpacket['taken_count']);
+                $refundCount = $unclaimedCount + count($neverSubmitted);
+                $refundAmount = bcmul((string)$redpacket['amount_per_person'], (string)$refundCount, 2);
+
+                $this->dao->update($redpacket['id'], [
+                    'status' => 2,
+                    'refunded_amount' => bcadd((string)$redpacket['refunded_amount'], $refundAmount, 2),
+                ]);
+
+                if (bccomp($refundAmount, '0', 2) > 0) {
+                    $publisher = app()->make(UserRepository::class)->get((int)$redpacket['uid']);
+                    if ($publisher) {
+                        // 退回发布者原来扣款的那个钱包（now_money），不是分销余额——这笔钱本来就是发布者自己的钱，只是没花出去
+                        $publisher->now_money = bcadd((string)$publisher->now_money, $refundAmount, 2);
+                        $publisher->save();
+                        app()->make(UserBillRepository::class)->incBill((int)$redpacket['uid'], 'now_money', 'redpacket_refund', [
+                            'link_id' => $redpacket['id'],
+                            'status' => 1,
+                            'title' => '红包过期退款',
+                            'number' => $refundAmount,
+                            'mark' => '红包求助已截止，未发放名额 ¥' . number_format((float)$refundAmount, 2, '.', '') . ' 已退回',
+                            'balance' => $publisher->now_money,
+                        ]);
+                    }
+                }
+            });
+            $count++;
+        }
+        return $count;
     }
 
     /**

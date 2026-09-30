@@ -25,6 +25,8 @@ use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\store\order\StoreGroupOrderRepository;
 use app\common\repositories\store\order\StoreOrderCreateRepository;
 use app\common\repositories\store\order\StoreOrderReceiptRepository;
+use app\common\repositories\store\scanOrder\ScanOrderOrderRepository;
+use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\delivery\DeliveryConfigRepository;
 use app\common\repositories\delivery\DeliveryStationRepository;
 use think\facade\Log;
@@ -94,6 +96,24 @@ class StoreOrder extends BaseController
         if(!$key){
             return app('json')->fail('订单操作超时,请刷新页面');
         }
+
+        // 扫码点餐下单（带 scan_mer_id）：校验台号、拼装备注、免支付时直接置已支付
+        $scanRepo = app()->make(ScanOrderOrderRepository::class);
+        $scan = $scanRepo->resolveContext(
+            (int)$this->request->param('scan_mer_id', 0),
+            (int)$this->request->param('scan_table_id', 0),
+            (string)$this->request->param('scan_sign', '')
+        );
+        $aiSessionNo = trim((string)$this->request->param('ai_session_no', ''));
+        $aiSummary = trim((string)$this->request->param('ai_order_summary', ''));
+        $scanUserRemark = '';
+        if ($scan) {
+            $post = $scanRepo->normalizePost($post, $this->request->userInfo());
+            [$mark, $scanUserRemark, $aiSummary] = $scanRepo->buildMark($scan, $mark, $aiSessionNo, $aiSummary);
+            if (!$scan['need_pay'] && in_array('offline', StoreOrderRepository::PAY_TYPE, true)) {
+                $payType = 'offline';
+            }
+        }
         $payType = ($payType === 'pc') ? 'balance' : $payType;
         if (!in_array($payType, StoreOrderRepository::PAY_TYPE, true))
             return app('json')->fail('请选择正确的支付方式');
@@ -113,6 +133,15 @@ class StoreOrder extends BaseController
                 , $this->request->userInfo(), $cartId, $extend, $mark, $receipt_data, $takes, $couponIds,
                 $useIntegral, $addressId, $post);
         });
+        if ($scan) {
+            // 扫码订单：打印/语音按扫码下单配置走，不再走商城通用自动打印
+            $noPay = $scanRepo->afterCreate($groupOrder, $scan, $scanUserRemark, $aiSessionNo, $aiSummary);
+            return app('json')->success([
+                'order_id' => $groupOrder->group_order_id,
+                'scan_no_pay' => $noPay ? 1 : 0,
+                'scan_table_label' => $scan['table_label'],
+            ]);
+        }
         //全部改成创建订单，下一步调用支付
         try{
             $orderList = $this->repository->getSearch([])->where('group_order_id',$groupOrder->group_order_id)->select();
@@ -445,6 +474,25 @@ class StoreOrder extends BaseController
 
         if(empty($data)) {
             return app('json')->fail('该商家暂未设置提货点，请切换其他配送方式');
+        }
+
+        // 自提点列表标记哪个是店铺自己的地址（地址完全一致或坐标一致才算，不做模糊匹配）
+        if ($params['switch_take']) {
+            $mer = app()->make(MerchantRepository::class)->get((int)$params['mer_id']);
+            $normalize = function ($text) {
+                return preg_replace('/\s+/u', '', trim((string)$text));
+            };
+            $merAddress = $mer ? $normalize($mer['mer_address']) : '';
+            $merLng = $mer && is_numeric($mer['long']) ? round((float)$mer['long'], 5) : null;
+            $merLat = $mer && is_numeric($mer['lat']) ? round((float)$mer['lat'], 5) : null;
+            foreach ($data as &$station) {
+                $sameAddress = $merAddress !== '' && $normalize($station['station_address'] ?? '') === $merAddress;
+                $sameLocation = $merLng !== null && $merLat !== null
+                    && is_numeric($station['lng'] ?? null) && is_numeric($station['lat'] ?? null)
+                    && round((float)$station['lng'], 5) === $merLng && round((float)$station['lat'], 5) === $merLat;
+                $station['is_shop_address'] = ($sameAddress || $sameLocation) ? 1 : 0;
+            }
+            unset($station);
         }
 
         return app('json')->success($data);

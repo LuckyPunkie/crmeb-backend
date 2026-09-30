@@ -130,8 +130,10 @@ class CommunityReplyRepository extends BaseRepository
         $all = $this->dao->getSearch($where)->count();
         // 计算已开始的内容数量
         $start = $this->dao->getSearch($where)->sum('count_start');
-        // 设置查询父级内容的条件
+        // 设置查询父级内容的条件；列表里已通过的评论所有人可见，待审评论仅评论者本人可见
+        unset($where['status']);
         $where['pid'] = 0;
+        $viewerUid = (int)($userInfo->uid ?? 0);
 
         // 最热按点赞数，最新按时间
         $order = ($sort === 'hot')
@@ -140,6 +142,14 @@ class CommunityReplyRepository extends BaseRepository
 
         // 设置查询顺序和隐藏字段，并加载关联数据
         $query = $this->dao->getSearch($where)
+            ->where(function ($q) use ($viewerUid) {
+                $q->where('status', 1);
+                if ($viewerUid) {
+                    $q->whereOr(function ($own) use ($viewerUid) {
+                        $own->where('uid', $viewerUid)->where('status', 0);
+                    });
+                }
+            })
             ->order($order)
             ->hidden(['refusal'])
             ->with([

@@ -38,6 +38,90 @@ class VideoCoverService
     }
 
     /**
+     * 按间隔抽帧 + 随机追加几帧（内容审核用：每 3~5 秒 1 帧，额外随机 2~3 帧）
+     * @return string[] 帧图片完整 URL；本站外的视频或无 ffmpeg 时返回空数组
+     */
+    public static function extractFrames(string $videoPath, int $intervalSec = 4, int $extraRandom = 2, int $maxFrames = 15): array
+    {
+        $local = self::resolveLocalPath($videoPath);
+        $ffmpeg = self::findFfmpeg();
+        if (!$local || !is_file($local) || !$ffmpeg) {
+            return [];
+        }
+
+        $duration = self::probeDuration($local);
+        if ($duration <= 0) {
+            $duration = 1.0;
+        }
+        $points = [];
+        for ($t = min(0.5, $duration / 2); $t < $duration; $t += max(1, $intervalSec)) {
+            $points[] = round($t, 2);
+        }
+        for ($i = 0; $i < $extraRandom; $i++) {
+            $points[] = round(mt_rand(0, (int)($duration * 100)) / 100, 2);
+        }
+        $points = array_values(array_unique($points));
+        sort($points);
+        if (count($points) > $maxFrames) {
+            $step = count($points) / $maxFrames;
+            $sampled = [];
+            for ($i = 0; $i < $maxFrames; $i++) {
+                $sampled[] = $points[(int)floor($i * $step)];
+            }
+            $points = $sampled;
+        }
+
+        $relDir = 'uploads/def/' . date('Ymd');
+        $absDir = rtrim(public_path(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relDir);
+        if (!is_dir($absDir)) {
+            @mkdir($absDir, 0755, true);
+        }
+        $site = rtrim((string)systemConfig('site_url'), '/');
+        $prefix = 'vf_' . date('His') . '_' . substr(md5($local . microtime(true)), 0, 8);
+        $urls = [];
+        foreach ($points as $idx => $sec) {
+            $name = $prefix . '_' . $idx . '.jpg';
+            $abs = $absDir . DIRECTORY_SEPARATOR . $name;
+            $cmd = sprintf(
+                '%s -y -ss %s -i %s -frames:v 1 -q:v 3 -vf %s %s 2>&1',
+                escapeshellarg($ffmpeg),
+                escapeshellarg((string)$sec),
+                escapeshellarg($local),
+                escapeshellarg("scale='min(720,iw)':-2"),
+                escapeshellarg($abs)
+            );
+            @exec($cmd, $output, $code);
+            if (is_file($abs) && filesize($abs) >= 100) {
+                $urls[] = $site . '/' . $relDir . '/' . $name;
+            }
+        }
+        return $urls;
+    }
+
+    protected static function probeDuration(string $local): float
+    {
+        $ffprobe = self::findFfprobe();
+        if ($ffprobe) {
+            $cmd = sprintf('%s -v error -show_entries format=duration -of csv=p=0 %s 2>&1', escapeshellarg($ffprobe), escapeshellarg($local));
+            @exec($cmd, $out, $code);
+            if ($code === 0 && isset($out[0]) && is_numeric(trim($out[0]))) {
+                return (float)trim($out[0]);
+            }
+        }
+        // 线上只有 ffmpeg 静态包、没有 ffprobe：从 ffmpeg -i 的输出里解析 Duration
+        $ffmpeg = self::findFfmpeg();
+        if (!$ffmpeg) {
+            return 0.0;
+        }
+        $lines = [];
+        @exec(sprintf('%s -i %s 2>&1', escapeshellarg($ffmpeg), escapeshellarg($local)), $lines);
+        if (preg_match('/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/', implode("\n", $lines), $m)) {
+            return (int)$m[1] * 3600 + (int)$m[2] * 60 + (float)$m[3];
+        }
+        return 0.0;
+    }
+
+    /**
      * 从视频 URL 截取封面（仅本站 uploads）
      */
     public static function extractFromUrl(string $videoUrl): ?string

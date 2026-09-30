@@ -197,8 +197,8 @@ class UserCertification extends BaseController
             return is_string($url) && $url !== '';
         }));
 
+        $openid = (string)($this->request->userInfo()->wechat->routine_openid ?? '');
         if (!empty($description)) {
-            $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
             ContentSecurityService::checkText(
                 (string)$description,
                 ContentSecurityService::SCENE_PROFILE,
@@ -213,6 +213,13 @@ class UserCertification extends BaseController
             $this->repository->save($uid, $type, $description, $images);
         } catch (\InvalidArgumentException $e) {
             return app('json')->fail($e->getMessage());
+        }
+
+        // 认证图片先发后审，违规时按后台驳回处理（改状态、撤标签、通知）；记录按 uid+类型覆盖，需清旧任务
+        if ($images) {
+            $certId = (int)Db::name('user_certification')->where('uid', $uid)->where('type', $type)->value('id');
+            ContentSecurityService::dispatchMediaCheck('certification', $certId, (int)$uid, $openid, $images,
+                ContentSecurityService::SCENE_PROFILE, true);
         }
 
         return app('json')->success('提交成功，AI审核已通过');

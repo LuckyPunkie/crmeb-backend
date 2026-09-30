@@ -310,15 +310,17 @@ class CommunityPaidContentRepository extends BaseRepository
                 $sellerUid = (int)$fresh['seller_uid'];
                 $seller = app()->make(UserRepository::class)->get($sellerUid);
                 if ($seller) {
-                    $seller->now_money = bcadd((string)$seller->now_money, (string)$sellerIncome, 2);
+                    // 2026-09-24：付费内容收益改进分销余额 brokerage_price（跟礼物/红包收益统一走佣金提现通道），
+                    // 不再进 now_money（now_money 目前没有真正的提现出口）。立即到账，不设冻结期。
+                    $seller->brokerage_price = bcadd((string)$seller->brokerage_price, (string)$sellerIncome, 2);
                     $seller->save();
-                    app()->make(UserBillRepository::class)->incBill($sellerUid, 'now_money', 'paid_content_income', [
+                    app()->make(UserBillRepository::class)->incBill($sellerUid, 'brokerage', 'paid_content_income', [
                         'link_id' => $fresh['id'],
                         'status' => 1,
                         'title' => '付费内容收益',
                         'number' => $sellerIncome,
                         'mark' => '付费内容解锁收入 ¥' . number_format($sellerIncome, 2, '.', ''),
-                        'balance' => $seller->now_money,
+                        'balance' => $seller->brokerage_price,
                     ]);
                 }
             }
@@ -348,12 +350,13 @@ class CommunityPaidContentRepository extends BaseRepository
 
     /**
      * 我的付费收益
-     * 可提现余额 = 用户余额 eb_user.now_money（与余额页一致）
+     * 2026-09-24：可提现余额改为 eb_user.brokerage_price（分销余额，能走 UserExtractRepository 真正提现），
+     * 不再是 now_money（那个字段没有提现出口）。
      */
     public function getIncome(int $uid, array $dateRange = [], int $page = 1, int $limit = 10)
     {
-        $user = Db::name('user')->where('uid', $uid)->field('uid,now_money')->find();
-        $withdrawable = $user ? (float)$user['now_money'] : 0.0;
+        $user = Db::name('user')->where('uid', $uid)->field('uid,brokerage_price')->find();
+        $withdrawable = $user ? (float)$user['brokerage_price'] : 0.0;
 
         $orderDao = app()->make(CommunityPaidOrderDao::class);
         $baseWhere = ['seller_uid' => $uid, 'pay_status' => 1];

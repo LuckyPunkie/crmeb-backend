@@ -354,9 +354,10 @@ class UserProfile extends BaseController
             }
         }
 
-        foreach (['about_me', 'cover_about'] as $bioField) {
+        $openid = (string)($this->request->userInfo()->wechat->routine_openid ?? '');
+        // 自我介绍 / 期望 是文字；cover_* / hobby_photo_* 是图片地址，走图片审核
+        foreach (['about_me', 'hope_text'] as $bioField) {
             if (!empty($filtered[$bioField])) {
-                $openid = $this->request->userInfo()->wechat->routine_openid ?? '';
                 ContentSecurityService::checkText(
                     (string)$filtered[$bioField],
                     ContentSecurityService::SCENE_PROFILE,
@@ -371,6 +372,15 @@ class UserProfile extends BaseController
         if (!empty($filtered)) {
             $this->repository->save($uid, $filtered);
         }
+
+        // 主页封面图先发后审，违规时清除对应图片
+        $coverImages = [];
+        foreach (['cover_info', 'cover_about', 'cover_hope', 'cover_hobby', 'hobby_photo_1', 'hobby_photo_2'] as $coverField) {
+            if (!empty($filtered[$coverField])) {
+                $coverImages[] = (string)$filtered[$coverField];
+            }
+        }
+        ContentSecurityService::dispatchMediaCheck('profile_cover', (int)$uid, (int)$uid, $openid, $coverImages, ContentSecurityService::SCENE_PROFILE);
         if (!empty($extraPatch)) {
             $this->repository->mergeExtraFields($uid, $extraPatch);
         }

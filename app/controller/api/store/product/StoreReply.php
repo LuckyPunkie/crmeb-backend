@@ -135,6 +135,15 @@ class StoreReply extends BaseController
         // 将评价数据提交到仓库进行保存
         $this->repository->reply($data);
 
+        // 评价配图先发后审，违规时清除对应图片
+        if (!empty($data['pics'])) {
+            $replyId = (int)\think\facade\Db::name('store_product_reply')
+                ->where('uid', $data['uid'])->where('order_product_id', $data['order_product_id'])
+                ->order('reply_id', 'desc')->value('reply_id');
+            ContentSecurityService::dispatchMediaCheck('goods_comment', $replyId, (int)$data['uid'],
+                $user->wechat->routine_openid ?? '', (array)$data['pics'], ContentSecurityService::SCENE_COMMENT);
+        }
+
         // 返回一个表示操作成功的JSON响应
         return app('json')->success('评价成功');
     }

@@ -51,6 +51,12 @@ return [
              \crmeb\listens\AutoUnLockBrokerageListen::class,
             // 礼物收益 7 天后解冻
              \crmeb\listens\AutoUnlockGiftIncomeListen::class,
+            // 红包任务超过72小时未审核，系统自动确认发放
+             \crmeb\listens\AutoConfirmRedpacketTaskListen::class,
+            // 红包求助到期结算，没发出去的钱退还发布者
+             \crmeb\listens\SettleExpiredRedpacketListen::class,
+            // 媒体内容审核超时未回调，按服务不可用放行
+             \crmeb\listens\ReleaseStaleMediaCheckListen::class,
             // 自动发送短信提醒用户支付 10分钟未支付提醒
              \crmeb\listens\AutoSendPayOrderSmsListen::class,
             //自动同步短信状态
