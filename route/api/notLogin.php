@@ -56,6 +56,7 @@ Route::get('lbs/geocoder', 'api.Common/lbs_geocoder');
 Route::get('lbs/tianditu_geocoder', 'api.Common/tianditu_geocoder');
 //地点搜索（天地图）
 Route::get('lbs/tianditu_suggestion', 'api.Common/tianditu_suggestion');
+Route::get('lbs/tianditu_city_center', 'api.Common/tianditu_city_center');
 //位置信息转经纬度
 Route::get('lbs/address', 'api.Common/lbs_address');
 //地点输入提示（多 POI，可按城市限制）

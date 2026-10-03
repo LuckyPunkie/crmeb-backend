@@ -106,6 +106,19 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // 印象墙开启弹窗文案
+    Route::group('user/impression_wall_tip', function () {
+        Route::get('detail', '/detail')->name('systemUserImpressionWallTipDetail')->option([
+            '_alias' => '详情',
+        ]);
+        Route::post('save', '/save')->name('systemUserImpressionWallTipSave')->option([
+            '_alias' => '保存',
+        ]);
+    })->prefix('admin.user.ImpressionWallTip')->option([
+        '_path' => '/user/impression_wall_tip',
+        '_auth' => true,
+    ]);
+
     //用户标签
     Route::group('user/label', function () {
         Route::get('lst', '/lst')->name('systemUserLabelLst')->option([

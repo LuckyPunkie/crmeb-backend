@@ -270,6 +270,8 @@ Route::group(function () {
         Route::get('pay_product/lst', 'Community/payList');
         Route::get('rela_product/lst', 'Community/relationList');
         Route::get('hist_product/lst', 'Community/historyList');
+        // 漫步：清除自己的位置留痕
+        Route::post('roam/clear', 'Community/clearRoamTrace');
 
         Route::post('fans/:id', 'Community/setFocus');
         Route::get('fans/lst', 'Community/getUserFans');

@@ -115,6 +115,9 @@ class PddOfficialService extends BaseServices
             'custom_parameters' => $customParameters,
             'goods_sign_list' => json_encode([$goodsSign], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
             'generate_we_app' => 'true',
+            // App 直唤起拼多多（避免 mobile_url H5 先跳系统浏览器）
+            'generate_schema_url' => 'true',
+            'generate_short_url' => 'true',
         ]);
     }
 

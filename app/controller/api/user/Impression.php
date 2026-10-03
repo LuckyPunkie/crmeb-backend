@@ -32,6 +32,12 @@ class Impression extends BaseController
         $data = $this->repository->summary($ownerUid);
         $viewerUid = $this->request->isLogin() ? (int) $this->request->userInfo()->uid : 0;
         $data['is_owner_view'] = $viewerUid > 0 && $viewerUid == $ownerUid;
+        // 墙主本人（个人资料页开关）：带上开启 / 关闭确认弹窗文案
+        if ($data['is_owner_view']) {
+            $tips = $this->repository->getWallTips();
+            $data['open_tip'] = $tips['open'];
+            $data['close_tip'] = $tips['close'];
+        }
         return app('json')->success($data);
     }
 

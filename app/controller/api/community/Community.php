@@ -147,17 +147,20 @@ class Community extends BaseController
         ]);
         [$page, $limit] = $this->getPage();
 
-        // 邂逅 Tab：登录用户上报了合法坐标 → 写入 eb_user_profile，用于后续距离查询
+        // 漫步（原邂逅）Tab：登录用户上报了合法坐标 → 写入 eb_user_profile（同一用户只留痕一处，新位置直接覆盖）
+        // 只在第 1 页写；no_trace=1（用户刚清除留痕后的筛选重拉）只查不写
         $lat = isset($where['latitude']) ? (float)$where['latitude'] : 0;
         $lng = isset($where['longitude']) ? (float)$where['longitude'] : 0;
         $isEncounter = strtolower(trim((string)($where['social_tab'] ?? ''))) === 'encounter';
-        if ($isEncounter && $this->user && $lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180 && ($lat != 0 || $lng != 0)) {
+        if ($isEncounter && $page <= 1 && !$this->request->param('no_trace') && $this->user && $lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180 && ($lat != 0 || $lng != 0)) {
             try {
                 $exists = \think\facade\Db::name('user_profile')->where('uid', $this->user->uid)->count();
                 $payload = [
                     'latitude' => $lat,
                     'longitude' => $lng,
                     'last_located_at' => date('Y-m-d H:i:s'),
+                    'roam_state' => (int)$this->request->param('roam_state', 0) === 1 ? 1 : 0,
+                    'roam_place' => mb_substr(trim((string)$this->request->param('roam_place', '')), 0, 100),
                 ];
                 if ($exists) {
                     \think\facade\Db::name('user_profile')->where('uid', $this->user->uid)->update($payload);
@@ -170,9 +173,28 @@ class Community extends BaseController
             }
         }
 
+        // 漫步：列表里不显示自己（自己刚留痕，距离永远是 0）
+        if ($isEncounter && $this->user) {
+            $where['exclude_uid'] = (int)$this->user->uid;
+        }
+
         $userRepository = app()->make(UserRepository::class);
 
         return app('json')->success($userRepository->getCommunityUserList($where, $page, $limit));
+    }
+
+    /**
+     * 漫步：清除自己的位置留痕（别人的漫步列表里不再出现）
+     * @return \think\response\Json
+     */
+    public function clearRoamTrace()
+    {
+        \think\facade\Db::name('user_profile')->where('uid', $this->request->uid())->update([
+            'latitude' => null,
+            'longitude' => null,
+            'roam_place' => '',
+        ]);
+        return app('json')->success('已清除位置信息');
     }
 
     /**

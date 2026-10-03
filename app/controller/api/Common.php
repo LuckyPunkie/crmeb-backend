@@ -592,6 +592,50 @@ class Common extends BaseController
     }
 
     /** @return array<int, array> */
+    /**
+     * 城市名 → 城市中心坐标（天地图行政区划，GCJ-02），供定位页城市列表选城用（前端城市表没坐标的城市）
+     * 每个城市只查一次，缓存 30 天（天地图 tk 短时间连续请求会限流）
+     */
+    public function tianditu_city_center()
+    {
+        $city = trim((string)$this->request->param('city/s', ''));
+        if ($city === '' || mb_strlen($city) > 20) {
+            return app('json')->fail('城市名错误');
+        }
+        $cacheKey = 'tianditu_city_center_' . md5($city);
+        $cache = Cache::store();
+        if ($cache->has($cacheKey)) {
+            return app('json')->success($cache->get($cacheKey));
+        }
+        $json = $this->tiandituGet('http://api.tianditu.gov.cn/v2/administrative', [
+            'keyword' => $city,
+            'childLevel' => 0,
+            'extensions' => 'false',
+        ]);
+        $districts = $json['data']['district'] ?? [];
+        if (!$districts) {
+            // 限流 / 查不到：不缓存，前端提示换一个
+            return app('json')->success([]);
+        }
+        // 同名时优先地级（level 3），如「阿克苏」取阿克苏地区而不是阿克苏市
+        $hit = $districts[0];
+        foreach ($districts as $d) {
+            if ((int)($d['level'] ?? 0) === 3) {
+                $hit = $d;
+                break;
+            }
+        }
+        $wLng = (float)($hit['center']['lng'] ?? 0);
+        $wLat = (float)($hit['center']['lat'] ?? 0);
+        if (!$wLng || !$wLat) {
+            return app('json')->success([]);
+        }
+        [$lng, $lat] = $this->wgs84ToGcj02($wLng, $wLat);
+        $data = ['name' => (string)($hit['name'] ?? $city), 'latitude' => round($lat, 6), 'longitude' => round($lng, 6)];
+        $cache->set($cacheKey, $data, 86400 * 30);
+        return app('json')->success($data);
+    }
+
     private function tiandituSearchPois(array $post): array
     {
         $json = $this->tiandituGet('http://api.tianditu.gov.cn/v2/search', [

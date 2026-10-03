@@ -203,11 +203,14 @@ class JdOfficialService extends BaseServices
      * @param string $positionId 推广位ID
      * @param string $ext         subUnionId / ext1 等（回传对账用）
      */
-    public function promotionCommon(string $materialId, string $positionId = '', string $ext = ''): array
+    public function promotionCommon(string $materialId, string $positionId = '', string $ext = '', int $sceneId = 1): array
     {
+        [$siteId, $posId] = $this->resolveSiteAndPosition($positionId);
         $promotionCodeReq = [
-            'materialId' => $materialId,
-            'siteId'     => $positionId ?: ($this->siteId ?: $this->pid),
+            'materialId'  => $materialId,
+            'siteId'      => $siteId,
+            'positionId'  => $posId,
+            'sceneId'     => $sceneId,
         ];
         if ($this->unionId !== '') {
             $promotionCodeReq['unionId'] = (int) $this->unionId;
@@ -216,6 +219,65 @@ class JdOfficialService extends BaseServices
             $promotionCodeReq['ext1'] = $ext;
         }
         return $this->call('jd.union.open.promotion.common.get', ['promotionCodeReq' => $promotionCodeReq]);
+    }
+
+    /**
+     * 导购/社交媒体转链（微信小程序等）
+     * method: jd.union.open.promotion.bysubunionid.get
+     */
+    public function promotionBySubUnionId(string $materialId, string $subUnionId, int $sceneId = 2): array
+    {
+        [$siteId, $posId] = $this->resolveSiteAndPosition('');
+        $promotionCodeReq = [
+            'materialId'  => $materialId,
+            'subUnionId'  => $subUnionId,
+            'siteId'      => $siteId,
+            'positionId'  => $posId,
+            'sceneId'     => $sceneId,
+        ];
+        if ($this->unionId !== '') {
+            $promotionCodeReq['unionId'] = (int) $this->unionId;
+        }
+        return $this->call('jd.union.open.promotion.bysubunionid.get', ['promotionCodeReq' => $promotionCodeReq]);
+    }
+
+    /**
+     * 联盟转链结果 → uniapp extractJdLinkTargets 字段
+     */
+    public function formatPromotionLink(array $data, string $via = ''): array
+    {
+        $click = (string) ($data['clickURL'] ?? $data['clickUrl'] ?? '');
+        $short = (string) ($data['shortURL'] ?? $data['shortUrl'] ?? '');
+        if ($short === '') {
+            $short = $click;
+        }
+        $weChat = (string) ($data['weChatShortLink'] ?? $data['weChatUrl'] ?? $data['wechatShortUrl'] ?? '');
+        return [
+            'clickURL'        => $click,
+            'clickUrl'        => $click,
+            'shortURL'        => $short,
+            'shortUrl'        => $short,
+            'jCommand'        => (string) ($data['jCommand'] ?? $data['command'] ?? ''),
+            'weChatShortLink' => $weChat,
+            '_link_via'       => $via,
+            'fallback'        => false,
+        ];
+    }
+
+    protected function resolveSiteAndPosition(string $positionIdOverride = ''): array
+    {
+        $siteId = (string) $this->siteId;
+        $posId = $positionIdOverride !== '' ? $positionIdOverride : (string) $this->pid;
+        if ($this->fullPid !== '') {
+            $parts = explode('_', $this->fullPid);
+            if ($siteId === '' && isset($parts[1])) {
+                $siteId = (string) $parts[1];
+            }
+            if ($posId === '' && isset($parts[2])) {
+                $posId = (string) $parts[2];
+            }
+        }
+        return [$siteId, $posId];
     }
 
     /**

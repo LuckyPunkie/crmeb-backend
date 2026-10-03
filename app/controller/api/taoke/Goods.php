@@ -8,6 +8,7 @@ use app\common\repositories\taoke\ServiceGoodsRepository;
 use app\common\repositories\taoke\ServiceTabConfigRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\taoke\DingDanXiaService;
+use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
 use crmeb\services\taoke\PddOfficialService;
 use think\App;
@@ -54,11 +55,14 @@ class Goods extends BaseController
 
     protected PddOfficialService $pddOfficial;
 
+    protected JdOfficialService $jdOfficial;
+
     public function __construct(
         App $app,
         JuTuiKeService $jutuikeService,
         DingDanXiaService $dingdanxiaService,
         PddOfficialService $pddOfficial,
+        JdOfficialService $jdOfficial,
         CommissionRepository $commissionRepository,
         ServiceGoodsRepository $serviceGoodsRepository,
         ServiceBrandTabRepository $serviceBrandTabRepository,
@@ -68,6 +72,7 @@ class Goods extends BaseController
         $this->jutuikeService = $jutuikeService;
         $this->dingdanxiaService = $dingdanxiaService;
         $this->pddOfficial = $pddOfficial;
+        $this->jdOfficial = $jdOfficial;
         $this->commissionRepository = $commissionRepository;
         $this->serviceGoodsRepository = $serviceGoodsRepository->withDriverChannel($this->goodsDriverChannel);
         $this->serviceBrandTabRepository = $serviceBrandTabRepository;
@@ -358,7 +363,7 @@ class Goods extends BaseController
      */
     public function createDouyinLiveLink()
     {
-        $uid = (string) ($this->request->uid() ?? '');
+        $uid = $this->optionalLoginUid();
         $context = [
             'room_id' => (string) $this->request->post('room_id', ''),
             'author_id' => (string) $this->request->post('author_id', $this->request->post('author_openid', '')),
@@ -388,7 +393,7 @@ class Goods extends BaseController
      */
     public function createDouyinLink()
     {
-        $uid = (string) ($this->request->uid() ?? '');
+        $uid = $this->optionalLoginUid();
         $context = [
             'itemid' => (string) $this->request->post('itemid', $this->request->post('goods_id', '')),
             'goods_id' => (string) $this->request->post('goods_id', ''),
@@ -405,6 +410,22 @@ class Goods extends BaseController
         } catch (\Exception $e) {
             Log::error('抖音商品转链失败', ['error' => $e->getMessage()]);
             return app('json')->fail('生成推广链接失败');
+        }
+    }
+
+    /**
+     * 路由 middleware force=false 时，未登录调用 uid() 会抛「请登录」。
+     * 抖音转链允许游客打开 App；已登录才把 uid 写入 channel 做跟单。
+     */
+    protected function optionalLoginUid(): string
+    {
+        try {
+            if (!$this->request->isLogin()) {
+                return '';
+            }
+            return (string) $this->request->uid();
+        } catch (\Throwable $e) {
+            return '';
         }
     }
 
@@ -1663,23 +1684,20 @@ class Goods extends BaseController
      */
     public function createJdLink()
     {
-        $uid = $this->request->uid() ?? 0;
-        // $uid = 2;
-        if (!$uid) {
-            return app('json')->fail('请先登录');
-        }
+        $uid = (int) ($this->request->uid() ?? 0);
         $materialUrl = $this->request->post('materialUrl', '');
 
         if (empty($materialUrl)) {
             return app('json')->fail('商品物料不能为空');
         }
         try {
-            // 获取用户
-            $user = \app\common\model\user\User::find($uid);
-            if (!$user) {
-                return app('json')->fail('用户不存在');
+            if ($uid > 0) {
+                $user = \app\common\model\user\User::find($uid);
+                if (!$user) {
+                    return app('json')->fail('用户不存在');
+                }
             }
-            
+
             $pid = 0;
             //暂时不需要推广位
             // // 如果已有PID，直接返回
@@ -1707,27 +1725,45 @@ class Goods extends BaseController
             // if (empty($pid)) {
             //     return app('json')->fail('生成推广位失败');
             // }
-            // [官方直连切换 2026-09-21] 原订单侠高佣转链已注释（释放账号）：
-            // $result = $this->dingdanxiaService->jdHighCommission($materialUrl,$pid);
-            // if (!empty($result)) {
-            //     return app('json')->success($result);
-            // }
-            // 当前仍可“转链成功”的原因：直接回传前端 POST 的 materialUrl（列表/详情京粉物料链），
-            // 并标记 fallback=true。这不是订单侠，也无高佣/跟单；正式释放订单侠账号前请关掉京东 Tab。
-            $fallbackUrl = $this->normalizeJdMaterialUrl($materialUrl);
-            if ($fallbackUrl === '') {
-                return app('json')->fail('京东转链已停用订单侠，且无可用物料链接');
+            $normalizedMaterial = $this->normalizeJdMaterialUrl($materialUrl);
+            if ($normalizedMaterial === '') {
+                return app('json')->fail('商品物料不能为空');
             }
-            Log::warning('京东转链跳过订单侠，使用物料链接兜底', [
+
+            $officialLink = $this->resolveJdOfficialPromotionLink($normalizedMaterial, (int) $uid);
+            if (!empty($officialLink)) {
+                return app('json')->success($officialLink);
+            }
+
+            // [官方直连切换 2026-09-21] 订单侠高佣转链作兜底（官方/导购 API 未开通或失败时）
+            try {
+                $result = $this->dingdanxiaService->jdHighCommission($normalizedMaterial, (int) $pid);
+                if (!empty($result) && is_array($result)) {
+                    $mapped = $this->normalizeJdDingDanXiaLink($result);
+                    if (!empty($mapped['clickURL']) || !empty($mapped['shortURL'])) {
+                        $mapped['_link_via'] = 'dingdanxia.jdHighCommission';
+                        $mapped['fallback'] = false;
+                        return app('json')->success($mapped);
+                    }
+                }
+            } catch (\Throwable $ddxErr) {
+                Log::warning('京东转链订单侠兜底失败', [
+                    'materialUrl' => $normalizedMaterial,
+                    'error' => $ddxErr->getMessage(),
+                ]);
+            }
+
+            Log::warning('京东转链使用物料链接兜底', [
                 'materialUrl' => $materialUrl,
-                'fallbackUrl' => $fallbackUrl,
+                'fallbackUrl' => $normalizedMaterial,
             ]);
             return app('json')->success([
-                'clickURL' => $fallbackUrl,
-                'clickUrl' => $fallbackUrl,
-                'shortURL' => $fallbackUrl,
+                'clickURL' => $normalizedMaterial,
+                'clickUrl' => $normalizedMaterial,
+                'shortURL' => $normalizedMaterial,
                 'fallback' => true,
-                '_note' => '非订单侠：仅回传 materialUrl 物料兜底；无高佣。释放账号前请关京东 Tab。',
+                '_link_via' => 'material_url',
+                '_note' => '官方/订单侠均未返回推广链，仅物料 URL；小程序可能无法跳京东购物小程序。',
             ]);
 
         } catch (\Exception $e) {
@@ -1738,6 +1774,73 @@ class Goods extends BaseController
             return app('json')->fail('生成推广链接失败');
         }
         
+    }
+
+    /**
+     * 京东官方转链：导购 bysubunionid → common(scene 2/1) → 失败返回 null
+     */
+    protected function resolveJdOfficialPromotionLink(string $materialUrl, int $uid): ?array
+    {
+        if (config('taoke.driver.jd') !== 'official') {
+            return null;
+        }
+        $materialUrl = trim($materialUrl);
+        if ($materialUrl === '') {
+            return null;
+        }
+        $ext = $uid > 0 ? (string) $uid : '';
+
+        if ($uid > 0) {
+            $bySub = $this->jdOfficial->parseBizPayload(
+                $this->jdOfficial->promotionBySubUnionId($materialUrl, (string) $uid, 2)
+            );
+            if (!empty($bySub)) {
+                $link = $this->jdOfficial->formatPromotionLink($bySub, 'jd.promotion.bysubunionid');
+                if ($this->jdPromotionLinkUsable($link)) {
+                    return $link;
+                }
+            }
+        }
+
+        foreach ([2, 1] as $sceneId) {
+            $common = $this->jdOfficial->parseBizPayload(
+                $this->jdOfficial->promotionCommon($materialUrl, '', $ext, $sceneId)
+            );
+            if (!empty($common)) {
+                $link = $this->jdOfficial->formatPromotionLink($common, 'jd.promotion.common.get.scene' . $sceneId);
+                if ($this->jdPromotionLinkUsable($link)) {
+                    return $link;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    protected function jdPromotionLinkUsable(array $link): bool
+    {
+        $click = trim((string) ($link['clickURL'] ?? $link['clickUrl'] ?? ''));
+        $short = trim((string) ($link['shortURL'] ?? $link['shortUrl'] ?? ''));
+        $wechat = trim((string) ($link['weChatShortLink'] ?? ''));
+        return $click !== '' || $short !== '' || $wechat !== '';
+    }
+
+    protected function normalizeJdDingDanXiaLink(array $result): array
+    {
+        $data = $result;
+        if (isset($result['data']) && is_array($result['data'])) {
+            $data = $result['data'];
+        }
+        $click = (string) ($data['clickURL'] ?? $data['clickUrl'] ?? $data['shortURL'] ?? $data['shortUrl'] ?? '');
+        $short = (string) ($data['shortURL'] ?? $data['shortUrl'] ?? $click);
+        return [
+            'clickURL'        => $click,
+            'clickUrl'        => $click,
+            'shortURL'        => $short,
+            'shortUrl'        => $short,
+            'jCommand'        => (string) ($data['jCommand'] ?? $data['command'] ?? ''),
+            'weChatShortLink' => (string) ($data['weChatShortLink'] ?? $data['wechatShortUrl'] ?? ''),
+        ];
     }
 
     /**

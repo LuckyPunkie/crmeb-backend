@@ -2577,6 +2577,8 @@ class UserRepository extends BaseRepository
         $lng = isset($where['longitude']) ? (float)$where['longitude'] : 0.0;
         $isEncounter = $socialTab === 'encounter' && ($lat != 0 || $lng != 0)
             && $lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180;
+        $excludeUid = (int)($where['exclude_uid'] ?? 0);
+        unset($where['exclude_uid']);
 
         $distanceExpr = null;
         $fields = 'User.uid,User.nickname,User.real_name,User.avatar,User.sex,User.birthday,User.phone,User.label_id,User.count_start,User.count_fans,User.count_content';
@@ -2584,8 +2586,9 @@ class UserRepository extends BaseRepository
             $latF = sprintf('%.7f', $lat);
             $lngF = sprintf('%.7f', $lng);
             // 6371 = 地球半径(km)；返回 km，前端按 <1 转 m
-            $distanceExpr = "(6371 * acos(cos(radians({$latF})) * cos(radians(pfsort.latitude)) * cos(radians(pfsort.longitude) - radians({$lngF})) + sin(radians({$latF})) * sin(radians(pfsort.latitude))))";
-            $fields .= ", {$distanceExpr} AS distance";
+            // LEAST(1, …)：同点时浮点误差可能让 acos 参数略大于 1 → NULL，被 1km 过滤误伤
+            $distanceExpr = "(6371 * acos(LEAST(1, cos(radians({$latF})) * cos(radians(pfsort.latitude)) * cos(radians(pfsort.longitude) - radians({$lngF})) + sin(radians({$latF})) * sin(radians(pfsort.latitude)))))";
+            $fields .= ", {$distanceExpr} AS distance, pfsort.roam_state, pfsort.roam_place";
         }
         $query = $this->dao->search($where)->field($fields);
 
@@ -2671,8 +2674,13 @@ class UserRepository extends BaseRepository
         $query->leftJoin('user_profile pfsort', 'pfsort.uid = User.uid');
         if ($isEncounter) {
             // 邂逅：只保留上报过位置的用户，按距离升序（COUNT 查询不会保留 field 别名，故直接重复表达式）
+            // 漫步：搜索范围 1 公里；不含自己
+            if (!empty($excludeUid)) {
+                $query->where('User.uid', '<>', $excludeUid);
+            }
             $query->whereNotNull('pfsort.latitude')
                 ->whereNotNull('pfsort.longitude')
+                ->whereRaw($distanceExpr . ' <= 1')
                 ->removeOption('order')
                 ->orderRaw($distanceExpr . ' ASC');
         } else {
@@ -2778,6 +2786,10 @@ class UserRepository extends BaseRepository
                 // 邂逅 Tab：把 SELECT 里 haversine 表达式的 distance(km) 规整成 3 位小数返回
                 if ($isEncounter && isset($item['distance'])) {
                     $item['distance'] = round((float)$item['distance'], 3);
+                }
+                if ($isEncounter) {
+                    $item['roam_state'] = (int)($item['roam_state'] ?? 0);
+                    $item['roam_place'] = (string)($item['roam_place'] ?? '');
                 }
             }
             unset($item);

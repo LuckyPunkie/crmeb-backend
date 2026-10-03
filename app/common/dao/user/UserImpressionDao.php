@@ -31,10 +31,10 @@ class UserImpressionDao extends BaseDao
 
     public function distinctFromCount(int $ownerUid): int
     {
+        // distinct(true)->count('from_uid') 生成的是 SELECT DISTINCT COUNT(from_uid)（先数再去重，等于留言条数）；要 COUNT(DISTINCT ...)
         return (int) UserImpression::where('owner_uid', $ownerUid)
             ->where('is_deleted', 0)
-            ->distinct(true)
-            ->count('from_uid');
+            ->count('DISTINCT from_uid');
     }
 
     public function getRow(int $impressionId)

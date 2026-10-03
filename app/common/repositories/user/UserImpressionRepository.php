@@ -11,6 +11,7 @@ use app\common\model\user\UserImpression;
 use app\common\model\user\UserImpressionComment;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\system\RelevanceRepository;
+use app\common\repositories\system\config\ConfigValueRepository;
 use think\exception\ValidateException;
 use think\facade\Db;
 
@@ -67,6 +68,55 @@ class UserImpressionRepository extends BaseRepository
     public function isWallEnabled(int $ownerUid): bool
     {
         return (int) Db::name('user')->where('uid', $ownerUid)->value('impression_wall_enabled') === 1;
+    }
+
+    /* ────────────── 开关确认弹窗文案（后台 用户→印象墙弹窗） ────────────── */
+
+    // open 沿用最初的 impression_wall_tip_* 两个 key（已有线上取值）
+    const WALL_TIP_KEYS = [
+        'open'  => ['impression_wall_tip_title', 'impression_wall_tip_content'],
+        'close' => ['impression_wall_close_tip_title', 'impression_wall_close_tip_content'],
+    ];
+    const WALL_TIP_DEFAULTS = [
+        'open'  => ['开启印象墙', '开启后，其他用户可在你的个人主页留下图文印象。你可以随时删除不喜欢的印象，或在这里关闭印象墙。'],
+        'close' => ['关闭印象墙', '关闭后，其他用户将无法再给你留下印象，已有印象仅你自己可见。'],
+    ];
+
+    /**
+     * 个人资料页打开 / 关闭印象墙开关时的确认弹窗文案；后台未配置（空）时用默认文案
+     * @return array ['open' => ['title', 'content'], 'close' => ['title', 'content']]
+     */
+    public function getWallTips(): array
+    {
+        $cfg = systemConfig(array_merge(...array_values(self::WALL_TIP_KEYS)));
+        $tips = [];
+        foreach (self::WALL_TIP_KEYS as $type => [$titleKey, $contentKey]) {
+            [$defTitle, $defContent] = self::WALL_TIP_DEFAULTS[$type];
+            $title = trim((string) ($cfg[$titleKey] ?? ''));
+            $content = trim((string) ($cfg[$contentKey] ?? ''));
+            $tips[$type] = [
+                'title'   => $title !== '' ? $title : $defTitle,
+                'content' => $content !== '' ? $content : $defContent,
+            ];
+        }
+        return $tips;
+    }
+
+    /**
+     * @param array $tips ['open' => ['title' => , 'content' => ], 'close' => [...]]，留空则回落默认文案
+     */
+    public function saveWallTips(array $tips): void
+    {
+        $data = [];
+        foreach (self::WALL_TIP_KEYS as $type => [$titleKey, $contentKey]) {
+            $title = trim((string) ($tips[$type]['title'] ?? ''));
+            $content = trim((string) ($tips[$type]['content'] ?? ''));
+            if (mb_strlen($title) > 20) throw new ValidateException('弹窗标题不能超过20个字');
+            if (mb_strlen($content) > 500) throw new ValidateException('弹窗内容不能超过500个字');
+            $data[$titleKey] = $title;
+            $data[$contentKey] = $content;
+        }
+        app()->make(ConfigValueRepository::class)->setFormData($data, 0);
     }
 
     /* ────────────── 关系标签计算 ────────────── */

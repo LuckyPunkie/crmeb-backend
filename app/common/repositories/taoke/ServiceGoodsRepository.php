@@ -1885,7 +1885,7 @@ class ServiceGoodsRepository
         }
 
         $resp = $this->haodankuDouyin->createProductLink($itemId, [
-            'share_type' => $context['share_type'] ?? '1,3',
+            'share_type' => $context['share_type'] ?? '1,3,4',
             'channel' => (string) ($context['channel'] ?? ($context['external_info'] ?? ($context['external_id'] ?? ''))),
             'platform' => $context['platform'] ?? null,
         ]);
@@ -1896,7 +1896,74 @@ class ServiceGoodsRepository
             ];
         }
         $data = is_array($resp['data']) ? $resp['data'] : [];
-        return array_merge(['code' => 0, 'message' => 'ok'], $data);
+        if ($data !== [] && array_keys($data) === range(0, count($data) - 1)) {
+            $first = $data[0] ?? null;
+            if (is_array($first)) {
+                $data = $first;
+            }
+        } elseif (isset($resp['raw']) && is_array($resp['raw'])) {
+            $raw = $resp['raw'];
+            if (isset($raw['data']) && is_array($raw['data']) && ($raw['data'] === [] || array_keys($raw['data']) !== range(0, count($raw['data']) - 1))) {
+                if ($raw['data'] !== []) {
+                    $data = array_merge($data, $raw['data']);
+                }
+            }
+            foreach (['dy_deeplink', 'deeplink', 'dy_password', 'dy_password_content', 'dy_zlink', 'zlink', 'password', 'command'] as $key) {
+                if (!empty($raw[$key]) && is_scalar($raw[$key])) {
+                    $data[$key] = (string) $raw[$key];
+                }
+            }
+        }
+        return array_merge(['code' => 0, 'message' => 'ok'], $this->normalizeDouyinProductLinkPayload($data));
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    protected function normalizeDouyinProductLinkPayload(array $data): array
+    {
+        if ($data === []) {
+            return [];
+        }
+        $pick = static function (array $row, array $keys): string {
+            foreach ($keys as $key) {
+                if (!empty($row[$key]) && is_scalar($row[$key])) {
+                    return (string) $row[$key];
+                }
+            }
+            return '';
+        };
+        $password = $pick($data, [
+            'dy_password', 'douyin_password', 'dy_code', 'dy_password_content', 'password', 'command', 'share_command',
+        ]);
+        $deeplink = $pick($data, [
+            'dy_deeplink', 'deeplink', 'deeplink_url', 'deep_link', 'openlink', 'open_link', 'open_url', 'schema', 'app_link',
+        ]);
+        if ($password !== '' && preg_match('#^https?://#i', $password)) {
+            if ($deeplink === '') {
+                $deeplink = $password;
+            }
+            $password = '';
+        }
+        $zlink = $pick($data, ['dy_zlink', 'zlink', 'click_url', 'link']);
+        if ($zlink === '') {
+            $maybeUrl = $pick($data, ['url']);
+            if ($maybeUrl !== '' && !preg_match('#jinritemai\.com#i', $maybeUrl)) {
+                $zlink = $maybeUrl;
+            }
+        }
+        $out = $data;
+        if ($password !== '') {
+            $out['dy_password'] = $password;
+        }
+        if ($deeplink !== '') {
+            $out['dy_deeplink'] = $deeplink;
+        }
+        if ($zlink !== '') {
+            $out['dy_zlink'] = $zlink;
+        }
+        return $out;
     }
 
     /**
