@@ -17,17 +17,35 @@ class MediaCheckNotifyHandler
         }
 
         $traceId = (string)($message['trace_id'] ?? '');
-        $result = $message['result'] ?? [];
-        if (!is_array($result)) {
-            $result = (array)$result;
+        $segments = [];
+        $detail = $message['detail'] ?? [];
+        if (is_array($detail)) {
+            foreach ($detail as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $suggest = (string)($row['suggest'] ?? '');
+                if ($suggest === '') {
+                    continue;
+                }
+                $segments[] = ['suggest' => $suggest, 'label' => (int)($row['label'] ?? 0)];
+            }
         }
-        $suggest = (string)($result['suggest'] ?? '');
-        $label = (int)($result['label'] ?? 0);
-        Log::info('media_check 回调: ' . json_encode(compact('traceId', 'suggest', 'label'), JSON_UNESCAPED_UNICODE));
+        if (!$segments) {
+            $result = $message['result'] ?? [];
+            if (!is_array($result)) {
+                $result = (array)$result;
+            }
+            $suggest = (string)($result['suggest'] ?? '');
+            if ($suggest !== '') {
+                $segments[] = ['suggest' => $suggest, 'label' => (int)($result['label'] ?? 0)];
+            }
+        }
+        Log::info('media_check 回调: ' . json_encode(['traceId' => $traceId, 'segments' => $segments], JSON_UNESCAPED_UNICODE));
 
-        if ($traceId !== '' && $suggest !== '') {
+        if ($traceId !== '' && $segments) {
             try {
-                ContentSecurityService::onMediaResult($traceId, $suggest, $label);
+                ContentSecurityService::onMediaResults($traceId, $segments);
             } catch (\Throwable $e) {
                 Log::error('media_check 回调处理失败: ' . $e->getMessage());
             }

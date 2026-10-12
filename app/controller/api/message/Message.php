@@ -16,9 +16,11 @@ use app\common\repositories\user\UserDialogRepository;
 use app\common\repositories\user\UserMessageRepository;
 use app\common\repositories\community\CommunityReportRepository;
 use crmeb\basic\BaseController;
-use crmeb\jobs\ChatModerationJob;
 use crmeb\jobs\MediaCheckSubmitJob;
 use crmeb\services\security\ContentSecurityService;
+use crmeb\services\security\driver\AliyunBaselineDriver;
+use crmeb\services\security\AliyunBaselinePolicy;
+use crmeb\services\security\UgcModerationTicket;
 use crmeb\services\UploadService;
 use think\App;
 use think\exception\ValidateException;
@@ -97,21 +99,38 @@ class Message extends BaseController
         if (!$data['msn'] && $data['msn_type'] == 1) {
             return app('json')->fail('内容字符无效');
         }
-        // 《内容安全阈值确定版》5.3：熟人私聊先发后审；陌生人首次对话、被举报过的会话（及开关关闭时）先审后发
         $openid = (string)($this->request->userInfo()->wechat->routine_openid ?? '');
         $isText = (int)$data['msn_type'] === 1;
-        $asyncText = $isText && ContentSecurityService::chatAsyncEnabled()
-            && !$this->messageRepository->requiresPreReview($myUid, $toUid);
         $syncCheck = null;
-        if ($isText && !$asyncText) {
+        if ($isText) {
             $syncCheck = ContentSecurityService::checkText(
                 $data['msn'],
                 ContentSecurityService::SCENE_SOCIAL,
                 'chat_msg',
                 0,
                 $myUid,
-                $openid
+                $openid,
+                false
             );
+        }
+        if ((int)$data['msn_type'] === 3) {
+            $scan = AliyunBaselineDriver::moderateImageUrl((string)$data['msn']);
+            if ($scan['verdict'] === AliyunBaselinePolicy::ACTION_REJECT) {
+                return app('json')->fail('图片未通过安全审核');
+            }
+            if ($scan['verdict'] === AliyunBaselinePolicy::ACTION_MANUAL) {
+                UgcModerationTicket::open([
+                    'uid' => $myUid,
+                    'scene' => 'chat',
+                    'media_type' => 'image',
+                    'entity_type' => 'chat_msg',
+                    'entity_id' => 0,
+                    'media_url' => (string)$data['msn'],
+                    'machine_driver' => 'aliyun',
+                    'machine_summary' => $scan['error'] !== '' ? $scan['error'] : 'aliyun_manual',
+                ]);
+                return app('json')->fail('图片需人工审核，请稍后再试');
+            }
         }
 
         $data['voice_duration'] = $data['voice_duration'] ?? 0;
@@ -128,23 +147,17 @@ class Message extends BaseController
             ContentSecurityService::bindBizId((int)($syncCheck['log_id'] ?? 0), $messageId);
         }
         try {
-            if ($asyncText) {
-                ContentSecurityService::pushModeration(ChatModerationJob::class, [
-                    'message_id' => $messageId,
-                    'openid' => $openid,
-                ], ContentSecurityService::QUEUE_HIGH);
-            }
-            // 图片/语音：微信只能异步检测（5~30 分钟回调），一律先发后审，违规撤回
+            // 私聊语音：V2 先发后审；私聊图片走阿里云同步（见上）
             $msnType = (int)$data['msn_type'];
-            if (in_array($msnType, [3, 9], true) && $openid !== '' && ContentSecurityService::mediaCheckEnabled()) {
+            if ($msnType === 9 && $openid !== '' && ContentSecurityService::mediaCheckEnabled()) {
                 ContentSecurityService::pushModeration(MediaCheckSubmitJob::class, [
                     'biz_type' => 'chat_msg',
                     'biz_id' => $messageId,
                     'uid' => $myUid,
                     'openid' => $openid,
                     'scene' => ContentSecurityService::SCENE_SOCIAL,
-                    'images' => $msnType === 3 ? [$data['msn']] : [],
-                    'audio' => $msnType === 9 ? [$data['msn']] : [],
+                    'images' => [],
+                    'audio' => [$data['msn']],
                     'video' => '',
                 ], ContentSecurityService::QUEUE_HIGH);
             }

@@ -17,6 +17,7 @@ use app\common\dao\user\UserMessageDao;
 use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use crmeb\services\SwooleTaskService;
+use crmeb\services\security\UgcTextSecurity;
 use think\exception\ValidateException;
 use think\facade\Db;
 
@@ -41,7 +42,7 @@ class UserMessageRepository extends BaseRepository
         $list = $this->dao->getHistory($dialogId, $page, $limit, $sinceTime);
         $result = [];
         foreach ($list as $msg) {
-            $item = $msg->toArray();
+            $item = UgcTextSecurity::applyMaskToMessage($msg->toArray());
             $item['send_time'] = strtotime($item['create_time']);
             $item['send_date'] = date('H:i', strtotime($item['create_time']));
             $result[] = $item;
@@ -112,17 +113,22 @@ class UserMessageRepository extends BaseRepository
         $userInfo = Db::name('user')->field('uid,nickname,avatar')->where('uid', $fromUid)->find();
         $userInfo['avatar'] = User::displayAvatar($userInfo['avatar'] ?? '');
 
+        $pushPayload = UgcTextSecurity::applyMaskToMessage([
+            'message_id'    => $message->message_id,
+            'dialog_id'     => $dialogId,
+            'from_uid'      => $fromUid,
+            'from_avatar'   => $userInfo['avatar'] ?? '',
+            'from_nickname' => $userInfo['nickname'] ?? '',
+            'to_uid'        => $toUid,
+            'msn_type'      => $data['msn_type'],
+            'msn'           => $data['msn'],
+            'voice_duration'=> $data['voice_duration'] ?? 0,
+            'ref_note_id'   => $data['ref_note_id'] ?? 0,
+            'create_time'   => $message->create_time,
+        ]);
         SwooleTaskService::user($toUid, [
             'type' => 'user_message',
-            'data' => [
-                'message_id'    => $message->message_id,
-                'dialog_id'     => $dialogId,
-                'from_uid'      => $fromUid,
-                'from_avatar'   => $userInfo['avatar'] ?? '',
-                'from_nickname' => $userInfo['nickname'] ?? '',
-                'to_uid'        => $toUid,
-                'msn_type'      => $data['msn_type'],
-                'msn'           => $data['msn'],
+            'data' => $pushPayload,
                 'voice_duration'=> $data['voice_duration'] ?? 0,
                 'ref_note_id'   => $data['ref_note_id'] ?? 0,
                 'create_time'   => $message->create_time,

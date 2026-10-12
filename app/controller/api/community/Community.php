@@ -41,6 +41,8 @@ class Community extends BaseController
     protected $moderationLogId = 0;
     protected $moderationSuggest = 'pass';
     protected $mediaHold = null;
+    /** @var string[]|null App/H5 无 openid 时同步阿里云检测的配图 */
+    protected $baselineImageHold = null;
 
     /**
      * User constructor.
@@ -389,6 +391,7 @@ class Community extends BaseController
             ContentSecurityService::notifyRejected((int)$data['uid'], '笔记');
         }
         $this->dispatchMediaCheck((int)$res, (int)$data['uid']);
+        $this->dispatchBaselineImages((int)$res, (int)$data['uid']);
         return app('json')->success(['community_id' => $res, 'status' => (int)$data['status']]);
     }
 
@@ -431,7 +434,18 @@ class Community extends BaseController
             ContentSecurityService::notifyRejected((int)$this->user->uid, '笔记');
         }
         $this->dispatchMediaCheck((int)$id, (int)$this->user->uid);
+        $this->dispatchBaselineImages((int)$id, (int)$this->user->uid);
         return app('json')->success(['community_id' => $id, 'status' => (int)$data['status']]);
+    }
+
+    protected function dispatchBaselineImages(int $communityId, int $uid): void
+    {
+        if (!$this->baselineImageHold || $communityId <= 0) {
+            return;
+        }
+        \think\facade\Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
+        ContentSecurityService::syncBaselineImages('community_post', $communityId, $uid, $this->baselineImageHold);
+        $this->baselineImageHold = null;
     }
 
     protected function dispatchMediaCheck(int $communityId, int $uid): void
@@ -474,6 +488,9 @@ class Community extends BaseController
                 $data['status_time'] = date('Y-m-d H:i:s', time());
             }
         } else {
+            if ($this->request->isApp()) {
+                throw new ValidateException('App 暂不支持发布视频，请前往小程序发布');
+            }
             if (!in_array($this->repository::COMMUNIT_TYPE_VIDEO,$config['community_app_switch']))
                 throw new ValidateException('短视频未开启');
             if ($config['community_video_audit']) {
@@ -513,15 +530,7 @@ class Community extends BaseController
             );
             $this->moderationLogId = (int)($check['log_id'] ?? 0);
             $this->moderationSuggest = (string)$check['suggest'];
-            // risky：入库为未通过（不公开、通知作者）；review：进待审队列；pass：沿用免审配置
-            if ($this->moderationSuggest !== 'pass') {
-                $data['status'] = $this->moderationSuggest === 'risky' ? -1 : 0;
-                $data['is_show'] = 0;
-                unset($data['status_time']);
-                if ($data['status'] === -1) {
-                    $data['refusal'] = '内容包含违规信息';
-                }
-            }
+            // 文本敏感词：明文入库，展示打星，不因敏感词改帖子状态
         }
         if ($data['is_type'] == 1 && empty($data['image'])) {
             throw new ValidateException('图片不能为空');
@@ -535,8 +544,9 @@ class Community extends BaseController
             && $openid !== ''
             && $hasMedia;
 
-        // 图片/视频：有 openid 走 V2 异步；否则待人工（不再使用 App 端侧 NSFW 分数）
+        // 图片/视频：有 openid 走 V2 异步；无 openid 图文走阿里云同步
         $this->mediaHold = null;
+        $this->baselineImageHold = null;
         if ($useWechatMedia) {
             $data['status'] = 0;
             $data['is_show'] = 0;
@@ -550,6 +560,9 @@ class Community extends BaseController
             $data['status'] = 0;
             $data['is_show'] = 0;
             unset($data['status_time']);
+            if ($openid === '' && $data['is_type'] == 1 && $images) {
+                $this->baselineImageHold = $images;
+            }
         }
         app()->make(CommunityValidate::class)->check($data);
         // 优先使用用户填写的标题；未填时再取正文首行

@@ -8,9 +8,9 @@
 
 namespace crmeb\services\security;
 
-use crmeb\services\security\driver\JoySafetyDriver;
-use crmeb\services\security\driver\WechatDriver;
 use crmeb\services\SensitiveWordFilter;
+use crmeb\services\security\driver\AliyunBaselineDriver;
+use crmeb\services\security\driver\WechatDriver;
 use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Db;
@@ -110,42 +110,19 @@ class ContentSecurityService
             return ['pass' => true, 'driver' => 'skip', 'suggest' => 'pass', 'label' => 100, 'trace_id' => '', 'log_id' => 0];
         }
 
-        $result = ['pass' => true, 'suggest' => 'pass', 'label' => 100, 'trace_id' => ''];
-        $driver = '';
-        $failed = false;
-
-        // 文档第一节：优先小程序 V2（需 openid）→ 不可用时降级 JoySafety（后台配置后启用）→ 本地敏感词兜底
-        if (!empty($openid)) {
-            try {
-                $result = array_merge($result, WechatDriver::checkTextV2($content, $scene, $openid));
-                $driver = 'wechat_v2';
-            } catch (\Throwable $e) {
-                $failed = true;
-                Log::error('ContentSecurityService 微信审核失败(' . $bizType . '): ' . $e->getMessage());
-                self::recordFailure($bizType, $e->getMessage());
-            }
-        }
-        if ($driver === '' && JoySafetyDriver::enabled()) {
-            try {
-                $result = array_merge($result, JoySafetyDriver::checkText($content, $uid));
-                $driver = 'joysafety';
-            } catch (\Throwable $e) {
-                $failed = true;
-                Log::error('ContentSecurityService JoySafety 失败(' . $bizType . '): ' . $e->getMessage());
-                self::recordFailure($bizType, $e->getMessage());
-            }
-        }
-        if ($driver === '') {
-            // 第三方都不可用时不阻断主流程，用本地敏感词兜底
-            $hit = SensitiveWordFilter::contains($content);
-            $result['pass'] = !$hit;
-            $result['suggest'] = $hit ? 'risky' : 'pass';
-            $driver = $failed ? 'local_fallback' : 'local';
-        }
-
+        // 全端文本：仅服务端敏感词；明文存库，展示层打星，默认不拦截发送
+        $hit = SensitiveWordFilter::contains($content);
+        $result = [
+            'pass' => true,
+            'suggest' => $hit ? 'review' : 'pass',
+            'label' => 100,
+            'trace_id' => '',
+            'hit_sensitive' => $hit,
+        ];
+        $driver = 'sensitive_word';
         $logId = self::log($uid, $bizType, $bizId, $scene, $driver, $content, $result);
 
-        if (!$result['pass'] && $hardBlock) {
+        if ($hardBlock && $hit) {
             throw new ValidateException('内容包含敏感信息，请修改后重试');
         }
 
@@ -259,20 +236,36 @@ class ContentSecurityService
      */
     public static function onMediaResult(string $traceId, string $suggest, int $label): void
     {
+        self::onMediaResults($traceId, [['suggest' => $suggest, 'label' => $label]]);
+    }
+
+    /**
+     * @param array<int,array{suggest:string,label:int}> $segments
+     */
+    public static function onMediaResults(string $traceId, array $segments): void
+    {
         $task = Db::name('ugc_check_task')->where('trace_id', $traceId)->find();
         if (!$task) {
             Log::warning('media_check 回调找不到任务 trace_id=' . $traceId);
             return;
         }
         if ((int)$task['status'] !== self::TASK_PENDING) {
-            return; // 重复推送或已超时放行
+            return;
         }
-        $status = $suggest === 'pass' ? self::TASK_PASS : ($suggest === 'risky' ? self::TASK_REJECT : self::TASK_REVIEW);
+        $actions = [];
+        foreach ($segments as $seg) {
+            $actions[] = WechatMediaPolicy::actionFor((int)($seg['label'] ?? 0), (string)($seg['suggest'] ?? ''));
+        }
+        if (!$actions) {
+            $actions[] = WechatMediaPolicy::ACTION_MANUAL;
+        }
+        $action = WechatMediaPolicy::aggregateActions($actions);
+        $status = WechatMediaPolicy::taskStatusForAction($action);
         Db::name('ugc_check_task')->where('id', $task['id'])->update(['status' => $status, 'update_time' => time()]);
         self::log((int)$task['uid'], $task['biz_type'] . '_media', (int)$task['biz_id'], 0, 'wechat_v2_media', (string)$task['media_url'], [
-            'pass' => $suggest === 'pass',
-            'suggest' => $suggest,
-            'label' => $label,
+            'pass' => $action === WechatMediaPolicy::ACTION_PASS,
+            'suggest' => $action,
+            'label' => (int)($segments[0]['label'] ?? 0),
             'trace_id' => $traceId,
         ]);
         MediaModerationResolver::resolve((string)$task['biz_type'], (int)$task['biz_id']);
@@ -295,8 +288,8 @@ class ContentSecurityService
             return 0;
         }
         Db::name('ugc_check_task')->whereIn('id', array_column($stale, 'id'))
-            ->update(['status' => self::TASK_TIMEOUT, 'update_time' => time()]);
-        Log::alert('内容审核回调超时，已按服务不可用放行 ' . count($stale) . ' 个媒体任务，请检查小程序消息推送配置');
+            ->update(['status' => self::TASK_REVIEW, 'update_time' => time()]);
+        Log::alert('内容审核回调超时，已转人工审核 ' . count($stale) . ' 个媒体任务，请检查小程序消息推送配置');
         $bizs = [];
         foreach ($stale as $row) {
             $bizs[$row['biz_type'] . '#' . $row['biz_id']] = [$row['biz_type'], (int)$row['biz_id']];
@@ -309,6 +302,60 @@ class ContentSecurityService
             }
         }
         return count($stale);
+    }
+
+    /**
+     * App/H5 无 openid 的配图：同步 baselineCheck，写入 ugc_check_task 并汇总业务处置
+     */
+    public static function syncBaselineImages(string $bizType, int $bizId, int $uid, array $urls): void
+    {
+        $urls = array_values(array_unique(array_filter(array_map(static function ($v) {
+            return is_string($v) ? trim($v) : '';
+        }, $urls))));
+        if (!$urls || $bizId <= 0) {
+            return;
+        }
+        $statuses = [];
+        foreach ($urls as $url) {
+            $scan = AliyunBaselineDriver::moderateImageUrl($url);
+            $action = (string)$scan['verdict'];
+            $status = self::TASK_PASS;
+            if ($action === AliyunBaselinePolicy::ACTION_REJECT) {
+                $status = self::TASK_REJECT;
+            } elseif ($action === AliyunBaselinePolicy::ACTION_MANUAL) {
+                $status = self::TASK_REVIEW;
+            }
+            $statuses[] = $status;
+            try {
+                Db::name('ugc_check_task')->insert([
+                    'trace_id' => 'aliyun:' . md5($bizType . '#' . $bizId . '#' . $url . '#' . microtime(true)),
+                    'uid' => $uid,
+                    'biz_type' => $bizType,
+                    'biz_id' => $bizId,
+                    'media_url' => mb_substr($url, 0, 500),
+                    'status' => $status,
+                    'create_time' => time(),
+                    'update_time' => time(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::error('ugc_check_task aliyun 写入失败: ' . $e->getMessage());
+            }
+            self::log($uid, $bizType . '_media', $bizId, 0, 'aliyun_baseline', $url, [
+                'pass' => $status === self::TASK_PASS,
+                'suggest' => $action,
+                'label' => 0,
+                'trace_id' => '',
+            ]);
+        }
+        if (in_array(self::TASK_REJECT, $statuses, true)) {
+            MediaModerationResolver::resolve($bizType, $bizId);
+            return;
+        }
+        if (in_array(self::TASK_REVIEW, $statuses, true)) {
+            MediaModerationResolver::resolve($bizType, $bizId);
+            return;
+        }
+        MediaModerationResolver::resolve($bizType, $bizId);
     }
 
     /**

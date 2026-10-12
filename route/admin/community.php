@@ -216,6 +216,20 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // UGC 内容安全策略与审核单
+    Route::group('community/content-security', function () {
+        Route::get('wechat-policy', '/wechatPolicyList')->name('ugcWechatPolicyList')->option(['_alias' => '微信V2策略']);
+        Route::post('wechat-policy', '/wechatPolicySave')->name('ugcWechatPolicySave')->option(['_alias' => '保存微信V2策略']);
+        Route::get('aliyun-labels', '/aliyunLabelList')->name('ugcAliyunLabelList')->option(['_alias' => '阿里云标签策略']);
+        Route::post('aliyun-labels', '/aliyunLabelSave')->name('ugcAliyunLabelSave')->option(['_alias' => '保存阿里云标签']);
+        Route::get('tickets', '/ticketList')->name('ugcModerationTicketList')->option(['_alias' => 'UGC审核单列表']);
+        Route::post('tickets/:id/approve', '/ticketApprove')->name('ugcModerationTicketApprove')->option(['_alias' => 'UGC审核通过']);
+        Route::post('tickets/:id/reject', '/ticketReject')->name('ugcModerationTicketReject')->option(['_alias' => 'UGC审核驳回']);
+    })->prefix('admin.community.ContentSecurity')->option([
+        '_path' => '/community/content-security',
+        '_auth' => true,
+    ]);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

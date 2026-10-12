@@ -21,6 +21,7 @@ use app\common\repositories\system\RelevanceRepository;
 use app\common\repositories\user\UserBrokerageRepository;
 use app\common\repositories\user\UserRepository;
 use crmeb\services\QrcodeService;
+use crmeb\services\security\UgcTextSecurity;
 use FormBuilder\Factory\Elm;
 use app\common\repositories\user\UserBillRepository;
 use think\exception\ValidateException;
@@ -262,6 +263,10 @@ class CommunityRepository extends BaseRepository
             }
         }
         $list = $this->appendTopics($list);
+        foreach ($list as $i => $item) {
+            $row = is_array($item) ? $item : (is_object($item) && method_exists($item, 'toArray') ? $item->toArray() : (array)$item);
+            $list[$i] = UgcTextSecurity::applyMaskToCommunity($row);
+        }
         return compact('count', 'list');
     }
 
@@ -581,6 +586,7 @@ class CommunityRepository extends BaseRepository
             }
         }
         $data = $this->appendTopics($data);
+        $data = UgcTextSecurity::applyMaskToCommunity($data);
         $data['is_collect'] = $user ? ($this->isCollected($id, (int)$user->uid) ? 1 : 0) : 0;
         $data['count_collect'] = $this->collectCount($id);
 

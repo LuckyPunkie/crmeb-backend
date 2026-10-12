@@ -76,11 +76,24 @@ class MediaModerationResolver
                 }
                 break;
             case 'chat_msg':
-                // 私聊图片/语音先发后审：只处理违规撤回，疑似不撤回
                 if ($verdict === self::VERDICT_REJECT) {
                     $fromUid = (int)Db::name('user_message')->where('message_id', $bizId)->value('from_uid');
                     if (app()->make(UserMessageRepository::class)->systemRecallMessage($bizId) && $fromUid) {
                         ContentSecurityService::notifyRecalled($fromUid);
+                    }
+                } elseif ($verdict === self::VERDICT_REVIEW) {
+                    $msg = Db::name('user_message')->where('message_id', $bizId)->field('from_uid,msn_type,msn')->find();
+                    if ($msg) {
+                        UgcModerationTicket::open([
+                            'uid' => (int)$msg['from_uid'],
+                            'scene' => 'chat',
+                            'media_type' => (int)$msg['msn_type'] === 9 ? 'voice' : 'image',
+                            'entity_type' => 'chat_msg',
+                            'entity_id' => $bizId,
+                            'media_url' => (string)$msg['msn'],
+                            'machine_driver' => 'wechat_v2',
+                            'machine_summary' => 'V2人工',
+                        ]);
                     }
                 }
                 break;
@@ -202,22 +215,20 @@ class MediaModerationResolver
             return;
         }
         if ($verdict === self::VERDICT_REVIEW) {
-            return; // 留在后台待审列表，由人工决定
+            UgcModerationTicket::open([
+                'uid' => (int)$post['uid'],
+                'scene' => 'community_post',
+                'media_type' => (int)$post['is_type'] === 2 ? 'video' : 'image',
+                'entity_type' => 'community_post',
+                'entity_id' => $communityId,
+                'media_url' => (string)($post['image'] ?? ''),
+                'machine_driver' => 'mixed',
+                'machine_summary' => '机审转人工',
+            ]);
+            return;
         }
 
-        // 媒体通过：文本也通过且后台开启了免审时才自动发布，否则仍走人工审核
-        $textSuggest = Db::name('ugc_check_log')
-            ->where('biz_type', 'community_post')->where('biz_id', $communityId)
-            ->order('id', 'desc')->value('suggest');
-        if ($textSuggest && $textSuggest !== 'pass') {
-            return;
-        }
-        $auditFree = (string)$post['is_type'] === CommunityRepository::COMMUNIT_TYPE_VIDEO
-            ? systemConfig('community_video_audit')
-            : systemConfig('community_audit');
-        if ((int)$auditFree !== 1) {
-            return;
-        }
+        // 机审通过即发布（community_audit=0 时仍 status=1）
         $repository->setStatus($communityId, ['status' => 1, 'is_show' => 1]);
     }
 }
