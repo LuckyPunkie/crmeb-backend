@@ -20,6 +20,7 @@ use FormBuilder\Factory\Elm;
 use think\exception\ValidateException;
 use think\facade\Db;
 use think\facade\Route;
+use crmeb\services\security\UgcTextSecurity;
 
 /**
  * 社区评论
@@ -182,6 +183,8 @@ class CommunityReplyRepository extends BaseRepository
 
         // 付费内容：标记哪些评论者已解锁
         $this->attachIsUnlock($list, (int)$where['community_id']);
+
+        $list = $this->maskReplyListText($list);
 
         // 返回包含所有、开始、计数和列表的数组
         return compact('all', 'start', 'count', 'list');
@@ -440,5 +443,29 @@ class CommunityReplyRepository extends BaseRepository
         ]);
         $formData['status'] = 1;
         return $form->setTitle('审核评论')->formData($formData);
+    }
+
+    protected function maskReplyListText($list)
+    {
+        if (!$list) {
+            return $list;
+        }
+        foreach ($list as $i => $item) {
+            $row = is_array($item) ? $item : (is_object($item) && method_exists($item, 'toArray') ? $item->toArray() : (array)$item);
+            if (isset($row['content'])) {
+                $row['content'] = UgcTextSecurity::maskForDisplay((string)$row['content']);
+            }
+            if (!empty($row['children'])) {
+                foreach ($row['children'] as $j => $child) {
+                    $c = is_array($child) ? $child : (is_object($child) && method_exists($child, 'toArray') ? $child->toArray() : (array)$child);
+                    if (isset($c['content'])) {
+                        $c['content'] = UgcTextSecurity::maskForDisplay((string)$c['content']);
+                    }
+                    $row['children'][$j] = $c;
+                }
+            }
+            $list[$i] = $row;
+        }
+        return $list;
     }
 }

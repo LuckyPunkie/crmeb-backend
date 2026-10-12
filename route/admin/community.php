@@ -222,11 +222,17 @@ Route::group(function () {
         Route::post('wechat-policy', '/wechatPolicySave')->name('ugcWechatPolicySave')->option(['_alias' => '保存微信V2策略']);
         Route::get('aliyun-labels', '/aliyunLabelList')->name('ugcAliyunLabelList')->option(['_alias' => '阿里云标签策略']);
         Route::post('aliyun-labels', '/aliyunLabelSave')->name('ugcAliyunLabelSave')->option(['_alias' => '保存阿里云标签']);
+    })->prefix('admin.community.ContentSecurity')->option([
+        '_path' => '/community/content-security',
+        '_auth' => true,
+    ]);
+
+    Route::group('community/content-security', function () {
         Route::get('tickets', '/ticketList')->name('ugcModerationTicketList')->option(['_alias' => 'UGC审核单列表']);
         Route::post('tickets/:id/approve', '/ticketApprove')->name('ugcModerationTicketApprove')->option(['_alias' => 'UGC审核通过']);
         Route::post('tickets/:id/reject', '/ticketReject')->name('ugcModerationTicketReject')->option(['_alias' => 'UGC审核驳回']);
     })->prefix('admin.community.ContentSecurity')->option([
-        '_path' => '/community/content-security',
+        '_path' => '/community/ugc-audit',
         '_auth' => true,
     ]);
 
