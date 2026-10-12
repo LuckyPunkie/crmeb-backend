@@ -51,6 +51,11 @@ class MediaModerationResolver
                     self::resolveGoodsComment($bizId);
                 }
                 break;
+            case 'community_reply':
+                if ($verdict === self::VERDICT_REJECT) {
+                    self::resolveCommunityReply($bizId);
+                }
+                break;
             case 'avatar':
                 if ($verdict === self::VERDICT_REJECT) {
                     self::resolveAvatar($bizId);
@@ -119,6 +124,30 @@ class MediaModerationResolver
         }
     }
 
+    /** 笔记评论配图：清除被拒图片；清完只剩空评论时整条判为未通过 */
+    protected static function resolveCommunityReply(int $replyId): void
+    {
+        $reply = Db::name('community_reply')->where('reply_id', $replyId)->field('uid,content,pics,status')->find();
+        if (!$reply || (string)$reply['pics'] === '') {
+            return;
+        }
+        $rejected = self::rejectedPaths('community_reply', $replyId);
+        $pics = array_filter(explode(',', (string)$reply['pics']));
+        $remain = array_values(array_filter($pics, static function ($pic) use ($rejected) {
+            return !in_array(self::urlPath($pic), $rejected, true);
+        }));
+        if (count($remain) === count($pics)) {
+            return;
+        }
+        $update = ['pics' => implode(',', $remain)];
+        if (!$remain && trim((string)$reply['content']) === '' && (int)$reply['status'] !== -1) {
+            $update['status'] = -1;
+            $update['refusal'] = '图片包含违规内容';
+        }
+        Db::name('community_reply')->where('reply_id', $replyId)->update($update);
+        ContentSecurityService::notifyRejected((int)$reply['uid'], '评论图片');
+    }
+
     protected static function resolveAvatar(int $uid): void
     {
         $avatar = (string)Db::name('user')->where('uid', $uid)->value('avatar');
@@ -150,7 +179,7 @@ class MediaModerationResolver
         }
     }
 
-    /** 供 V2 提交失败时端侧降级结果汇总 */
+    /** 供 V2 提交失败等场景直接设定社区帖处置结果 */
     public static function applyCommunityPostVerdict(int $communityId, string $verdict): void
     {
         self::resolveCommunityPost($communityId, $verdict);

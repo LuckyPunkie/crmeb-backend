@@ -26,13 +26,31 @@ class EquityConfig extends BaseController
     {
         $merId = (int)$this->request->merId();
         $data = $this->request->params([
-            ['enabled', 1],
             ['consume_equity_percent', 0],
             ['target_equity_amount', 0],
         ]);
+        // 旧版页面随表单提交 enabled；新版不传，开关走 saveSwitch
+        if ($this->request->has('enabled')) {
+            $data['enabled'] = $this->request->param('enabled');
+        }
         try {
             $res = $this->repository->saveConfig($merId, $data);
             return app('json')->success($res);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+    }
+
+    public function saveSwitch()
+    {
+        $merId = (int)$this->request->merId();
+        $type = (string)$this->request->param('type', 'consume');
+        $value = (int)$this->request->param('value', 0);
+        if (!in_array($type, ['consume', 'invest'], true)) {
+            return app('json')->fail('参数错误');
+        }
+        try {
+            return app('json')->success($this->repository->saveSwitch($merId, $type, $value));
         } catch (\Throwable $e) {
             return app('json')->fail($e->getMessage());
         }

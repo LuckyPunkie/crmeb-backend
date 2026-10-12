@@ -23,6 +23,8 @@ Route::group(function () {
     Route::get('nearby/shop/lst', 'api.store.nearby.NearbyShop/lst');
     // 商家详情
     Route::get('nearby/shop/detail/:mer_id', 'api.store.nearby.NearbyShop/detail');
+    // 店铺功能开关（线上下单/买单/盲盒入口/公益商品）
+    Route::get('nearby/shop/feature_switch/:mer_id', 'api.store.nearby.NearbyShop/featureSwitch');
     // 分类树
     Route::get('nearby/category/tree', 'api.store.nearby.NearbyCategory/tree');
     // 推荐菜列表

@@ -14,6 +14,7 @@ namespace app\controller\api\store\nearby;
 use think\App;
 use crmeb\basic\BaseController;
 use app\common\repositories\store\nearby\NearbyShopRepository;
+use app\common\repositories\system\merchant\MerchantFeatureSwitchRepository;
 
 /**
  * 附近好店 - C端API控制器
@@ -80,6 +81,18 @@ class NearbyShop extends BaseController
             return app('json')->fail('商家不存在或已下架');
         }
 
+        // 「线上下单」「买单」按钮、支付成功页盲盒入口显隐：平台总开关 + 商家开关
+        $detail['action_switch'] = app()->make(MerchantFeatureSwitchRepository::class)->resolveVisible((int)$merId);
+
         return app('json')->success($detail);
+    }
+
+    /**
+     * 店铺功能开关（只读，买单页等不需要整份详情的页面用）
+     * GET /api/nearby/shop/feature_switch/:mer_id
+     */
+    public function featureSwitch($merId)
+    {
+        return app('json')->success(app()->make(MerchantFeatureSwitchRepository::class)->resolveVisible((int)$merId));
     }
 }

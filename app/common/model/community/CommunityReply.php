@@ -85,6 +85,17 @@ class CommunityReply extends BaseModel
         return $value;
     }
 
+    public function getPicsAttr($value)
+    {
+        if ($this->is_del || !$value) return [];
+        return explode(',', $value);
+    }
+
+    public function setPicsAttr($value)
+    {
+        return $value ? implode(',', (array)$value) : '';
+    }
+
 
     public function searchUidAttr($query, $value)
     {

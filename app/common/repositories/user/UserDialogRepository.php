@@ -13,6 +13,7 @@
 namespace app\common\repositories\user;
 
 use app\common\dao\user\UserDialogDao;
+use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\service\StoreServiceUserRepository;
 use app\common\repositories\system\RelevanceRepository;
@@ -178,14 +179,18 @@ class UserDialogRepository extends BaseRepository
 
             $lastMsg = $item['last_message'] ?? '';
             if ($lastMsg && !in_array($item['last_message_type'], [1])) {
-                $lastMsg = $item['last_message_type'] == 100 ? '' : ($typeDesc[$item['last_message_type']] ?? '');
+                if ($item['last_message_type'] == 100) {
+                    $lastMsg = $item['last_sender_uid'] == $uid ? '你撤回了一条消息' : '对方撤回了一条消息';
+                } else {
+                    $lastMsg = $typeDesc[$item['last_message_type']] ?? '';
+                }
             }
 
             $result[] = [
                 'dialog_id'         => $item['dialog_id'],
                 'type'              => 'user',
                 'chat_uid'          => $chatUid,
-                'avatar'            => $userInfo['avatar'] ?? '',
+                'avatar'            => User::displayAvatar($userInfo['avatar'] ?? ''),
                 'nickname'          => $userInfo['nickname'] ?? '',
                 'online_status'     => $onlineMap[$chatUid] ?? 0,
                 'last_message'      => $lastMsg,
@@ -472,7 +477,7 @@ class UserDialogRepository extends BaseRepository
                 'dialog_id' => (int)$row['dialog_id'],
                 'uid'       => $chatUid,
                 'nickname'  => $user['nickname'] ?? '',
-                'avatar'    => $user['avatar'] ?? '',
+                'avatar'    => User::displayAvatar($user['avatar'] ?? ''),
                 'sex'       => (int)($user['sex'] ?? 0),
                 'update_time' => $row['update_time'] ?? '',
             ];
@@ -554,7 +559,7 @@ class UserDialogRepository extends BaseRepository
         return [
             'uid'               => $user['uid'],
             'nickname'          => $user['nickname'],
-            'avatar'            => $user['avatar'],
+            'avatar'            => User::displayAvatar($user['avatar']),
             'sex'               => (int)($user['sex'] ?? 0),
             'profile_brief'     => $profileBrief,
             'is_fans'           => $isFans ? 1 : 0,

@@ -312,31 +312,6 @@ class ContentSecurityService
     }
 
     /**
-     * App 端侧 NSFW 分数判定（文档 3.2/3.3/4.1/4.2）：阈值在服务端、后台可配，客户端只上报分数
-     * @param float[] $imageScores 每张图片的分数
-     * @param float[] $frameScores 视频各抽帧的分数
-     * @return array{verdict:string,log_id:int} verdict 为 ModerationDecision::PASS/REVIEW/BLOCK
-     */
-    public static function judgeAppMediaScores(array $imageScores, array $frameScores, string $bizType, int $uid): array
-    {
-        $verdict = $imageScores ? ModerationDecision::images($imageScores) : ModerationDecision::PASS;
-        if ($verdict !== ModerationDecision::BLOCK && $frameScores
-            && ModerationDecision::videoFrames($frameScores) === ModerationDecision::REVIEW) {
-            $verdict = ModerationDecision::REVIEW;
-        }
-        $all = array_merge($imageScores, $frameScores);
-        $suggest = [ModerationDecision::PASS => 'pass', ModerationDecision::REVIEW => 'review', ModerationDecision::BLOCK => 'risky'][$verdict];
-        $logId = self::log($uid, $bizType . '_media', 0, 0, 'app_nsfw',
-            json_encode(['images' => $imageScores, 'frames' => $frameScores]), [
-                'pass' => $verdict === ModerationDecision::PASS,
-                'suggest' => $suggest,
-                'label' => $all ? (int)round(max($all) * 1000) : 0,
-                'trace_id' => '',
-            ]);
-        return ['verdict' => $verdict, 'log_id' => $logId];
-    }
-
-    /**
      * 私聊消息因违规被系统撤回时通知发送者
      */
     public static function notifyRecalled(int $uid): void

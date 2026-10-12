@@ -81,18 +81,30 @@ class CommunityReply extends BaseController
 
         $replyId = $this->request->param('reply_id', 0);
 
-        $data = $this->request->params(['content']);
-        if (empty($data['content'])) return app('json')->fail('请输入回复内容');
+        $data = $this->request->params(['content', ['pics', []]]);
+        $data['content'] = trim((string)$data['content']);
+        $pics = is_array($data['pics']) ? $data['pics'] : explode(',', (string)$data['pics']);
+        $pics = array_values(array_filter(array_map(static function ($v) {
+            return is_string($v) ? trim($v) : '';
+        }, $pics)));
+        if (count($pics) > 9) return app('json')->fail('图片最多 9 张');
+        if (mb_strlen(implode(',', $pics)) > 1000) return app('json')->fail('图片地址过长');
+        $data['pics'] = $pics;
+        if ($data['content'] === '' && !$pics) return app('json')->fail('请输入回复内容');
         $user = $this->request->userInfo();
-        $check = ContentSecurityService::checkText(
-            $data['content'],
-            ContentSecurityService::SCENE_COMMENT,
-            'community_reply',
-            0,
-            $user->uid,
-            $user->wechat->routine_openid ?? '',
-            false
-        );
+        $openid = (string)($user->wechat->routine_openid ?? '');
+        $check = ['suggest' => 'pass', 'log_id' => 0];
+        if ($data['content'] !== '') {
+            $check = ContentSecurityService::checkText(
+                $data['content'],
+                ContentSecurityService::SCENE_COMMENT,
+                'community_reply',
+                0,
+                $user->uid,
+                $openid,
+                false
+            );
+        }
         $data['uid'] = $user->uid;
         $data['community_id'] = $id;
 
@@ -115,6 +127,10 @@ class CommunityReply extends BaseController
         ContentSecurityService::bindBizId((int)($check['log_id'] ?? 0), (int)($ret['reply_id'] ?? 0));
         if ($data['status'] === -1) {
             ContentSecurityService::notifyRejected((int)$user->uid, '评论');
+        } elseif ($pics) {
+            // 评论配图先发后审，违规时清除对应图片
+            ContentSecurityService::dispatchMediaCheck('community_reply', (int)($ret['reply_id'] ?? 0), (int)$user->uid,
+                $openid, $pics, ContentSecurityService::SCENE_COMMENT);
         }
         return app('json')->success($msg, $ret);
     }

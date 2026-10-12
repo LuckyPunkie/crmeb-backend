@@ -8,6 +8,8 @@ use app\common\middleware\LogMiddleware;
 
 Route::group(function () {
     Route::group('equity', function () {
+        Route::get('setting', '/setting')->name('adminEquitySetting')->option(['_alias' => '消费送股设置']);
+        Route::post('setting', '/saveSetting')->name('adminEquitySettingSave')->option(['_alias' => '保存消费送股设置']);
         Route::get('projects', '/projectLst')->name('adminEquityProjects')->option(['_alias' => '消费送股项目列表']);
         Route::get('pending-stores', '/pendingStores')->name('adminEquityPending')->option(['_alias' => '待开业管理']);
         Route::post('pending-stores/:id/bind', '/bindStore')->name('adminEquityBind')->option(['_alias' => '绑定新店']);

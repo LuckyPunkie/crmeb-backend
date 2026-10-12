@@ -63,7 +63,8 @@ class Common extends BaseController
 {
     use BindSpreadTrait;
 
-    private const TIANDITU_TK = '91a7ee6b3cbe75e8ede856ffeb3e5fe1';
+    /** 未在后台配置 tianditu_tk 时的兜底（建议线上在「系统设置-地图」填写后删除或留空常量） */
+    private const TIANDITU_TK_FALLBACK = '91a7ee6b3cbe75e8ede856ffeb3e5fe1';
 
     /**
      * @return mixed
@@ -485,6 +486,9 @@ class Common extends BaseController
         if (!$lat || !$lng) {
             return app('json')->fail('缺少经纬度');
         }
+        if ($this->tiandituTk() === '') {
+            return app('json')->fail('未配置天地图KEY，请在平台后台地图配置中填写');
+        }
 
         $cacheKey = 'tianditu_geocoder_' . round($lat, 3) . '_' . round($lng, 3);
         $cache = Cache::store();
@@ -515,6 +519,9 @@ class Common extends BaseController
         $keyword = trim((string)$this->request->param('keyword/s', ''));
         if ($keyword === '') {
             return app('json')->fail('请输入搜索关键词');
+        }
+        if ($this->tiandituTk() === '') {
+            return app('json')->fail('未配置天地图KEY，请在平台后台地图配置中填写');
         }
         $region = trim((string)$this->request->param('region/s', ''));
         $location = trim((string)$this->request->param('location/s', ''));
@@ -710,9 +717,23 @@ class Common extends BaseController
         return $list;
     }
 
+    /** 优先读平台配置 eb_system_config.tianditu_tk（与 tx_map_key 同机制） */
+    private function tiandituTk(): string
+    {
+        $tk = trim((string)systemConfig('tianditu_tk'));
+        if ($tk !== '') {
+            return $tk;
+        }
+        return self::TIANDITU_TK_FALLBACK;
+    }
+
     private function tiandituGet($url, array $params)
     {
-        $params['tk'] = self::TIANDITU_TK;
+        $tk = $this->tiandituTk();
+        if ($tk === '') {
+            return null;
+        }
+        $params['tk'] = $tk;
         $content = HttpService::getRequest($url, $params);
         return $content === false ? null : json_decode($content, true);
     }

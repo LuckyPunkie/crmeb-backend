@@ -7,36 +7,147 @@ use app\common\model\store\equity\EquityProject;
 use app\common\model\store\equity\EquityTransaction;
 use app\common\model\store\equity\MerchantEquityConfig;
 use app\common\repositories\BaseRepository;
+use app\common\repositories\system\merchant\MerchantFeatureSwitchRepository as Switches;
 use think\exception\ValidateException;
 use think\facade\Db;
 
 class EquityConfigRepository extends BaseRepository
 {
+    /** 平台总开关三选一，含义见 MerchantFeatureSwitchRepository */
+    const MODE_OFF = Switches::MODE_OFF;
+    const MODE_MER_OPT_IN = Switches::MODE_MER_OPT_IN;
+    const MODE_ALL_ON = Switches::MODE_ALL_ON;
+
+    /** eb_system_config_value(mer_id=0) 直读直写，不走 systemConfig 缓存 */
+    const KEY_CONSUME_MODE = 'equity_consume_mode';
+    const KEY_INVEST_MODE = 'equity_invest_mode';
+
+    /** 未设置时的默认值：与上线前行为一致（配置过的商家显示、充值入股对所有显示的店铺开放） */
+    const DEFAULT_CONSUME_MODE = self::MODE_MER_OPT_IN;
+    const DEFAULT_INVEST_MODE = self::MODE_ALL_ON;
+
     public function __construct(MerchantEquityConfigDao $dao)
     {
         $this->dao = $dao;
     }
 
+    protected function switches(): Switches
+    {
+        return app()->make(Switches::class);
+    }
+
+    public function getPlatformModes(): array
+    {
+        $modes = $this->switches()->readPlatformModes([
+            self::KEY_CONSUME_MODE => self::DEFAULT_CONSUME_MODE,
+            self::KEY_INVEST_MODE => self::DEFAULT_INVEST_MODE,
+        ]);
+        return [
+            'consume_mode' => $modes[self::KEY_CONSUME_MODE],
+            'invest_mode' => $modes[self::KEY_INVEST_MODE],
+        ];
+    }
+
+    public function savePlatformModes(int $consumeMode, int $investMode): array
+    {
+        $this->switches()->writePlatformModes([
+            self::KEY_CONSUME_MODE => $consumeMode,
+            self::KEY_INVEST_MODE => $investMode,
+        ]);
+        return $this->getPlatformModes();
+    }
+
+    /**
+     * 平台模式 + 商家开关 => 是否开启
+     * 商家开关 NULL = 从未手动设置：模式1 视为关、模式2 视为开
+     */
+    protected function resolveSwitch(int $mode, $merValue): bool
+    {
+        return Switches::resolveSwitch($mode, $merValue);
+    }
+
+    /**
+     * 店铺消费送股 / 充值买股的生效状态
+     *  - consume_visible：店铺详情页是否显示消费送股模块
+     *  - invest_visible：消费送股显示的前提下，是否显示充值买股
+     *  - rate_configured：是否已设置送股比例与目标股本；未设置时模块可显示但数据不变（不送股、不可充值）
+     *
+     * @param array|null $config eb_merchant_equity_config 行；不传则按 mer_id 查询
+     */
+    public function resolveState(int $merId, ?array $config = null, ?array $modes = null): array
+    {
+        if ($config === null) {
+            $row = MerchantEquityConfig::getDB()->where('mer_id', $merId)->find();
+            $config = $row ? $row->toArray() : [];
+        }
+        $modes = $modes ?: $this->getPlatformModes();
+        $consumeVisible = $this->resolveSwitch($modes['consume_mode'], $config['enabled'] ?? null);
+        $investVisible = $consumeVisible && $this->resolveSwitch($modes['invest_mode'], $config['invest_enabled'] ?? null);
+        $rateConfigured = (float)($config['consume_equity_percent'] ?? 0) > 0
+            && (int)($config['target_equity_amount'] ?? 0) > 0;
+
+        return [
+            'consume_mode' => $modes['consume_mode'],
+            'invest_mode' => $modes['invest_mode'],
+            'consume_visible' => $consumeVisible,
+            'invest_visible' => $investVisible,
+            'rate_configured' => $rateConfigured,
+        ];
+    }
+
     public function getConfig(int $merId): array
     {
         $row = MerchantEquityConfig::getDB()->where('mer_id', $merId)->find();
-        if (!$row) {
-            return [
-                'mer_id' => $merId,
-                'enabled' => 1,
-                'consume_equity_percent' => '',
-                'target_equity_amount' => '',
-                'configured' => false,
-            ];
+        $data = $row ? $row->toArray() : [];
+        $state = $this->resolveState($merId, $data);
+        $rateConfigured = $state['rate_configured'];
+
+        return [
+            'mer_id' => $merId,
+            // 商家开关以生效值回显（未手动设置时按平台默认）
+            'enabled' => $state['consume_visible'] ? 1 : 0,
+            'invest_enabled' => $this->resolveSwitch($state['invest_mode'], $data['invest_enabled'] ?? null) ? 1 : 0,
+            'consume_equity_percent' => $rateConfigured ? $data['consume_equity_percent'] : '',
+            'target_equity_amount' => $rateConfigured ? $data['target_equity_amount'] : '',
+            'configured' => $rateConfigured,
+            'consume_mode' => $state['consume_mode'],
+            'invest_mode' => $state['invest_mode'],
+            'consume_visible' => $state['consume_visible'],
+            'invest_visible' => $state['invest_visible'],
+        ];
+    }
+
+    /**
+     * 商家手动开关（显式写 0/1，之后不再跟随平台默认）
+     *
+     * @param string $type consume|invest
+     */
+    public function saveSwitch(int $merId, string $type, int $value): array
+    {
+        $column = $type === 'invest' ? 'invest_enabled' : 'enabled';
+        $modes = $this->getPlatformModes();
+        $mode = $type === 'invest' ? $modes['invest_mode'] : $modes['consume_mode'];
+        if ($mode === self::MODE_OFF) {
+            throw new ValidateException($type === 'invest' ? '平台已关闭充值买股' : '平台已关闭消费送股');
         }
-        $data = $row->toArray();
-        $data['configured'] = true;
-        return $data;
+        $value = $value ? 1 : 0;
+
+        Db::transaction(function () use ($merId, $column, $value) {
+            $row = MerchantEquityConfig::getDB()->where('mer_id', $merId)->lock(true)->find();
+            if ($row) {
+                MerchantEquityConfig::getDB()->where('id', $row['id'])->update([$column => $value]);
+            } else {
+                MerchantEquityConfig::getDB()->insert(['mer_id' => $merId, $column => $value]);
+            }
+        });
+
+        return $this->getConfig($merId);
     }
 
     public function saveConfig(int $merId, array $data): array
     {
-        $enabled = isset($data['enabled']) ? (int)$data['enabled'] : 1;
+        // 新版商家后台开关走 saveSwitch；旧版页面仍随表单提交 enabled，兼容保留
+        $enabled = isset($data['enabled']) && $data['enabled'] !== '' ? ((int)$data['enabled'] ? 1 : 0) : null;
         $percent = isset($data['consume_equity_percent']) ? round((float)$data['consume_equity_percent'], 2) : 0;
         $target = isset($data['target_equity_amount']) ? (int)$data['target_equity_amount'] : 0;
 
@@ -54,10 +165,12 @@ class EquityConfigRepository extends BaseRepository
             $row = MerchantEquityConfig::getDB()->where('mer_id', $merId)->lock(true)->find();
             $payload = [
                 'mer_id' => $merId,
-                'enabled' => $enabled ? 1 : 0,
                 'consume_equity_percent' => $percent,
                 'target_equity_amount' => $target,
             ];
+            if ($enabled !== null) {
+                $payload['enabled'] = $enabled;
+            }
             if ($row) {
                 MerchantEquityConfig::getDB()->where('id', $row['id'])->update($payload);
             } else {

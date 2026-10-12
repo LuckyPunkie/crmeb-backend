@@ -74,6 +74,8 @@ class CacheRepository extends BaseRepository
     const CIRCLE_ENTRY_AGREE = 'circle_entry_agree';
     //商户入驻协议
     const BUSINESS_ENTRY_AGREE = 'business_entry_agree';
+    //消费送股/入股协议
+    const EQUITY_INVEST_AGREE = 'equity_invest_agree';
 
 
     public function getAgreeList($type)
@@ -82,6 +84,7 @@ class CacheRepository extends BaseRepository
             ['label' => '用户协议',        'key' => self::USER_AGREE],
             ['label' => '隐私政策',        'key' => self::USER_PRIVACY],
             ['label' => '注销提示',     'key' => self::CANCELLATION_PROMPT],
+            ['label' => '消费送股/入股协议', 'key' => self::EQUITY_INVEST_AGREE],
         ];
         if (!systemConfig('mini_review_status')) {
             $data = array_merge($data,[
@@ -130,6 +133,7 @@ class CacheRepository extends BaseRepository
             self::PROMOTER_EXPLAIN, // 推广说明协议
             self::CIRCLE_ENTRY_AGREE, // 商圈入驻协议
             self::BUSINESS_ENTRY_AGREE, // 商户入驻协议
+            self::EQUITY_INVEST_AGREE, // 消费送股/入股协议
         ];
     }
 

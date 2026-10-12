@@ -783,6 +783,14 @@ class Goods extends BaseController
             ['id' => 3, 'text' => '大额券'],
             ['id' => 13270, 'text' => '国家补贴'],
         ];
+        $excludeElite = config('taoke.exclude_new_user.jd_elite_ids');
+        $excludeElite = is_array($excludeElite) ? array_map('intval', $excludeElite) : [238];
+        $eliteTags = array_values(array_filter($eliteTags, function ($tag) use ($excludeElite) {
+            $id = (int) ($tag['id'] ?? 0);
+
+            return $id <= 0 || !in_array($id, $excludeElite, true);
+        }));
+
         return array_merge($priceTags, $eliteTags);
     }
 
@@ -863,6 +871,15 @@ class Goods extends BaseController
             ['id' => 24, 'text' => '品牌高佣'],
             ['id' => 10564, 'text' => '精选爆品'],
         ];
+        $excludePdd = config('taoke.exclude_new_user.pdd_activity_tags');
+        $excludePdd = is_array($excludePdd) ? array_map('intval', $excludePdd) : [];
+        if ($excludePdd !== []) {
+            $activityTags = array_values(array_filter($activityTags, function ($tag) use ($excludePdd) {
+                $id = (int) ($tag['id'] ?? 0);
+
+                return $id <= 0 || !in_array($id, $excludePdd, true);
+            }));
+        }
         $fallback = array_merge($priceTags, $activityTags);
         if (config('taoke.driver.pdd') === 'official') {
             return $fallback;

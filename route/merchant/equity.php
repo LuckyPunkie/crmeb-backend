@@ -10,6 +10,7 @@ use app\common\middleware\MerchantCheckBaseInfoMiddleware;
 Route::group(function () {
     Route::get('equity/config', '/config')->name('merchantEquityConfig')->option(['_alias' => '消费送股配置']);
     Route::post('equity/config', '/saveConfig')->name('merchantEquityConfigSave')->option(['_alias' => '保存消费送股配置']);
+    Route::post('equity/switch', '/saveSwitch')->name('merchantEquitySwitchSave')->option(['_alias' => '消费送股/充值买股开关']);
     Route::get('equity/progress', '/progress')->name('merchantEquityProgress')->option(['_alias' => '消费送股进度']);
     Route::get('equity/transactions', '/transactions')->name('merchantEquityTransactions')->option(['_alias' => '最近入股记录']);
 })->middleware(AllowOriginMiddleware::class)

@@ -10,7 +10,7 @@ class UserProfileFieldRepository extends BaseRepository
 {
     protected $dao;
 
-    public const TYPES = ['text', 'radio', 'checkbox', 'year', 'height', 'weight', 'region', 'number'];
+    public const TYPES = ['text', 'radio', 'checkbox', 'year', 'height', 'weight', 'region', 'number', 'switch'];
 
     public function __construct(dao $dao)
     {

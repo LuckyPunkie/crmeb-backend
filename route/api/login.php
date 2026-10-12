@@ -205,6 +205,13 @@ Route::group(function () {
         // 社交档案
         Route::get('profile', 'UserProfile/detail');
         Route::post('profile/save', 'UserProfile/save');
+        // 找到我的方式 / 找人
+        Route::get('find_me', 'UserProfile/findMeState');
+        Route::post('find_me/toggle', 'UserProfile/findMeToggle');
+        Route::get('find_me/search', 'UserProfile/findMeSearch');
+        Route::get('find_me/pay_info', 'UserProfile/findMePayInfo');
+        Route::post('find_me/order', 'UserProfile/findMeOrder');
+        Route::get('find_me/order/:order_no', 'UserProfile/findMeOrderStatus');
         // 付费解锁微信号
         Route::post('wechat_unlock/:uid', 'UserProfile/wechatUnlock');
         Route::get('wechat_unlock_check/:uid', 'UserProfile/wechatUnlockCheck');

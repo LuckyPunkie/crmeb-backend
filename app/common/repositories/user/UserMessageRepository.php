@@ -14,6 +14,7 @@ namespace app\common\repositories\user;
 
 use app\common\dao\user\UserDialogDao;
 use app\common\dao\user\UserMessageDao;
+use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use crmeb\services\SwooleTaskService;
 use think\exception\ValidateException;
@@ -109,6 +110,7 @@ class UserMessageRepository extends BaseRepository
         $dialog->save();
 
         $userInfo = Db::name('user')->field('uid,nickname,avatar')->where('uid', $fromUid)->find();
+        $userInfo['avatar'] = User::displayAvatar($userInfo['avatar'] ?? '');
 
         SwooleTaskService::user($toUid, [
             'type' => 'user_message',
@@ -141,12 +143,27 @@ class UserMessageRepository extends BaseRepository
         if (!$msg || $msg->from_uid != $uid) {
             throw new ValidateException('无权撤回此消息');
         }
+        if ((int)$msg->msn_type === 100) {
+            throw new ValidateException('消息已撤回');
+        }
+        if ((int)$msg->msn_type === 10) {
+            throw new ValidateException('礼物消息不支持撤回');
+        }
         if (strtotime($msg->create_time) < strtotime('-120 seconds')) {
             throw new ValidateException('消息已超过2分钟，无法撤回');
         }
         $msg->msn_type = 100;
         $msg->msn = '';
         $msg->save();
+
+        // 被撤回的是会话最后一条时替换预览；会话列表按 last_sender_uid 显示「你/对方撤回了一条消息」
+        $latestId = (int)Db::name('user_message')->where('dialog_id', $msg->dialog_id)->max('message_id');
+        if ($latestId === $messageId) {
+            Db::name('user_dialog')->where('dialog_id', $msg->dialog_id)->update([
+                'last_message'      => '撤回了一条消息',
+                'last_message_type' => 100,
+            ]);
+        }
 
         SwooleTaskService::user($msg->to_uid, [
             'type' => 'user_message_recall',
@@ -199,7 +216,8 @@ class UserMessageRepository extends BaseRepository
         foreach ([(int)$msg->to_uid, (int)$msg->from_uid] as $uid) {
             SwooleTaskService::user($uid, [
                 'type' => 'user_message_recall',
-                'data' => ['message_id' => $messageId, 'dialog_id' => $msg->dialog_id],
+                // system=1：前端显示"该消息已被撤回"，区别于用户自己撤回
+                'data' => ['message_id' => $messageId, 'dialog_id' => $msg->dialog_id, 'system' => 1],
             ]);
         }
         return true;

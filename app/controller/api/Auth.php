@@ -30,6 +30,7 @@ use app\common\repositories\wechat\WechatUserRepository;
 use app\validate\api\ChangePasswordValidate;
 use app\validate\api\UserAuthValidate;
 use crmeb\basic\BaseController;
+use crmeb\services\AppleIdentityService;
 use crmeb\services\wechat\MiniProgram;
 use crmeb\services\SmsService;
 use crmeb\services\WechatTemplateMessageService;
@@ -629,19 +630,21 @@ class Auth extends BaseController
                 throw new ValidateException('授权失败[001]');
             return $user;
         } else if ($auth['type'] === 'apple') {
-            $identityToken = $data['userInfo']['identityToken'];
-            $tks = explode('.', $identityToken);
-            if (count($tks) != 3) {
-                throw new ValidateException('Wrong number of segments');
-            }
-            list($headb64, $bodyb64, $cryptob64) = $tks;
-            if (null === ($payload = JWT::jsonDecode(JWT::urlsafeB64Decode($bodyb64)))) {
-                throw new ValidateException('Invalid header encoding');
-            }
-            if ($payload->sub != $data['openId']) {
+            // 原逻辑只 base64 解出 payload 比对 sub，未验签，可被伪造；改为用苹果公钥验签 + 校验 iss/aud/exp
+            // $identityToken = $data['userInfo']['identityToken'];
+            // $tks = explode('.', $identityToken);
+            // if (count($tks) != 3) {
+            //     throw new ValidateException('Wrong number of segments');
+            // }
+            // list($headb64, $bodyb64, $cryptob64) = $tks;
+            // if (null === ($payload = JWT::jsonDecode(JWT::urlsafeB64Decode($bodyb64)))) {
+            //     throw new ValidateException('Invalid header encoding');
+            // }
+            $payload = AppleIdentityService::verify((string)($data['userInfo']['identityToken'] ?? ''));
+            if ($payload->sub != ($data['openId'] ?? '')) {
                 throw new ValidateException('授权失败[001]');
             }
-            $user = app()->make(WechatUserRepository::class)->syncAppUser($data['openId'], [
+            $user = app()->make(WechatUserRepository::class)->syncAppUser($payload->sub, [
                 'nickName' => (string)$data['nickname'] ?: '用户' . strtoupper(substr(md5(time()), 0, 12))
             ], 'App', $createUser);
             if (!$user)
@@ -776,11 +779,23 @@ class Auth extends BaseController
 
     public function appleAuth()
     {
-        $data = $this->request->params(['openId', 'nickname']);
+        $data = $this->request->params(['openId', 'nickname', 'identityToken']);
 
         if (systemConfig('is_phone_login') === '1') {
             return app('json')->fail('请绑定手机号');
         }
+
+        // 原逻辑直接信任客户端传的 openId，任何人知道 openId 即可登录；改为必须带 identityToken 验签
+        try {
+            $payload = AppleIdentityService::verify((string)$data['identityToken']);
+        } catch (ValidateException $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        $clientOpenId = (string)($data['openId'] ?? '');
+        if ($clientOpenId !== '' && $payload->sub !== $clientOpenId) {
+            return app('json')->fail('授权失败');
+        }
+        $data['openId'] = $payload->sub;
 
         $user = app()->make(WechatUserRepository::class)->syncAppUser($data['openId'], [
             'nickName' => (string)$data['nickname'] ?: '用户' . strtoupper(substr(md5(time()), 0, 12))

@@ -188,6 +188,17 @@ class EquityProjectRepository extends BaseRepository
 
         $remain = max(0, round((float)$project['target_amount'] - (float)$project['total_consumer_amount'], 2));
 
+        // 已有待审核的充值退款：不再显示申请入口，改为「退款审核中」
+        $pendingRefund = null;
+        if ($my) {
+            $pendingRefund = EquityInvestRefund::getDB()
+                ->where('project_id', $projectId)
+                ->where('uid', $uid)
+                ->where('status', EquityInvestRefund::STATUS_PENDING)
+                ->order('id', 'desc')
+                ->find();
+        }
+
         return [
             'project' => $project,
             'config' => $config ? $config->toArray() : null,
@@ -218,7 +229,11 @@ class EquityProjectRepository extends BaseRepository
             'progress' => $this->progressPct($project['total_consumer_amount'], $project['target_amount']),
             'can_invest' => (int)$project['status'] === EquityProject::STATUS_RAISING && $remain >= 0.01,
             'can_refund_invest' => (int)$project['status'] === EquityProject::STATUS_RAISING
-                && $my && (float)$my['invest_amount'] >= 0.01,
+                && $my && (float)$my['invest_amount'] >= 0.01 && !$pendingRefund,
+            'refund_pending' => $pendingRefund ? [
+                'id' => (int)$pendingRefund['id'],
+                'refund_amount' => (float)$pendingRefund['refund_amount'],
+            ] : null,
             'raising_project' => $raising ? $this->projectDetailLite($raising->toArray(), $uid) : null,
             'disclaimer' => '股本金不等于实际股权，仅享有分红权，不参与经营决策。',
         ];
@@ -252,6 +267,28 @@ class EquityProjectRepository extends BaseRepository
     public function shopInvestModule(int $merId, int $uid = 0): array
     {
         $config = MerchantEquityConfig::getDB()->where('mer_id', $merId)->find();
+        /** @var EquityConfigRepository $configRepo */
+        $configRepo = app()->make(EquityConfigRepository::class);
+        $state = $configRepo->resolveState($merId, $config ? $config->toArray() : []);
+        $visible = $state['consume_visible'];
+
+        if (!$visible) {
+            // 平台/商家关闭：整个消费送股板块（含入股记录、已达成项目）不显示
+            return [
+                'visible' => false,
+                'invest_visible' => false,
+                'rate_configured' => $state['rate_configured'],
+                'configured' => false,
+                'enabled' => 0,
+                'consume_equity_percent' => 0,
+                'raising' => null,
+                'pending_list' => [],
+                'funded_list' => [],
+                'my_transactions' => [],
+                'disclaimer' => '',
+            ];
+        }
+
         $raising = EquityProject::getDB()
             ->where('mer_id', $merId)
             ->where('status', EquityProject::STATUS_RAISING)
@@ -265,9 +302,14 @@ class EquityProjectRepository extends BaseRepository
             ->toArray();
 
         $module = [
-            'enabled' => $config ? (int)$config['enabled'] : 0,
-            'configured' => (bool)$config,
-            'consume_equity_percent' => $config ? (float)$config['consume_equity_percent'] : 0,
+            'visible' => true,
+            'invest_visible' => $state['invest_visible'],
+            // 未设置送股比例：板块照常显示，但不送股、不可充值，数据保持不变
+            'rate_configured' => $state['rate_configured'],
+            // 旧版 App 用 configured / enabled 判断是否显示板块，这里与 visible 对齐
+            'configured' => true,
+            'enabled' => 1,
+            'consume_equity_percent' => $state['rate_configured'] ? (float)$config['consume_equity_percent'] : 0,
             'raising' => null,
             'pending_list' => [],
             'funded_list' => [],
@@ -277,6 +319,9 @@ class EquityProjectRepository extends BaseRepository
 
         if ($raising) {
             $module['raising'] = $this->projectDetail((int)$raising['id'], $uid);
+            if (!$state['invest_visible'] || !$state['rate_configured']) {
+                $module['raising']['can_invest'] = false;
+            }
         }
 
         $oldMer = Merchant::getDB()->where('mer_id', $merId)->find();

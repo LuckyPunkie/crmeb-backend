@@ -9,7 +9,6 @@ namespace crmeb\jobs;
 use crmeb\interfaces\JobInterface;
 use crmeb\services\security\ContentSecurityService;
 use crmeb\services\security\MediaModerationResolver;
-use crmeb\services\security\ModerationDecision;
 use crmeb\services\VideoCoverService;
 use think\facade\Log;
 
@@ -36,26 +35,10 @@ class MediaCheckSubmitJob implements JobInterface
                 $submitted += ContentSecurityService::submitMedia($audio, ContentSecurityService::MEDIA_AUDIO, $scene, $bizType, $bizId, $uid, $openid);
             }
             if ($submitted === 0) {
-                $fallbackImages = self::normalizeScores($data['fallback_image_scores'] ?? []);
-                $fallbackFrames = self::normalizeScores($data['fallback_frame_scores'] ?? []);
-                if ($bizType === 'community_post' && ($fallbackImages || $fallbackFrames)) {
-                    Log::warning("微信媒体 V2 全部提交失败，改用 App 端侧分数降级：community_post#{$bizId}");
-                    $judge = ContentSecurityService::judgeAppMediaScores(
-                        $fallbackImages,
-                        $fallbackFrames,
-                        'community_post',
-                        (int)($data['uid'] ?? 0)
-                    );
-                    ContentSecurityService::bindBizId((int)$judge['log_id'], $bizId);
-                    $verdict = MediaModerationResolver::VERDICT_PASS;
-                    if ($judge['verdict'] === ModerationDecision::BLOCK) {
-                        $verdict = MediaModerationResolver::VERDICT_REJECT;
-                    } elseif ($judge['verdict'] === ModerationDecision::REVIEW) {
-                        $verdict = MediaModerationResolver::VERDICT_REVIEW;
-                    }
-                    MediaModerationResolver::applyCommunityPostVerdict($bizId, $verdict);
+                Log::warning("微信媒体 V2 全部提交失败，转人工审核：{$bizType}#{$bizId}");
+                if ($bizType === 'community_post') {
+                    MediaModerationResolver::applyCommunityPostVerdict($bizId, MediaModerationResolver::VERDICT_REVIEW);
                 } else {
-                    Log::alert("媒体审核全部提交失败，按服务不可用放行：{$bizType}#{$bizId}");
                     MediaModerationResolver::resolve($bizType, $bizId);
                 }
             }
@@ -71,22 +54,6 @@ class MediaCheckSubmitJob implements JobInterface
 
     public function failed($data)
     {
-    }
-
-    /** @param mixed $raw */
-    protected static function normalizeScores($raw): array
-    {
-        if (is_string($raw)) {
-            $decoded = json_decode($raw, true);
-            $raw = is_array($decoded) ? $decoded : explode(',', $raw);
-        }
-        $scores = [];
-        foreach ((array)$raw as $v) {
-            if (is_numeric($v) && (float)$v >= 0 && (float)$v <= 1) {
-                $scores[] = (float)$v;
-            }
-        }
-        return array_slice($scores, 0, 50);
     }
 
     protected function absoluteUrl($url): string

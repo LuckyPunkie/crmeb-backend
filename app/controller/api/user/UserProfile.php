@@ -3,12 +3,15 @@
 namespace app\controller\api\user;
 
 use think\App;
+use think\facade\Cache;
 use crmeb\basic\BaseController;
 use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\user\UserProfileRepository as repository;
 use app\common\repositories\user\UserProfileFieldRepository;
 use app\common\repositories\user\UserWechatUnlockRepository;
 use app\common\repositories\user\UserHomepageUnlockRepository;
+use app\common\repositories\user\UserFindMeOrderRepository;
+use app\common\repositories\user\UserFindMeRepository;
 
 class UserProfile extends BaseController
 {
@@ -135,7 +138,92 @@ class UserProfile extends BaseController
             'birthday' => $userInfo['birthday'] ?? null,
             'profile'  => $profile,
             'fields'   => $fields,
+            'find_me'  => app()->make(UserFindMeRepository::class)->state($uid, $profile),
         ]);
+    }
+
+    /**
+     * 找到我的方式：设置页各项状态
+     * GET /api/user/find_me
+     */
+    public function findMeState()
+    {
+        return app('json')->success(app()->make(UserFindMeRepository::class)->state($this->request->uid()));
+    }
+
+    /**
+     * 找到我的方式：拨动开关即保存
+     * POST /api/user/find_me/toggle  body: key=phone|id_card|plate_number|..., enabled=0|1
+     */
+    public function findMeToggle()
+    {
+        $key = trim((string)$this->request->param('key', ''));
+        $enabled = (int)$this->request->param('enabled', 0) === 1;
+        $state = app()->make(UserFindMeRepository::class)
+            ->toggle($this->request->uid(), $key, $enabled);
+        return app('json')->success($state);
+    }
+
+    /**
+     * 找人：按信息项检索已开启「找到我的方式」的用户
+     * 需年卡有效，或带本人已支付、类型和关键词一致的单次订单号
+     * GET /api/user/find_me/search?type=douyin_id&keyword=xxx&order_no=FM...
+     */
+    public function findMeSearch()
+    {
+        $uid = $this->request->uid();
+        $cacheKey = 'find_me_search:' . $uid . ':' . intval(time() / 60);
+        $count = Cache::inc($cacheKey);
+        Cache::expire($cacheKey, 120);
+        if ($count > 20) {
+            return app('json')->fail('查询太频繁，请稍后再试');
+        }
+        $type = trim((string)$this->request->param('type', ''));
+        $keyword = (string)$this->request->param('keyword', '');
+        $orderNo = trim((string)$this->request->param('order_no', ''));
+        $findMe = app()->make(UserFindMeRepository::class);
+        $value = $findMe->normalizeQuery($type, $keyword);
+        if (!app()->make(UserFindMeOrderRepository::class)->canSearch($uid, $type, $value, $orderNo)) {
+            return app('json')->fail('请先支付查询费用');
+        }
+        return app('json')->success(['list' => $findMe->search($type, $keyword, $uid)]);
+    }
+
+    /**
+     * 找人查询页：套餐价格 + 年卡到期时间
+     * GET /api/user/find_me/pay_info
+     */
+    public function findMePayInfo()
+    {
+        return app('json')->success(app()->make(UserFindMeOrderRepository::class)->info($this->request->uid()));
+    }
+
+    /**
+     * 找人下单支付
+     * POST /api/user/find_me/order  body: plan=once|year, type, keyword, pay_type
+     */
+    public function findMeOrder()
+    {
+        $result = app()->make(UserFindMeOrderRepository::class)->create(
+            $this->request->uid(),
+            (string)$this->request->param('plan', ''),
+            trim((string)$this->request->param('type', '')),
+            (string)$this->request->param('keyword', ''),
+            (string)$this->request->param('pay_type', 'weixin'),
+            (string)$this->request->param('return_url', '')
+        );
+        return app('json')->success($result);
+    }
+
+    /**
+     * 找人订单是否已支付（微信支付后轮询）
+     * GET /api/user/find_me/order/:order_no
+     */
+    public function findMeOrderStatus($order_no)
+    {
+        $paid = app()->make(UserFindMeOrderRepository::class)
+            ->isPaid($this->request->uid(), (string)$order_no);
+        return app('json')->success(['paid' => $paid]);
     }
 
     /**
@@ -339,7 +427,9 @@ class UserProfile extends BaseController
                         : mb_substr(trim((string)$value), 0, 255);
                     continue;
                 }
-                if (($meta['type'] ?? '') === 'checkbox') {
+                if (($meta['type'] ?? '') === 'switch') {
+                    $extraPatch[$key] = in_array((string)$value, ['1', 'true'], true) ? '1' : '0';
+                } elseif (($meta['type'] ?? '') === 'checkbox') {
                     if (is_array($value)) {
                         $extraPatch[$key] = array_values(array_map('strval', $value));
                     } elseif (is_string($value) && $value !== '') {

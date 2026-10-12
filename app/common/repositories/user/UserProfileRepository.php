@@ -74,6 +74,8 @@ class UserProfileRepository extends BaseRepository
             'hobby_photo_1',
             'hobby_photo_2',
             'extra_fields',
+            'find_me_enabled',
+            'find_me_items',
         ];
         $filtered = array_intersect_key($data, array_flip($allowed));
         if (isset($filtered['hobbies']) && is_array($filtered['hobbies'])) {
@@ -83,6 +85,12 @@ class UserProfileRepository extends BaseRepository
             $filtered['extra_fields'] = $this->encodeExtraFields($filtered['extra_fields']);
         }
         $this->dao->upsert($uid, $filtered);
+        // 资料变了要同步「找到我的方式」检索索引；失败不影响资料保存
+        try {
+            app()->make(UserFindMeRepository::class)->sync($uid);
+        } catch (\Throwable $e) {
+            \think\facade\Log::error('find_me sync failed uid=' . $uid . ': ' . $e->getMessage());
+        }
     }
 
     /**

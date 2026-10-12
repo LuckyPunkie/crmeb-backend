@@ -313,6 +313,7 @@ class CommunityReplyRepository extends BaseRepository
             $note = \app\common\repositories\user\UserNotificationRepository::noteBriefById($communityId);
             $notifyRepo = app()->make(\app\common\repositories\user\UserNotificationRepository::class);
             $contentText = mb_substr((string)($data['content'] ?? ''), 0, 100);
+            if ($contentText === '' && !empty($data['pics'])) $contentText = '[图片]';
             if ($replyId) {
                 // 回复评论
                 $parent = $this->dao->get($replyId);

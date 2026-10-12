@@ -4,6 +4,7 @@ namespace app\common\repositories\store\nearby;
 
 use app\common\model\store\order\StoreOrder;
 use app\common\model\store\product\Product;
+use app\common\repositories\system\merchant\MerchantFeatureSwitchRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\user\UserBillRepository;
 use think\facade\Cache;
@@ -47,6 +48,10 @@ class WelfareFreeOrderRepository
     {
         if ($scanMerId <= 0 || $billAmount <= 0 || $productId <= 0) {
             throw new ValidateException('参数错误');
+        }
+        // 平台总开关 + 商家开关：买单页公益商品关闭时不可享免单（旧版 App 仍会显示入口）
+        if (!app()->make(MerchantFeatureSwitchRepository::class)->isOn($scanMerId, 'bill_welfare')) {
+            throw new ValidateException('该店铺暂未开放购物享免单');
         }
         $product = Product::getDB()->where('product_id', $productId)
             ->where('is_del', 0)

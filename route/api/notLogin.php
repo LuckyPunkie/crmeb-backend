@@ -87,6 +87,8 @@ Route::post('auth/mp', 'api.Auth/mpAuth');
 Route::post('auth/app', 'api.Auth/appAuth');
 //apple授权
 Route::post('auth/apple', 'api.Auth/appleAuth');
+//Sign in with Apple 服务器通知（填到苹果后台 Server-to-Server Notification Endpoint）
+Route::post('apple/notify', 'api.AppleNotify/notify');
 //修改密码
 Route::post('user/change_pwd', 'api.Auth/changePassword');
 //验证码

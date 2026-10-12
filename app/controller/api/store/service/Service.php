@@ -269,6 +269,10 @@ class Service extends BaseController
             $userToken = $this->request->header('Authorization');
         }
         if (!$userToken) {
+            // uniapp 普通请求只带 X-Token（路由中间件已校验过）
+            $userToken = $this->request->header('X-Token');
+        }
+        if (!$userToken) {
             return app('json')->fail('缺少认证信息');
         }
         Cache::set("ws_temp_token:{$token}", $userToken, 30);

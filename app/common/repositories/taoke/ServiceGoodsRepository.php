@@ -197,6 +197,12 @@ class ServiceGoodsRepository
             $meta['pipeline'][] = 'PddOfficialService::fetchDetail(goods_sign)';
             $detail = $this->pddOfficial->fetchDetail($goodsSign);
             if (!empty($detail) && !isset($detail['error_response'])) {
+                if ($this->isPddNewUserExclusiveRow($detail)) {
+                    $meta['pipeline'][] = 'excluded:new_user_exclusive';
+                    $meta['official_fetch_empty'] = true;
+
+                    return ['detail' => [], 'meta' => $meta];
+                }
                 $meta['detail_from'] = 'pdd.ddk.goods.detail';
                 return ['detail' => $detail, 'meta' => $meta];
             }
@@ -255,9 +261,12 @@ class ServiceGoodsRepository
             if (!is_array($row)) {
                 continue;
             }
-            $id = $row['channelId'] ?? ($row['id'] ?? '');
+            $id = (int) ($row['channelId'] ?? ($row['id'] ?? 0));
             $text = $row['channelName'] ?? ($row['name'] ?? '');
-            if ($id === '' || $text === '') {
+            if ($id <= 0 || $text === '') {
+                continue;
+            }
+            if ($this->isExcludedKuaishouChannelId($id, (string) $text)) {
                 continue;
             }
             $data[] = ['id' => $id, 'text' => $text];
@@ -578,6 +587,12 @@ class ServiceGoodsRepository
             $raw = $this->jdOfficial->fetchDetail($itemIds, $summary, $hints);
             $beforeRows = $this->normalizeJdDetailRowsForMerge($raw);
             $meta['official_before_supplement'] = $beforeRows[0] ?? null;
+            if ($beforeRows !== [] && $this->isJdNewUserExclusiveRow($beforeRows[0])) {
+                $meta['pipeline'][] = 'excluded:new_user_exclusive';
+                $meta['official_fetch_empty'] = true;
+
+                return ['list' => [], 'meta' => $meta];
+            }
             if ($beforeRows === []) {
                 $meta['official_fetch_empty'] = true;
             }
@@ -1047,13 +1062,18 @@ class ServiceGoodsRepository
         try {
             switch ($platform) {
                 case 'taobao':
-                    return $this->normalizeTaobao(
-                        $this->taobaoOfficial->fetchSearch('', $page, $limit, (int) $cate)
-                    );
+                    $tbRows = $this->taobaoOfficial->fetchSearch('', $page, $limit, (int) $cate);
+                    $tbRows = $this->filterNewUserExclusiveRawRows('taobao', $tbRows);
+
+                    return $this->normalizeTaobao($tbRows);
                 case 'jd':
                     if ($this->isJdOfficial()) {
+                        $cateInt = (int) $cate;
+                        if ($this->isExcludedJdEliteId($cateInt)) {
+                            return [];
+                        }
                         $list = $this->normalizeJd(
-                            $this->jdOfficial->fetchFeed($page, $limit, (int) $cate)
+                            $this->jdOfficial->fetchFeed($page, $limit, $cateInt)
                         );
                         if (!empty($list)) {
                             return $list;
@@ -1078,7 +1098,11 @@ class ServiceGoodsRepository
                     return [];
                 case 'pdd':
                     if ($this->isPddOfficial()) {
-                        $rows = $this->pddOfficial->fetchFeed($page, $limit, (int) $cate);
+                        $cateInt = (int) $cate;
+                        if ($this->isExcludedPddActivityTag($cateInt)) {
+                            return [];
+                        }
+                        $rows = $this->pddOfficial->fetchFeed($page, $limit, $cateInt);
                         $list = $this->normalizePdd($rows);
                         if (!empty($list)) {
                             return $list;
@@ -1095,6 +1119,9 @@ class ServiceGoodsRepository
                 case 'kuaishou':
                     if ($this->isKuaishouOfficial()) {
                         $channelId = (int) $cate;
+                        if ($this->isExcludedKuaishouChannelId($channelId)) {
+                            return [];
+                        }
                         return $this->normalizeKuaishou(
                             $this->kuaishouOfficial->fetchFeed($page, $limit, $channelId, $rangeList)
                         );
@@ -1108,7 +1135,9 @@ class ServiceGoodsRepository
                             return $this->normalizeWph($parsed['list'] ?? [], true);
                         }
                         $parsed = $this->vipOfficial->fetchFeed($page, $limit);
-                        return $this->normalizeWph($parsed['list'] ?? [], true);
+                        $wphRows = $this->filterNewUserExclusiveRawRows('wph', $parsed['list'] ?? []);
+
+                        return $this->normalizeWph($wphRows, true);
                     }
                     if ($this->blocksLegacyAggregator()) {
                         return [];
@@ -1139,6 +1168,7 @@ class ServiceGoodsRepository
                     // 价格 pill：联盟关键词召回面窄，用「包邮」拉池再按券后价分档
                     $searchQ = $tierLabel !== null ? '包邮' : $keyword;
                     $rows = $this->taobaoOfficial->fetchSearch($searchQ, $page, $fetchLimit, (int) $cate);
+                    $rows = $this->filterNewUserExclusiveRawRows('taobao', $rows);
                     $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'taobao');
                     return $this->normalizeTaobao(array_slice($rows, 0, $limit));
                 case 'jd':
@@ -1169,6 +1199,7 @@ class ServiceGoodsRepository
                         : $limit;
                     if ($this->isPddOfficial()) {
                         $rows = $this->pddOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        $rows = $this->filterNewUserExclusiveRawRows('pdd', $rows);
                         $rows = $this->filterItemsByPriceKeyword($rows, $keyword, 'pdd');
                         return $this->normalizePdd(array_slice($rows, 0, $limit));
                     }
@@ -1179,9 +1210,12 @@ class ServiceGoodsRepository
                 case 'kuaishou':
                     if ($this->isKuaishouOfficial()) {
                         $channelId = (int) $cate;
-                        $list = $this->normalizeKuaishou(
-                            $this->kuaishouOfficial->fetchSearch($keyword, $page, $limit, $channelId, $rangeList)
-                        );
+                        if ($this->isExcludedKuaishouChannelId($channelId)) {
+                            return [];
+                        }
+                        $raw = $this->kuaishouOfficial->fetchSearch($keyword, $page, $limit, $channelId, $rangeList);
+                        $raw = $this->filterNewUserExclusiveRawRows('kuaishou', $raw);
+                        $list = $this->normalizeKuaishou($raw);
                         return $this->filterItemsByPriceKeyword($list, $keyword, 'kuaishou');
                     }
                     return [];
@@ -1201,7 +1235,8 @@ class ServiceGoodsRepository
                             $q = '热销';
                         }
                         $parsed = $this->vipOfficial->fetchSearch($q, $page, $fetchLimit, '', true, $cateId);
-                        $list = $this->normalizeWph($parsed['list'] ?? [], true);
+                        $wphRows = $this->filterNewUserExclusiveRawRows('wph', $parsed['list'] ?? []);
+                        $list = $this->normalizeWph($wphRows, true);
                         $list = $this->filterItemsByPriceKeyword($list, $keyword, 'wph');
                         return array_slice($list, 0, $limit);
                     }
@@ -1226,10 +1261,15 @@ class ServiceGoodsRepository
 
     protected function normalizeWph($result, bool $official = false): array
     {
-        if (!is_array($result)) return [];
+        if (!is_array($result)) {
+            return [];
+        }
+        $result = $this->filterNewUserExclusiveRawRows('wph', $result);
         $list = [];
         foreach ($result as $val) {
-            if (!is_array($val)) continue;
+            if (!is_array($val)) {
+                continue;
+            }
             $salesText = trim((string) ($val['productSales'] ?? ''));
             $row = [
                 'platform'   => 'wph',
@@ -1280,6 +1320,11 @@ class ServiceGoodsRepository
             $meta['pipeline'][] = 'VipOfficialService::fetchDetail';
             $detail = $this->vipOfficial->fetchDetail($goodsId);
             if ($detail !== []) {
+                if ($this->isWphNewUserExclusiveRow($detail)) {
+                    $meta['pipeline'][] = 'excluded:new_user_exclusive';
+
+                    return ['detail' => [], 'meta' => $meta];
+                }
                 $meta['detail_from'] = 'UnionGoodsV2Service.getByGoodsIdsV2';
                 return ['detail' => $detail, 'meta' => $meta];
             }
@@ -1322,6 +1367,7 @@ class ServiceGoodsRepository
         if (!is_array($result)) {
             return $list;
         }
+        $result = $this->filterNewUserExclusiveRawRows('taobao', $result);
         $source = $this->getTaobaoDataSource();
         foreach ($result as $val) {
             if (!is_array($val)) {
@@ -1381,6 +1427,304 @@ class ServiceGoodsRepository
         return number_format((float) $value, 2, '.', '');
     }
 
+    /** @return int[] */
+    protected function excludedJdEliteIds(): array
+    {
+        $ids = config('taoke.exclude_new_user.jd_elite_ids');
+        if (!is_array($ids) || $ids === []) {
+            return [238];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    public function isExcludedJdEliteId(int $eliteId): bool
+    {
+        return $eliteId > 0 && in_array($eliteId, $this->excludedJdEliteIds(), true);
+    }
+
+    /**
+     * 京东联盟原始商品行：新人价频道 / 新人价类型（混排搜索也会带出）
+     */
+    protected function isJdNewUserExclusiveRow(array $val): bool
+    {
+        if ($this->isExcludedJdEliteId((int) ($val['eliteId'] ?? 0))) {
+            return true;
+        }
+        $resource = $val['resourceInfo'] ?? [];
+        if (is_array($resource) && $this->isExcludedJdEliteId((int) ($resource['eliteId'] ?? 0))) {
+            return true;
+        }
+        $basisTypes = config('taoke.exclude_new_user.jd_basis_price_types');
+        $basisTypes = is_array($basisTypes) ? array_map('intval', $basisTypes) : [8];
+        $purchase = $val['purchasePriceInfo'] ?? [];
+        if (is_array($purchase)) {
+            $t = (int) ($purchase['basisPriceType'] ?? 0);
+            if ($t > 0 && in_array($t, $basisTypes, true)) {
+                return true;
+            }
+        }
+        $secondTypes = config('taoke.exclude_new_user.jd_second_price_types');
+        $secondTypes = is_array($secondTypes) ? array_map('intval', $secondTypes) : [18];
+        $second = $val['secondPriceInfo'] ?? [];
+        if (is_array($second)) {
+            $t = (int) ($second['secondPriceType'] ?? 0);
+            if ($t > 0 && in_array($t, $secondTypes, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return list<string> */
+    protected function newUserTitleKeywords(): array
+    {
+        $kw = config('taoke.exclude_new_user.title_keywords');
+        if (is_array($kw) && $kw !== []) {
+            return array_values(array_filter(array_map('strval', $kw)));
+        }
+
+        return ['新人价', '新客价', '新人专享', '新客专享', '新人一口价', '首单专享', '仅限新用户', '新用户专享'];
+    }
+
+    protected function textMatchesNewUserTitleKeywords(string $text): bool
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return false;
+        }
+        foreach ($this->newUserTitleKeywords() as $kw) {
+            if ($kw !== '' && mb_strpos($text, $kw) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** @return int[] */
+    protected function excludedPddActivityTags(): array
+    {
+        $ids = config('taoke.exclude_new_user.pdd_activity_tags');
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    public function isExcludedPddActivityTag(int $tagId): bool
+    {
+        return $tagId > 0 && in_array($tagId, $this->excludedPddActivityTags(), true);
+    }
+
+    /** @return int[] */
+    protected function excludedVipChannelTypes(): array
+    {
+        $ids = config('taoke.exclude_new_user.vip_channel_types');
+        if (!is_array($ids) || $ids === []) {
+            return [4];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    /** @return int[] */
+    protected function excludedTaobaoMaterialIds(): array
+    {
+        $ids = config('taoke.exclude_new_user.taobao_material_ids');
+        if (!is_array($ids)) {
+            return [];
+        }
+
+        return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    /** @return int[] */
+    protected function excludedKuaishouChannelIds(): array
+    {
+        static $cache = null;
+        if ($cache !== null) {
+            return $cache;
+        }
+        $manual = config('taoke.exclude_new_user.kuaishou_channel_ids');
+        $ids = is_array($manual) ? array_map('intval', $manual) : [];
+        $keywords = config('taoke.exclude_new_user.kuaishou_channel_name_keywords');
+        $keywords = is_array($keywords) ? $keywords : ['新人', '新客', '首单'];
+        if ($this->isKuaishouOfficial()) {
+            foreach ($this->kuaishouOfficial->fetchSelectionChannels() as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                $id = (int) ($row['channelId'] ?? ($row['id'] ?? 0));
+                $name = (string) ($row['channelName'] ?? ($row['name'] ?? ''));
+                if ($id <= 0) {
+                    continue;
+                }
+                foreach ($keywords as $kw) {
+                    $kw = (string) $kw;
+                    if ($kw !== '' && $name !== '' && mb_strpos($name, $kw) !== false) {
+                        $ids[] = $id;
+                        break;
+                    }
+                }
+            }
+        }
+        $cache = array_values(array_unique(array_filter($ids)));
+
+        return $cache;
+    }
+
+    public function isExcludedKuaishouChannelId(int $channelId, string $channelName = ''): bool
+    {
+        if ($channelId > 0 && in_array($channelId, $this->excludedKuaishouChannelIds(), true)) {
+            return true;
+        }
+        $keywords = config('taoke.exclude_new_user.kuaishou_channel_name_keywords');
+        $keywords = is_array($keywords) ? $keywords : ['新人', '新客', '首单'];
+        foreach ($keywords as $kw) {
+            $kw = (string) $kw;
+            if ($kw !== '' && $channelName !== '' && mb_strpos($channelName, $kw) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<int|string>|null $tags
+     */
+    protected function rowActivityTagsIntersectExcluded($tags): bool
+    {
+        $exclude = $this->excludedPddActivityTags();
+        if ($exclude === [] || !is_array($tags)) {
+            return false;
+        }
+        foreach ($tags as $t) {
+            if (in_array((int) $t, $exclude, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function isPddNewUserExclusiveRow(array $val): bool
+    {
+        if ($this->rowActivityTagsIntersectExcluded($val['activity_tags'] ?? null)) {
+            return true;
+        }
+        $name = (string) ($val['goods_name'] ?? ($val['goodsName'] ?? ''));
+
+        return $this->textMatchesNewUserTitleKeywords($name);
+    }
+
+    protected function isTaobaoNewUserExclusiveRow(array $val): bool
+    {
+        $materialId = (int) ($val['material_id'] ?? ($val['materialId'] ?? 0));
+        if ($materialId > 0 && in_array($materialId, $this->excludedTaobaoMaterialIds(), true)) {
+            return true;
+        }
+        $basic = $val['item_basic_info'] ?? [];
+        $title = is_array($basic) ? (string) ($basic['title'] ?? ($basic['short_title'] ?? '')) : '';
+        if ($this->textMatchesNewUserTitleKeywords($title)) {
+            return true;
+        }
+        $promo = $val['price_promotion_info'] ?? [];
+        if (is_array($promo)) {
+            $blob = json_encode($promo, JSON_UNESCAPED_UNICODE);
+            if (is_string($blob) && $this->textMatchesNewUserTitleKeywords($blob)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function isWphNewUserExclusiveRow(array $val): bool
+    {
+        $channelType = (int) ($val['channelType'] ?? ($val['channel_type'] ?? 0));
+        if ($channelType > 0 && in_array($channelType, $this->excludedVipChannelTypes(), true)) {
+            return true;
+        }
+        $name = (string) ($val['goodsName'] ?? ($val['goods_name'] ?? ''));
+        if ($this->textMatchesNewUserTitleKeywords($name)) {
+            return true;
+        }
+        foreach (['goodsActivityInfo', 'actInfo', 'activityInfo'] as $key) {
+            if (!isset($val[$key])) {
+                continue;
+            }
+            $blob = json_encode($val[$key], JSON_UNESCAPED_UNICODE);
+            if (is_string($blob) && $this->textMatchesNewUserTitleKeywords($blob)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    protected function isKuaishouNewUserExclusiveRow(array $val): bool
+    {
+        $channelId = (int) ($val['channelId'] ?? ($val['channel_id'] ?? 0));
+        if ($this->isExcludedKuaishouChannelId($channelId)) {
+            return true;
+        }
+        $title = (string) ($val['itemTitle'] ?? ($val['title'] ?? ($val['item_title'] ?? '')));
+
+        return $this->textMatchesNewUserTitleKeywords($title);
+    }
+
+    protected function isDouyinNewUserExclusiveRow(array $val): bool
+    {
+        $title = (string) ($val['product_title'] ?? ($val['title'] ?? ($val['product_name'] ?? ($val['goods_name'] ?? ''))));
+
+        return $this->textMatchesNewUserTitleKeywords($title);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    protected function filterNewUserExclusiveRawRows(string $platform, array $rows): array
+    {
+        $platform = strtolower(trim($platform));
+        $out = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $skip = false;
+            switch ($platform) {
+                case 'jd':
+                    $skip = $this->isJdNewUserExclusiveRow($row);
+                    break;
+                case 'pdd':
+                    $skip = $this->isPddNewUserExclusiveRow($row);
+                    break;
+                case 'taobao':
+                    $skip = $this->isTaobaoNewUserExclusiveRow($row);
+                    break;
+                case 'wph':
+                    $skip = $this->isWphNewUserExclusiveRow($row);
+                    break;
+                case 'kuaishou':
+                    $skip = $this->isKuaishouNewUserExclusiveRow($row);
+                    break;
+                case 'douyin':
+                    $skip = $this->isDouyinNewUserExclusiveRow($row);
+                    break;
+            }
+            if (!$skip) {
+                $out[] = $row;
+            }
+        }
+
+        return $out;
+    }
+
     protected function normalizeJd($result): array
     {
         $list = [];
@@ -1391,6 +1735,7 @@ class ServiceGoodsRepository
         if (isset($result['list']) && is_array($result['list'])) {
             $result = $result['list'];
         }
+        $result = $this->filterNewUserExclusiveRawRows('jd', $result);
         foreach ($result as $val) {
             if (!is_array($val)) {
                 continue;
@@ -1655,6 +2000,7 @@ class ServiceGoodsRepository
         if (!is_array($result)) {
             return $list;
         }
+        $result = $this->filterNewUserExclusiveRawRows('pdd', $result);
         foreach ($result as $val) {
             if (!is_array($val)) {
                 continue;
@@ -1687,6 +2033,7 @@ class ServiceGoodsRepository
         if (!is_array($result)) {
             return [];
         }
+        $result = $this->filterNewUserExclusiveRawRows('kuaishou', $result);
         $source = $this->getKuaishouDataSource();
         $list = [];
         foreach ($result as $val) {
@@ -2134,6 +2481,7 @@ class ServiceGoodsRepository
         } elseif (isset($result['list']) && is_array($result['list'])) {
             $result = $result['list'];
         }
+        $result = $this->filterNewUserExclusiveRawRows('douyin', $result);
         foreach ($result as $val) {
             if (!is_array($val)) {
                 continue;

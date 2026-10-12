@@ -2,6 +2,7 @@
 
 namespace app\controller\admin\store\equity;
 
+use app\common\repositories\store\equity\EquityConfigRepository;
 use app\common\repositories\store\equity\EquityGrantRepository;
 use app\common\repositories\store\equity\EquityProjectRepository;
 use crmeb\basic\BaseController;
@@ -172,5 +173,26 @@ class EquityAdmin extends BaseController
         }
         unset($row);
         return app('json')->success(compact('count', 'list'));
+    }
+
+    /** 消费送股 / 充值买股 平台总开关 */
+    public function setting()
+    {
+        /** @var EquityConfigRepository $config */
+        $config = app()->make(EquityConfigRepository::class);
+        return app('json')->success($config->getPlatformModes());
+    }
+
+    public function saveSetting()
+    {
+        $consumeMode = (int)$this->request->param('consume_mode', EquityConfigRepository::DEFAULT_CONSUME_MODE);
+        $investMode = (int)$this->request->param('invest_mode', EquityConfigRepository::DEFAULT_INVEST_MODE);
+        try {
+            /** @var EquityConfigRepository $config */
+            $config = app()->make(EquityConfigRepository::class);
+            return app('json')->success($config->savePlatformModes($consumeMode, $investMode));
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
     }
 }

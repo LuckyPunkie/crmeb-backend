@@ -96,6 +96,42 @@ return [
         'api_url' => env('taoke.pangle_api_url', env('PANGLE_API_URL', 'https://ecom.pangolin-sdk-toutiao.com')),
     ],
 
+    // ==================== 新用户专享价商品排除（服务页列表/详情） ====================
+    // 京东 eliteId 为京粉频道 ID（非商品三级类目 cid）；见联盟 jingfen.query 文档
+    'exclude_new_user' => [
+        'jd_elite_ids' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) env('taoke.exclude_jd_elite_ids', '238'))
+        ))),
+        // purchasePriceInfo.basisPriceType：8=新人价（联盟 goods.query / jingfen 出参）
+        'jd_basis_price_types' => [8],
+        // secondPriceInfo.secondPriceType：18=新人价
+        'jd_second_price_types' => [18],
+        // 唯品 VOP channelType（频道）：4=新人一口价
+        'vip_channel_types' => [4],
+        // 拼多多 activity_tags：官方无固定「新用户」标，可按接口返回追加（逗号 env）
+        'pdd_activity_tags' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) env('taoke.exclude_pdd_activity_tags', ''))
+        ))),
+        // 快手选品 channelId 黑名单 + 频道名关键词自动识别
+        'kuaishou_channel_ids' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) env('taoke.exclude_kuaishou_channel_ids', ''))
+        ))),
+        'kuaishou_channel_name_keywords' => ['新人', '新客', '首单'],
+        // 淘宝物料 ID 黑名单（逗号 env；另可 tbk.optimus.tou.material.ids.get 核对）
+        'taobao_material_ids' => array_values(array_filter(array_map(
+            'intval',
+            explode(',', (string) env('taoke.exclude_taobao_material_ids', ''))
+        ))),
+        // 标题/促销文案关键词（各平台混排无结构化字段时的兜底，勿过宽）
+        'title_keywords' => [
+            '新人价', '新客价', '新人专享', '新客专享', '新人一口价',
+            '首单专享', '仅限新用户', '新用户专享', '新用户价',
+        ],
+    ],
+
     // ==================== 平台数据源开关 ====================
     // official / legacy 由 API 路径决定：/taoke/goods=legacy，/taoke/official/goods=official
     // 下列 env 仅兼容旧脚本/CLI，用户端请用双路由而非改 .env 切换现网

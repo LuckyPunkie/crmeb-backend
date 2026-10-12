@@ -200,6 +200,13 @@ class UserCertificationRepository extends BaseRepository
         }
         if ($patch) {
             $profileRepo->mergeExtraFields($uid, $patch);
+        } else {
+            // eb_user.card_id 变了也要进「找到我的方式」索引（mergeExtraFields 已含同步）
+            try {
+                app()->make(UserFindMeRepository::class)->sync($uid);
+            } catch (\Throwable $e) {
+                \think\facade\Log::error('find_me sync failed uid=' . $uid . ': ' . $e->getMessage());
+            }
         }
     }
 

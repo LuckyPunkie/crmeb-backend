@@ -75,7 +75,12 @@ class EquityGrantRepository extends BaseRepository
                 }
 
                 $config = MerchantEquityConfig::getDB()->where('mer_id', $merId)->lock(true)->find();
-                if (!$config || !(int)$config['enabled']) {
+                if (!$config) {
+                    return false;
+                }
+                // 平台总开关 + 商家开关；模块不显示或未设置比例时不送股
+                $state = app()->make(EquityConfigRepository::class)->resolveState($merId, $config->toArray());
+                if (!$state['consume_visible'] || !$state['rate_configured']) {
                     return false;
                 }
                 $percent = (float)$config['consume_equity_percent'];
@@ -273,6 +278,10 @@ class EquityGrantRepository extends BaseRepository
             $project = EquityProject::getDB()->where('id', $projectId)->lock(true)->find();
             if (!$project || (int)$project['status'] !== EquityProject::STATUS_RAISING) {
                 throw new ValidateException('当前项目不可入股');
+            }
+            $state = app()->make(EquityConfigRepository::class)->resolveState((int)$project['mer_id']);
+            if (!$state['invest_visible'] || !$state['rate_configured']) {
+                throw new ValidateException('该店铺暂未开放充值入股');
             }
             $remain = bcsub((string)$project['target_amount'], (string)$project['total_consumer_amount'], 2);
             if (bccomp((string)$amount, $remain, 2) > 0) {

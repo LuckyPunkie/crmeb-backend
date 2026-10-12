@@ -64,6 +64,9 @@ class Message extends BaseController
         $list = $this->messageRepository->getHistory($dialogId, $myUid, $page, $limit);
         $chatUser = $this->dialogRepository->getChatUser($dialogId, $myUid);
         $myUser = \think\facade\Db::name('user')->field('uid,nickname,avatar')->where('uid', $myUid)->find();
+        if ($myUser) {
+            $myUser['avatar'] = \app\common\model\user\User::displayAvatar($myUser['avatar']);
+        }
         return app('json')->success([
             'count' => count($list),
             'dialog_id' => $dialogId,
