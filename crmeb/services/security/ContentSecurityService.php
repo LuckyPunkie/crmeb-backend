@@ -8,7 +8,7 @@
 
 namespace crmeb\services\security;
 
-use crmeb\services\SensitiveWordFilter;
+use crmeb\services\UgcDfaFilter;
 use crmeb\services\security\driver\AliyunBaselineDriver;
 use crmeb\services\security\driver\WechatDriver;
 use think\exception\ValidateException;
@@ -111,7 +111,7 @@ class ContentSecurityService
         }
 
         // 全端文本：仅服务端敏感词；明文存库，展示层打星，默认不拦截发送
-        $hit = SensitiveWordFilter::contains($content);
+        $hit = UgcDfaFilter::contains($content);
         $result = [
             'pass' => true,
             'suggest' => $hit ? 'review' : 'pass',
@@ -209,7 +209,23 @@ class ContentSecurityService
     public static function submitMedia(array $urls, int $mediaType, int $scene, string $bizType, int $bizId, int $uid, string $openid): int
     {
         $count = 0;
+        foreach (self::submitMediaReports($urls, $mediaType, $scene, $bizType, $bizId, $uid, $openid) as $row) {
+            if (!empty($row['ok'])) {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    /**
+     * 微信 media_check_async 提交明细（供发帖接口调试输出）
+     * @return array<int,array{ok:bool,trace_id?:string,url:string,error?:string}>
+     */
+    public static function submitMediaReports(array $urls, int $mediaType, int $scene, string $bizType, int $bizId, int $uid, string $openid): array
+    {
+        $reports = [];
         foreach (array_values(array_unique(array_filter($urls))) as $url) {
+            $short = mb_substr($url, 0, 120);
             try {
                 $traceId = WechatDriver::submitMediaAsync($url, $mediaType, $scene, $openid);
                 Db::name('ugc_check_task')->insert([
@@ -222,13 +238,14 @@ class ContentSecurityService
                     'create_time' => time(),
                     'update_time' => time(),
                 ]);
-                $count++;
+                $reports[] = ['ok' => true, 'trace_id' => $traceId, 'url' => $short];
             } catch (\Throwable $e) {
                 Log::error("媒体审核提交失败({$bizType}#{$bizId}) {$url}: " . $e->getMessage());
                 self::recordFailure($bizType, $e->getMessage());
+                $reports[] = ['ok' => false, 'url' => $short, 'error' => $e->getMessage()];
             }
         }
-        return $count;
+        return $reports;
     }
 
     /**
@@ -307,17 +324,27 @@ class ContentSecurityService
     /**
      * App/H5 无 openid 的配图：同步 baselineCheck，写入 ugc_check_task 并汇总业务处置
      */
-    public static function syncBaselineImages(string $bizType, int $bizId, int $uid, array $urls): void
+    /**
+     * @return array<int,array{url:string,verdict:string,error:string,results:array}>
+     */
+    public static function syncBaselineImages(string $bizType, int $bizId, int $uid, array $urls): array
     {
+        $debug = [];
         $urls = array_values(array_unique(array_filter(array_map(static function ($v) {
             return is_string($v) ? trim($v) : '';
         }, $urls))));
         if (!$urls || $bizId <= 0) {
-            return;
+            return $debug;
         }
         $statuses = [];
         foreach ($urls as $url) {
             $scan = AliyunBaselineDriver::moderateImageUrl($url);
+            $debug[] = [
+                'url' => mb_substr($url, 0, 120),
+                'verdict' => (string)$scan['verdict'],
+                'error' => (string)$scan['error'],
+                'results' => $scan['results'] ?? [],
+            ];
             $action = (string)$scan['verdict'];
             $status = self::TASK_PASS;
             if ($action === AliyunBaselinePolicy::ACTION_REJECT) {
@@ -349,13 +376,14 @@ class ContentSecurityService
         }
         if (in_array(self::TASK_REJECT, $statuses, true)) {
             MediaModerationResolver::resolve($bizType, $bizId);
-            return;
+            return $debug;
         }
         if (in_array(self::TASK_REVIEW, $statuses, true)) {
             MediaModerationResolver::resolve($bizType, $bizId);
-            return;
+            return $debug;
         }
         MediaModerationResolver::resolve($bizType, $bizId);
+        return $debug;
     }
 
     /**

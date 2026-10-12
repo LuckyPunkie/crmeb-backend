@@ -129,13 +129,9 @@ class UserMessageRepository extends BaseRepository
         SwooleTaskService::user($toUid, [
             'type' => 'user_message',
             'data' => $pushPayload,
-                'voice_duration'=> $data['voice_duration'] ?? 0,
-                'ref_note_id'   => $data['ref_note_id'] ?? 0,
-                'create_time'   => $message->create_time,
-            ],
         ]);
 
-        $messageResult = $message->toArray();
+        $messageResult = UgcTextSecurity::applyMaskToMessage($message->toArray());
         $messageResult['send_time'] = strtotime($messageResult['create_time']);
         $messageResult['send_date'] = date('H:i', strtotime($messageResult['create_time']));
         $messageResult['from_avatar'] = $userInfo['avatar'] ?? '';

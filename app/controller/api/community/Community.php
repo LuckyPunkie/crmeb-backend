@@ -22,7 +22,9 @@ use app\validate\api\CommunityValidate;
 use crmeb\basic\BaseController;
 use crmeb\jobs\MediaCheckSubmitJob;
 use crmeb\services\security\ContentSecurityService;
+use crmeb\services\security\driver\AliyunBaselineDriver;
 use think\App;
+use think\facade\Db;
 use app\common\repositories\community\CommunityRepository as repository;
 use think\exception\ValidateException;
 
@@ -43,6 +45,8 @@ class Community extends BaseController
     protected $mediaHold = null;
     /** @var string[]|null App/H5 无 openid 时同步阿里云检测的配图 */
     protected $baselineImageHold = null;
+    /** @var array 发帖审核调试信息（返回给前端 console） */
+    protected $moderationDebug = [];
 
     /**
      * User constructor.
@@ -392,7 +396,11 @@ class Community extends BaseController
         }
         $this->dispatchMediaCheck((int)$res, (int)$data['uid']);
         $this->dispatchBaselineImages((int)$res, (int)$data['uid']);
-        return app('json')->success(['community_id' => $res, 'status' => (int)$data['status']]);
+        return app('json')->success([
+            'community_id' => $res,
+            'status' => (int)$data['status'],
+            'ugc_moderation' => $this->buildModerationDebug((int)$res),
+        ]);
     }
 
     /**
@@ -435,7 +443,11 @@ class Community extends BaseController
         }
         $this->dispatchMediaCheck((int)$id, (int)$this->user->uid);
         $this->dispatchBaselineImages((int)$id, (int)$this->user->uid);
-        return app('json')->success(['community_id' => $id, 'status' => (int)$data['status']]);
+        return app('json')->success([
+            'community_id' => $id,
+            'status' => (int)$data['status'],
+            'ugc_moderation' => $this->buildModerationDebug((int)$id),
+        ]);
     }
 
     protected function dispatchBaselineImages(int $communityId, int $uid): void
@@ -443,8 +455,14 @@ class Community extends BaseController
         if (!$this->baselineImageHold || $communityId <= 0) {
             return;
         }
-        \think\facade\Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
-        ContentSecurityService::syncBaselineImages('community_post', $communityId, $uid, $this->baselineImageHold);
+        Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
+        $scans = ContentSecurityService::syncBaselineImages('community_post', $communityId, $uid, $this->baselineImageHold);
+        $this->moderationDebug['media'] = [
+            'channel' => 'aliyun_baseline',
+            'aliyun_enabled' => AliyunBaselineDriver::enabled(),
+            'note' => 'App/H5 无小程序 openid 时走阿里云同步；结果见 scans',
+            'scans' => $scans,
+        ];
         $this->baselineImageHold = null;
     }
 
@@ -453,17 +471,77 @@ class Community extends BaseController
         if (!$this->mediaHold || $communityId <= 0) {
             return;
         }
-        // 编辑后重新审核：清掉旧任务，避免旧图的结果影响新内容
-        \think\facade\Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
-        ContentSecurityService::pushModeration(MediaCheckSubmitJob::class, [
-            'biz_type' => 'community_post',
-            'biz_id' => $communityId,
-            'uid' => $uid,
-            'openid' => $this->mediaHold['openid'],
-            'scene' => ContentSecurityService::SCENE_FORUM,
-            'images' => $this->mediaHold['images'],
-            'video' => $this->mediaHold['video'],
-        ], ContentSecurityService::QUEUE_NORMAL);
+        Db::name('ugc_check_task')->where('biz_type', 'community_post')->where('biz_id', $communityId)->delete();
+        $hold = $this->mediaHold;
+        $video = (string)($hold['video'] ?? '');
+        $images = array_values(array_filter((array)($hold['images'] ?? [])));
+        $openid = (string)($hold['openid'] ?? '');
+
+        if ($video !== '') {
+            ContentSecurityService::pushModeration(MediaCheckSubmitJob::class, [
+                'biz_type' => 'community_post',
+                'biz_id' => $communityId,
+                'uid' => $uid,
+                'openid' => $openid,
+                'scene' => ContentSecurityService::SCENE_FORUM,
+                'images' => $images,
+                'video' => $video,
+            ], ContentSecurityService::QUEUE_NORMAL);
+            $this->moderationDebug['media'] = [
+                'channel' => 'wechat_v2',
+                'mode' => 'async_job',
+                'note' => '视频笔记：抽帧后 media_check_async，结果微信推送回调',
+                'image_count' => count($images),
+                'has_video' => true,
+            ];
+            return;
+        }
+
+        $urls = array_map([$this, 'absoluteMediaUrl'], $images);
+        $reports = ContentSecurityService::submitMediaReports(
+            $urls,
+            ContentSecurityService::MEDIA_IMAGE,
+            ContentSecurityService::SCENE_FORUM,
+            'community_post',
+            $communityId,
+            $uid,
+            $openid
+        );
+        $ok = count(array_filter($reports, static fn($r) => !empty($r['ok'])));
+        if ($ok === 0) {
+            \crmeb\services\security\MediaModerationResolver::applyCommunityPostVerdict(
+                $communityId,
+                \crmeb\services\security\MediaModerationResolver::VERDICT_REVIEW
+            );
+        }
+        $this->moderationDebug['media'] = [
+            'channel' => 'wechat_v2',
+            'mode' => 'sync_submit',
+            'note' => '图文：已同步调用 media_check_async；trace_id 有值即微信已受理，最终结论等推送回调',
+            'submits' => $reports,
+            'submitted_ok' => $ok,
+        ];
+    }
+
+    protected function absoluteMediaUrl(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || preg_match('#^https?://#i', $url)) {
+            return $url;
+        }
+        return rtrim((string)systemConfig('site_url'), '/') . '/' . ltrim($url, '/');
+    }
+
+    protected function buildModerationDebug(int $communityId): array
+    {
+        $tasks = Db::name('ugc_check_task')
+            ->where('biz_type', 'community_post')
+            ->where('biz_id', $communityId)
+            ->field('trace_id,status,media_url,create_time')
+            ->order('id asc')
+            ->select()
+            ->toArray();
+        return array_merge($this->moderationDebug, ['tasks' => $tasks]);
     }
 
     /**
@@ -564,6 +642,19 @@ class Community extends BaseController
                 $this->baselineImageHold = $images;
             }
         }
+        $this->moderationDebug = [
+            'text' => [
+                'driver' => 'sensitive_word_dfa',
+                'suggest' => $this->moderationSuggest,
+                'log_id' => $this->moderationLogId,
+            ],
+            'route' => [
+                'media_check_enabled' => ContentSecurityService::mediaCheckEnabled(),
+                'has_openid' => $openid !== '',
+                'has_media' => $hasMedia,
+                'planned_channel' => $useWechatMedia ? 'wechat_v2' : ($this->baselineImageHold ? 'aliyun_baseline' : ($hasMedia ? 'none_or_skip' : 'no_media')),
+            ],
+        ];
         app()->make(CommunityValidate::class)->check($data);
         // 优先使用用户填写的标题；未填时再取正文首行
         $userTitle = trim(filter_emoji((string)($data['title'] ?? '')));

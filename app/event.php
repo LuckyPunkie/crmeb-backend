@@ -27,6 +27,7 @@ return [
         'swoole.workerStart' => [
             \app\webscoket\SwooleWorkerStart::class,
             \crmeb\listens\CreateTimerListen::class,
+            \crmeb\listens\UgcDfaInitListen::class,
             [\crmeb\services\CrossWorkerRouter::class, 'subscribe'],
         ],
         'swoole.workerExit' => [\crmeb\listens\SwooleWorkerExitListen::class],

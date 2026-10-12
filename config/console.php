@@ -49,6 +49,7 @@ return [
         'product:import' => 'app\command\ProductImport',
         //导入SQL文件
         'sql:import' => 'app\command\ImportSql',
+        'ugc:build-dfa' => 'app\command\BuildUgcDfa',
         //保证金自动解冻
         'animal_rescue:deposit_thaw' => 'app\command\AnimalRescueDepositThaw',
         //筹款到期检查

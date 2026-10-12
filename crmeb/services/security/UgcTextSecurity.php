@@ -2,14 +2,14 @@
 
 namespace crmeb\services\security;
 
-use crmeb\services\SensitiveWordFilter;
+use crmeb\services\UgcDfaFilter;
 
 class UgcTextSecurity
 {
     public static function maskForDisplay(string $text): string
     {
         $text = trim($text);
-        return $text === '' ? '' : SensitiveWordFilter::filter($text);
+        return $text === '' ? '' : UgcDfaFilter::filter($text);
     }
 
     public static function applyMaskToMessage(array $item): array
@@ -27,6 +27,22 @@ class UgcTextSecurity
         }
         if (isset($item['title'])) {
             $item['title'] = self::maskForDisplay((string)$item['title']);
+        }
+        if (!empty($item['topic']) && is_array($item['topic']) && isset($item['topic']['topic_name'])) {
+            $item['topic']['topic_name'] = self::maskForDisplay((string)$item['topic']['topic_name']);
+        }
+        if (!empty($item['topics']) && is_array($item['topics'])) {
+            foreach ($item['topics'] as $i => $topic) {
+                if (!is_array($topic) || !isset($topic['topic_name'])) {
+                    continue;
+                }
+                $item['topics'][$i]['topic_name'] = self::maskForDisplay((string)$topic['topic_name']);
+            }
+        }
+        if (!empty($item['tags']) && is_array($item['tags'])) {
+            foreach ($item['tags'] as $i => $tag) {
+                $item['tags'][$i] = self::maskForDisplay((string)$tag);
+            }
         }
         return $item;
     }

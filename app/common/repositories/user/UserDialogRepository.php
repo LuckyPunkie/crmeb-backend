@@ -17,6 +17,7 @@ use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\service\StoreServiceUserRepository;
 use app\common\repositories\system\RelevanceRepository;
+use crmeb\services\security\UgcTextSecurity;
 use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Db;
@@ -178,7 +179,9 @@ class UserDialogRepository extends BaseRepository
             $myRelation = $this->resolveRelation($item, $isMeA);
 
             $lastMsg = $item['last_message'] ?? '';
-            if ($lastMsg && !in_array($item['last_message_type'], [1])) {
+            if ($lastMsg && (int)$item['last_message_type'] === 1) {
+                $lastMsg = UgcTextSecurity::maskForDisplay($lastMsg);
+            } elseif ($lastMsg && !in_array($item['last_message_type'], [1], true)) {
                 if ($item['last_message_type'] == 100) {
                     $lastMsg = $item['last_sender_uid'] == $uid ? '你撤回了一条消息' : '对方撤回了一条消息';
                 } else {
