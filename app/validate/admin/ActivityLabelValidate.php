@@ -34,5 +34,7 @@ class ActivityLabelValidate extends Validate
         'label_name|标签名称' => 'require',
         'style_type|效果设置' => 'integer|in:0,1',
         'label_cate|分类ID' => 'integer',
+        'start_time|开始时间' => 'date',
+        'end_time|结束时间' => 'date',
     ];
 }

@@ -18,19 +18,21 @@ return [
     'block_puzzle' => [
         /*背景图片路径， 不填使用默认值， 支持string与array两种数据结构。string为默认图片的目录，array索引数组则为具体图片的地址*/
         'backgrounds' => [
-            //滑块验证背景图
-            public_path().'static/ajcaptcha/1.jpg',
-            public_path().'static/ajcaptcha/2.jpg',
-            public_path().'static/ajcaptcha/3.jpg',
-            public_path().'static/ajcaptcha/4.jpg',
-            public_path().'static/ajcaptcha/5.jpg',
-            public_path().'static/ajcaptcha/6.jpg',
+            public_path().'static/ajcaptcha/check1.jpg',
+            public_path().'static/ajcaptcha/check2.jpg',
+            public_path().'static/ajcaptcha/check3.jpg',
+            public_path().'static/ajcaptcha/check4.jpg',
+            public_path().'static/ajcaptcha/check5.png',
+            public_path().'static/ajcaptcha/check6.png',
+            public_path().'static/ajcaptcha/check7.png',
+            public_path().'static/ajcaptcha/check8.png',
+            public_path().'static/ajcaptcha/check9.png',
         ],
 
         /*模板图,格式同上支持string与array*/
         'templates' => [],
 
-        'offset' => 10, //容错偏移量
+        'offset' => 5, //容错偏移量
 
         'is_cache_pixel' => true, //是否开启缓存图片像素值，开启后能提升服务端响应性能（但要注意更换图片时，需要清除缓存）
 
@@ -39,12 +41,12 @@ return [
     //水印
     'watermark' => [
         'fontsize' => 12,
-        'color' => '#000000',
-        'text' => ''
+        'color' => '#FFFFFF',
+        'text' => 'CRMEB'
     ],
     'cache' => [
         //若您使用了框架，并且想使用类似于redis这样的缓存驱动，则应换成框架的中的缓存驱动
-        'constructor' => \Fastknife\Utils\CacheUtils::class,
+        'constructor' => app()->make(\think\Cache::class),
         'method' => [
             //遵守PSR-16规范不需要设置此项（tp6, laravel,hyperf）。如tp5就不支持（tp5缓存方法是rm,所以要配置为"delete" => "rm"）
             /**

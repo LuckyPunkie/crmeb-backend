@@ -17,14 +17,25 @@ use app\common\repositories\wechat\WechatQrcodeRepository;
 use app\common\repositories\wechat\WechatReplyRepository;
 use app\common\repositories\wechat\WechatUserRepository;
 use crmeb\services\CopyCommand;
+use crmeb\services\wechat\message\Message;
 use Exception;
 use think\facade\Cache;
+use think\facade\Log;
 
 class OfficialAccountMessageHandler
 {
     public function handle($message)
     {
-        $openId = $message->FromUserName;
+        $openId = trim((string)($message->FromUserName ?? ''));
+        if ($openId === '') {
+            $messageData = method_exists($message, 'toArray') ? $message->toArray() : [];
+            Log::warning('公众号回调缺少FromUserName', [
+                'message_keys' => array_keys($messageData),
+                'msg_type' => $messageData['MsgType'] ?? null,
+                'event' => $messageData['Event'] ?? null,
+            ]);
+            return false;
+        }
         $message->EventKey = str_replace('qrscene_', '', $message->EventKey ?? '');
         $userInfo = OfficialAccount::getUserInfo($openId);
         $wechatUserRepository = app()->make(WechatUserRepository::class);
@@ -173,6 +184,10 @@ class OfficialAccountMessageHandler
             default:
                 event('wechat.message.other', compact('message'));
                 break;
+        }
+
+        if ($response instanceof Message) {
+            return $response->transformToXml([], true);
         }
 
         return $response ?? false;

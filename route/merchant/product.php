@@ -257,6 +257,22 @@ Route::group(function () {
     ]);
 
 
+    Route::group('store/user_card', function () {
+        Route::get('verify_log/lst', '/verifyLogList')->name('merchantStoreUserCardVerifyLogList')->option([
+            '_alias' => '次卡/年卡核销记录',
+        ]);
+        Route::get('verify/:code', '/verifyDetail')->name('merchantStoreUserCardVerifyDetail')->option([
+            '_alias' => '次卡/年卡核销详情',
+        ]);
+        Route::post('verify', '/verify')->name('merchantStoreUserCardVerify')->option([
+            '_alias' => '次卡/年卡核销',
+        ]);
+    })->prefix('merchant.store.product.UserCard')->option([
+        '_path' => '/product/user_card',
+        '_auth' => true,
+    ]);
+
+
     //复制商品
     Route::group('store/productcopy', function () {
         Route::get('lst', '/lst')->name('merchantStoreProductCopyLst')->option([

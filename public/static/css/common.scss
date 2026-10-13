@@ -543,6 +543,12 @@
 .fs-38 {
 	font-size: 38rpx;
 }
+.fs-50 {
+	font-size: 50rpx;
+}
+.fs-56 {
+	font-size: 56rpx;
+}
 
 .fw-500 {
 	font-weight: 500;
@@ -702,10 +708,6 @@
 	color: #ccc;
 }
 
-.text--w111-666 {
-	color: #666;
-}
-
 .text--w111-b3b3b3 {
 	color: rgba(179, 179, 179, 1);
 }
@@ -729,7 +731,12 @@
 .text-primary-con {
 	color: var(--primary-theme-con);
 }
-
+.text-333 {
+	color: #333;
+}
+.text-999 {
+	color: #999;
+}
 .flex {
 	display: flex;
 }

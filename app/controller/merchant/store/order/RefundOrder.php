@@ -139,6 +139,17 @@ class RefundOrder extends BaseController
     }
 
     /**
+     * 获取平台退款订单各状态数量，筛选条件与列表保持一致
+     * @return \think\response\Json 退款订单各状态统计
+     */
+    public function title()
+    {
+        $where = $this->request->params(['refund_order_sn', 'status', 'refund_type', 'date', 'mer_id', 'order_sn', 'is_trader','uid','phone','real_name','nickname']);
+        $where['mer_id'] = $this->request->merId();
+        return app('json')->success($this->repository->getAllStat($where));
+    }
+
+    /**
      * 获取详情
      *
      * @param int $id 订单ID

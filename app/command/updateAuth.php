@@ -52,13 +52,13 @@ class updateAuth extends Command
         $output->writeln('<----------------');
 
         $output->writeln('开始平台权限');
-        $sys = $this->routeList('sys',$prompt);
+        $sys = $this->routeList('sys',$prompt, $output);
         $output->writeln('开始店铺权限');
-        $mer = $this->routeList('mer',$prompt);
+        $mer = $this->routeList('mer',$prompt, $output);
         $output->writeln('开始区域权限');
-        $region = $this->routeList('region',$prompt);
+        $region = $this->routeList('region',$prompt, $output);
         $output->writeln('开始商户权限');
-        $business = $this->routeList('business', $prompt);
+        $business = $this->routeList('business', $prompt, $output);
 
         $output->writeln('------------------------------------------------------------');
         $output->writeln('平台执行成功，合计: '. $sys .'条 , 店铺执行成功，合计: '. $mer . '条, 区域执行成功，合计: '. $region . '条, 商户执行成功，合计: ' . $business . '条');
@@ -73,7 +73,7 @@ class updateAuth extends Command
      * @param string|null $dir
      * @return mixed
      */
-    public function routeList($type, $prompt)
+    public function routeList($type, $prompt, ?Output $output = null)
     {
         $this->k = [];
         $this->kv = [];
@@ -102,7 +102,11 @@ class updateAuth extends Command
                     if ($route) {
                         foreach ($route as $one) {
                             if (!isset($one['option']['_name'])) $one['option']['_name'] = $one['name'];
-                            $this->menu($one['option']['_path'] ?? '', $one['option'], $resp);
+                            if (trim((string)$one['option']['_name']) === '') {
+                                $this->writeSkippedRoute($output, $one['rule'] ?? '', $one['method'] ?? '', $one['option']);
+                                continue;
+                            }
+                            $this->menu($one['option']['_path'] ?? '', $one['option'], $resp, 0, $output);
                         }
                     }
                 }
@@ -121,9 +125,13 @@ class updateAuth extends Command
      * @author Qinii
      * @day 3/18/22
      */
-    protected function menu($_path, $data, &$resp = [], $isAppend = 0)
+    protected function menu($_path, $data, &$resp = [], $isAppend = 0, ?Output $output = null)
     {
         $check = true;
+        if (!isset($data['_name']) || trim((string)$data['_name']) === '') {
+            $this->writeSkippedRoute($output, '', '', $data, $_path);
+            return $resp;
+        }
         if($_path){
             if(!is_array($_path)){
                 $_path = [$_path];
@@ -142,6 +150,7 @@ class updateAuth extends Command
                     }
 
                     if (!$check) {
+                        halt($_path,$data);
                         throw new Exception("路由名重复 < " . $v['route'] . ' >' . '「' . $v['menu_name'] . ' 」');
                     }
                     if ($isAppend) {
@@ -153,7 +162,7 @@ class updateAuth extends Command
                     if (isset($data['_append']) && !empty($data['_append'])) {
                         foreach ($data['_append'] as $datum) {
                             $datum['_repeat'] = true;
-                            $this->menu($datum['_path'] ?? $data['_path'], $datum, $resp, 1);
+                            $this->menu($datum['_path'] ?? $data['_path'], $datum, $resp, 1, $output);
                         }
                     }
                 }
@@ -161,6 +170,24 @@ class updateAuth extends Command
         }
 
         return $resp;
+    }
+
+    protected function writeSkippedRoute(?Output $output, string $rule, string $method, array $option, $path = null): void
+    {
+        if (!$output) {
+            return;
+        }
+        $path = $path ?? ($option['_path'] ?? '');
+        $path = is_array($path) ? implode(',', $path) : (string)$path;
+        $routeName = trim((string)($option['_name'] ?? ''));
+        $method = is_array($method) ? implode('|', $method) : (string)$method;
+        $output->writeln(sprintf(
+            '<comment>跳过未命名路由：[%s] %s，权限路径：%s，路由名：%s</comment>',
+            $method !== '' ? strtoupper($method) : '*',
+            $rule !== '' ? $rule : '/',
+            $path !== '' ? $path : '/',
+            $routeName !== '' ? $routeName : '(空)'
+        ));
     }
 
     protected function checkRepeat($key, $value)

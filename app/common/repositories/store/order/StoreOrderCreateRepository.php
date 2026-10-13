@@ -2,6 +2,7 @@
 
 namespace app\common\repositories\store\order;
 
+use app\common\model\delivery\DeliveryStation;
 use app\validate\api\{UserAddressValidate};
 use crmeb\jobs\SendSmsJob;
 use think\facade\{Db, Cache, Queue};
@@ -11,6 +12,8 @@ use app\common\repositories\system\RecordRepository;
 use app\common\repositories\system\form\FormRepository;
 use app\common\repositories\store\StoreCategoryRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\model\merchant\MerchantMemberProductPrice;
+use app\common\repositories\merchant\MerchantMemberRepository;
 use app\common\repositories\delivery\DeliveryConfigRepository;
 use app\common\repositories\delivery\DeliveryStationRepository;
 use app\common\repositories\store\coupon\{StoreCouponRepository, StoreCouponUserRepository};
@@ -30,7 +33,8 @@ use app\common\repositories\store\product\{
     ProductGroupUserRepository,
     ProductAttrValueRepository,
     ProductAssistSkuRepository,
-    ProductPresellSkuRepository
+    ProductPresellSkuRepository,
+    StoreProductCardRuleRepository
 };
 
 class StoreOrderCreateRepository extends StoreOrderRepository
@@ -73,7 +77,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             $mer_form_id,//商户表单id
             $merchantCartList //购物车数据
         ] = $this->validateCartList($cartId,$address,$user,$svip_status);
-
+        $isServiceCardOrder = $order_model == ProductRepository::DEFINE_TYPE_SERVICE_CARD;
         $mer_form_info = new \stdClass();
         //虚拟订单自定义数据
         $order_extend = [];
@@ -91,6 +95,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $order_total_postage = 0;
         $orderDeliveryStatus = true;
         $order_svip_discount = 0;
+        $order_merchant_member_discount = 0;
         // 循环计算每个店铺的订单数据
         foreach ($merchantCartList as &$merchantCart) {
             //运费计算规则
@@ -111,6 +116,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             $down_price = 0;
             // 合计优惠金额
             $total_svip_discount = 0;
+            $total_merchant_member_discount = 0;
             // 商品订单是否支持退款状态
             $order_refund_switch = 0;
             $merchantTakeId = 0;
@@ -130,6 +136,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                     throw new ValidateException("【{$merchantCart['mer_name']}】商户暂未设置提货点，请切换其他配送方式");
                 }
             }
+
             // 同城配送判断
             $isCityTake = false;
             if(isset($cityTakes[$merchantCart['mer_id']]['take_id'])) {
@@ -140,7 +147,6 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                     throw new ValidateException("【{$merchantCart['mer_name']}】商户暂未设置提货点，请切换其他配送方式");
                 }
             }
-            $merchantCart['take_id'] = $merchantTakeId;
             [$merTake, $merDelivery, $merCityTakes] = $this->validateDelivery($merchantCart['delivery_way']);
 
             [$_merTake, $_merDelivery, $_merCityTakes] = [$merTake, $merDelivery,$merCityTakes];
@@ -149,16 +155,20 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 $productTaks = $_merTake;
                 $productDelivery = $_merDelivery;
                 $productCityTakes = $_merCityTakes;
-
-                //如果商品有配送方式信息
-                if ($cart['product']['delivery_way']) {
-                    //商品是否支持自提
-                    [$productTaks, $productDelivery,$productCityTakes] = $this->validateDelivery($cart['product']['delivery_way']);
-                    //这里根据每个商品的状态去判断商户所有的商品是否都应该支持自提
-                    $merTake = $merTake && $productTaks;
-                    $merDelivery = $merDelivery && $productDelivery;
-                    $merCityTakes = $merCityTakes && $productCityTakes;
+                if ($this->isServiceCardCart($cart)) {
+                    [$productTaks, $productDelivery, $productCityTakes] = $this->serviceCardDeliveryAbility($cart);
+                } else {
+                    //如果商品有配送方式信息
+                    if ($cart['product']['delivery_way']) {
+                        //商品是否支持自提
+                        [$productTaks, $productDelivery,$productCityTakes] = $this->validateDelivery($cart['product']['delivery_way']);
+                    }
                 }
+                //这里根据每个商品的状态去判断商户所有的商品是否都应该支持自提
+                $merTake = $merTake && $productTaks;
+                $merDelivery = $merDelivery && $productDelivery;
+                $merCityTakes = $merCityTakes && $productCityTakes;
+
 
                 //默认根据商户选择的支持配送方式走
                 $merchantCart['list'][$k]['allow_city_take'] = $productCityTakes;
@@ -181,11 +191,25 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             if(!$deliveryStatus && count($merchantCart['list']) > 1) {
                 throw new ValidateException("【{$merchantCart['mer_name']}】，存在多个商品配送方式不统一，请分开下单");
             }
-            // //如果配送方式
-            // if ($deliveryStatus && !$isTake && ($merDelivery || $merTake)) {
-            //     //自提状态
-            //     $isTake = $merDelivery ? 0 : 1;
-            // }
+            // 预览阶段若当前选择不可用，则自动回退到商户和商品共同支持的配送方式。
+            [$isTake, $isCityTake] = $this->normalizeDeliverySelection(
+                $isTake,
+                $isCityTake,
+                $merTake,
+                $merDelivery,
+                $merCityTakes
+            );
+            if ($isTake) {
+                $merchantTakeId = (int)($takes[$merchantCart['mer_id']]['take_id'] ?? 0);
+                $merchant_take_info = isset($takes[$merchantCart['mer_id']]) ? $takes : [];
+            } else if ($isCityTake) {
+                $merchantTakeId = (int)($cityTakes[$merchantCart['mer_id']]['take_id'] ?? 0);
+                $merchant_take_info = isset($cityTakes[$merchantCart['mer_id']]) ? $cityTakes : [];
+            } else {
+                $merchantTakeId = 0;
+                $merchant_take_info = [];
+            }
+            $merchantCart['take_id'] = $merchantTakeId;
 
             $enabledCoupon = !($order_type && $order_type != 2);
             //只有预售和普通商品可以用优惠券
@@ -193,6 +217,10 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             $svip_coupon_merge = merchantConfig($merchantCart['mer_id'], 'svip_coupon_merge');
             $use_svip = 0;
             $city_take_postage = 0;
+            $delivery_settlement_fee = 0;
+            $delivery_service_fee = 0;
+            $city_delivery_type = 0;
+            $delivery_grab_status = 0;
             if ($isCityTake && $merCityTakes && $address) {
                 $checkCityTake = $this->checkCityTake($merchantCart, $address->toArray());
                 $deliveryStatus = $checkCityTake && $deliveryStatus;
@@ -202,13 +230,16 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 $checkHomeServiceRange = $this->checkHomeServiceRange($merchantCart['mer_id'], $address->toArray());
                 $deliveryStatus = $checkHomeServiceRange;
             }
+
             //获取运费规则和统计商品数据
             foreach ($merchantCart['list'] as &$cart) {
                 $svip_discount = 0;
+                $merchant_member_discount = 0;
                 $price = bcmul($cart['cart_num'], $this->cartByPrice($cart), 2);
                 $cart['total_price'] = $price;
                 $cart['postage_price'] = 0;
                 $cart['svip_discount'] = 0;
+                $cart['merchant_member_discount_price'] = 0;
                 $total_price = bcadd($total_price, $price, 2);
                 $total_num += $cart['cart_num'];
                 $_price = bcmul($cart['cart_num'], $this->cartByCouponPrice($cart), 2);
@@ -221,11 +252,20 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                     }
                     $use_svip = 1;
                 }
+                if (!empty($cart['productAttr']['show_merchant_member_price']) && !$cart['product_type']) {
+                    $merchant_member_discount = max(bcmul(
+                        $cart['cart_num'],
+                        bcsub($cart['productAttr']['org_price'] ?? 0, $cart['productAttr']['price'], 2),
+                        2
+                    ), 0);
+                }
                 $valid_total_price = bcadd($valid_total_price, $_price, 2);
                 $cart['allow_price'] = $_price;
                 $cart['temp_number'] = 0;
                 $total_svip_discount = bcadd($total_svip_discount, $svip_discount, 2);
                 $cart['svip_discount'] = $svip_discount;
+                $total_merchant_member_discount = bcadd($total_merchant_member_discount, $merchant_member_discount, 2);
+                $cart['merchant_member_discount_price'] = $merchant_member_discount;
                 $cart['refund_switch'] = $cart['product']['refund_switch'];
                 if ($cart['refund_switch']) $order_refund_switch = 1;
                 if (!isset($product_cart[$cart['product_id']]))
@@ -438,7 +478,25 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             }
             unset($coupon);
             if ($isCityTake && $merCityTakes && $address && $deliveryStatus) {
-                $city_take_postage = $this->getDeliveryFee($total_price, $merchantCart, $address);
+                [$city_take_postage, $city_delivery_type, $delivery_settlement_fee, $delivery_service_fee, $deliverySettings] = $this->getDeliveryFee(
+                    $total_price,
+                    $merchantCart,
+                    $address,
+                    $cityTakes[$merchantCart['mer_id']]['time'] ?? null
+                );
+                // 配送提示使用实际配送来源的配置，避免平台配送沿用商户提示。
+                if (isset($merchant_take_info[$merchantCart['mer_id']])) {
+                    if ((int)($deliverySettings['delivery_time_type'] ?? 0) === 1) {
+                        unset($merchant_take_info[$merchantCart['mer_id']]['remarks']);
+                    } else {
+                        $merchant_take_info[$merchantCart['mer_id']]['remarks'] = (string)($deliverySettings['delivery_prompt'] ?? '');
+                    }
+                }
+                if ((int)$city_delivery_type === DeliveryStation::TYPE_PLATFORM) {
+                    $delivery_grab_status = (int)systemConfig('platform_delivery_grab_status') === 1 ? 1 : 0;
+                } else if ((int)$city_delivery_type === 0) {
+                    $delivery_grab_status = (int)merchantConfig($merchantCart['mer_id'], 'mer_delivery_order_status') === 1 ? 1 : 0;
+                }
             }
 
             $productCouponRate = [];
@@ -511,6 +569,10 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             $merchantCart['order'] = [
                 'true_price' => $_pay_price,
                 'city_take_postage' => $city_take_postage,
+                'delivery_settlement_fee' => $delivery_settlement_fee,
+                'delivery_service_fee' => $delivery_service_fee,
+                'city_delivery_type' => $city_delivery_type,
+                'delivery_grab_status' => $delivery_grab_status,
                 'platform_coupon_price' => 0,
                 'valid_total_price' => $valid_total_price,
                 'total_price' => $total_price,
@@ -529,14 +591,32 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'isCityTake' => $isCityTake,
                 'delivery_status' => $deliveryStatus,
                 'svip_discount' => $total_svip_discount,
+                'merchant_member_discount_price' => $total_merchant_member_discount,
                 'use_svip' => $use_svip,
                 'order_refund_switch' => $order_refund_switch,
                 'take_id' => $merchantTakeId,
                 'city_take' => $merchant_take_info,
-                'default_delivery' => $order_model == 4 ? '' : self::DEFAULT_DELIVERY[array_search(true, [$merDelivery, $merTake, $merCityTakes], true)],
+                'default_delivery' => $order_model == 4
+                    ? ''
+                    : ($isTake
+                        ? self::DEFAULT_DELIVERY[1]
+                        : ($isCityTake
+                            ? self::DEFAULT_DELIVERY[2]
+                            : self::DEFAULT_DELIVERY[array_search(true, [$merDelivery, $merTake, $merCityTakes], true)])),
             ];
-            $order_total_postage = bcadd($order_total_postage, $postage_price, 2);
+            if ($isServiceCardOrder) {
+                $serviceCardInfo = $this->serviceCardMerchantInfo($merchantCart, $isTake);
+                $merchantCart = array_merge($merchantCart, $serviceCardInfo);
+                $merchantCart['order'] = array_merge($merchantCart['order'], $serviceCardInfo);
+            }
+            $endPostage = $isCityTake ? $city_take_postage : $postage_price;
+            $order_total_postage = bcadd($order_total_postage, $endPostage, 2);
             $order_svip_discount = bcadd($total_svip_discount, $order_svip_discount, 2);
+            $order_merchant_member_discount = bcadd(
+                $total_merchant_member_discount,
+                $order_merchant_member_discount,
+                2
+            );
             if (count($defaultSort)) {
                 $merchantCart['coupon'] = &$defaultSort;
             }
@@ -749,7 +829,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
             //计算积分抵扣
             foreach ($merchantCart['list'] as &$cart) {
-                //只有普通商品可以抵扣
+                // 普通下单商品（包含次卡/年卡）均按相同规则参与积分抵扣
                 if ($cart['product_type'] == 0 && $integralFlag && $userIntegral > 0 && $merchantCart['order']['true_price'] > 0) {
                     $integralRate = $cart['product']['integral_rate'];
                     if ($integralRate < 0) {
@@ -813,7 +893,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
             //计算订单金额
             if ($order_type != 2 || $presellType != 2) {
-                $endPostage = $city_take_postage ? $city_take_postage : $postage_price;
+                $endPostage = $merchantCart['order']['isCityTake'] ? $city_take_postage : $postage_price;
                 $pay_price = bcadd($endPostage, $org_price, 2);
             } else {
                 $pay_price = $org_price;
@@ -821,7 +901,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
             $giveIntegralFlag = $sysIntegralConfig['integral_status'] && $sysIntegralConfig['integral_order_rate'] > 0;
             $total_give_integral = 0;
-            //计算赠送积分, 只有普通商品赠送积分
+            // 计算赠送积分，次卡/年卡与普通商品保持一致
             if ($giveIntegralFlag && !$order_type && $pay_price > 0) {
                 $total_give_integral = floor(bcmul($pay_price, $sysIntegralConfig['integral_order_rate'], 0));
                 if ($total_give_integral > 0 && $svip_status && $svip_integral_rate > 0) {
@@ -853,11 +933,23 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
         foreach ($merchantCartList as &$merchantCart) {
             foreach ($merchantCart['list'] as &$cart) {
-                $cart['total_price'] = bcadd($cart['total_price'], $cart['svip_discount'], 2);
+                $cart['total_price'] = bcadd(
+                    bcadd($cart['total_price'], $cart['svip_discount'], 2),
+                    $cart['merchant_member_discount_price'],
+                    2
+                );
             }
             unset($cart);
-            $merchantCart['order']['total_price'] = bcadd($merchantCart['order']['total_price'], $merchantCart['order']['svip_discount'], 2);
-            $order_total_price = bcadd($order_total_price, $merchantCart['order']['svip_discount'], 2);
+            $merchantCart['order']['total_price'] = bcadd(
+                bcadd($merchantCart['order']['total_price'], $merchantCart['order']['svip_discount'], 2),
+                $merchantCart['order']['merchant_member_discount_price'],
+                2
+            );
+            $order_total_price = bcadd(
+                bcadd($order_total_price, $merchantCart['order']['svip_discount'], 2),
+                $merchantCart['order']['merchant_member_discount_price'],
+                2
+            );
         }
         unset($merchantCart);
 
@@ -866,7 +958,15 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $total_price = $order_total_price;
 
         $openIntegral = $merIntegralFlag && !$order_type && $sysIntegralConfig['integral_status'] && $sysIntegralConfig['integral_money'] > 0;
-        $total_coupon = bcadd($order_svip_discount, bcadd(bcadd($total_platform_coupon_price, $order_coupon_price, 2), $order_total_integral_price, 2), 2);
+        $total_coupon = bcadd(
+            $order_merchant_member_discount,
+            bcadd(
+                $order_svip_discount,
+                bcadd(bcadd($total_platform_coupon_price, $order_coupon_price, 2), $order_total_integral_price, 2),
+                2
+            ),
+            2
+        );
 
         $data = compact(
                 'order_type',
@@ -884,6 +984,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'order_total_integral_price',
                 'order_total_give_integral',
                 'order_svip_discount',
+                'order_merchant_member_discount',
                 'total_platform_coupon_price',
                 'total_coupon',
                 'order_coupon_price',
@@ -895,6 +996,9 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'order_refund_switch',
                 'order'
             ) + ['allow_address' => !$allow_no_address, 'order_delivery_status' => $orderDeliveryStatus];
+        if ($isServiceCardOrder) {
+            $data = array_merge($data, $this->serviceCardOrderInfo($merchantCartList));
+        }
 
         // 盲盒确认页脱敏：不暴露真实款式名称/SKU图（创建订单时仍会按权重随机并写入真实 SKU）
         foreach ($data['order'] as &$merchantCart) {
@@ -931,11 +1035,12 @@ class StoreOrderCreateRepository extends StoreOrderRepository
      * @param bool $useIntegral
      * @param int|null $addressId
      * @param array $post
+     * @param array $cityTakes 提交的同城配送数据（商户ID => take_id、station_type、date、week、time）
      * @return mixed
      * @throws \think\db\exception\DbException
      */
     public function v2CreateOrder($key, int $pay_type, $user, array $cartId, array $extend, array $mark, array
-    $receipt_data, array $takes = null, array $useCoupon = null, bool $useIntegral = false, int $addressId = null, array $post = [])
+    $receipt_data, array $takes = null, array $useCoupon = null, bool $useIntegral = false, int $addressId = null, array $post = [], array $cityTakes = [])
     {
 
         $uid = $user->uid;
@@ -949,6 +1054,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             throw new ValidateException('线下支付每次仅能购买一个店铺商品');
         }
         $order_model = $orderInfo['order_model'];
+        $isServiceCardOrder = $order_model == ProductRepository::DEFINE_TYPE_SERVICE_CARD;
 //        $order_extend = $orderInfo['order_extend'];
         if (!$orderInfo['order_delivery_status']) {
             throw new ValidateException('部分商品配送方式不一致,请单独下单');
@@ -976,14 +1082,37 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         $hasTake = false;
 
         foreach ($merchantCartList as $merchantCart) {
-            if ($merchantCart['order']['isTake']) {
+            if ($merchantCart['order']['isTake'] && !$isServiceCardOrder) {
                 $hasTake = true;
+            }
+            if ($merchantCart['order']['isCityTake']) {
+                $merId = (int)$merchantCart['mer_id'];
+                $cachedTake = (array)($merchantCart['order']['city_take'][$merId] ?? []);
+                $submittedTake = (array)($cityTakes[$merId] ?? []);
+                foreach (['take_id', 'station_type', 'date', 'week', 'time'] as $field) {
+                    if ((string)($cachedTake[$field] ?? '') !== (string)($submittedTake[$field] ?? '')) {
+                        throw new ValidateException('配送信息已变化，请刷新订单后重新提交');
+                    }
+                }
+
+                $settingsMerId = (int)$merchantCart['order']['city_delivery_type'] === DeliveryStation::TYPE_PLATFORM ? 0 : $merId;
+                $deliverySettings = app()->make(DeliveryConfigRepository::class)->getDeliveryConfig($settingsMerId);
+                if (!$deliverySettings) {
+                    throw new ValidateException('配送设置不存在，请刷新订单后重新提交');
+                }
+                if ((int)$deliverySettings['delivery_time_type'] === 1
+                    && (empty($cachedTake['date']) || empty($cachedTake['week']) || empty($cachedTake['time']))) {
+                    throw new ValidateException('请选择配送时间');
+                }
             }
             //检查发票状态
             if (isset($receipt_data[$merchantCart['mer_id']]) && !$merchantCart['openReceipt'])
                 throw new ValidateException('该店铺不支持开发票');
 
             foreach ($merchantCart['list'] as $cart) {
+                if ($isServiceCardOrder) {
+                    $this->assertServiceCardCart($cart);
+                }
                 if (!$cartSpread && $cart['spread_id']) {
                     $cartSpread = $cart['spread_id'];
                 }
@@ -1305,6 +1434,10 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'share_mer_id' => $_shareMerId,
                 'commission_rate' => (float)$rate,
                 'order_type' => $merchantCart['order']['isTake'] ? 1 : ($merchantCart['order']['isCityTake'] ? 2 : 0),
+                'city_delivery_type' => $merchantCart['order']['city_delivery_type'],
+                'delivery_settlement_fee' => $merchantCart['order']['isCityTake'] ? $merchantCart['order']['delivery_settlement_fee'] : 0,
+                'delivery_service_fee' => $merchantCart['order']['isCityTake'] ? $merchantCart['order']['delivery_service_fee'] : 0,
+                'delivery_grab_status' => $merchantCart['order']['delivery_grab_status'],
                 'is_virtual' => $order_model,
                 'extension_one' => $_orderExtOne,
                 'extension_two' => $_orderExtTwo,
@@ -1313,8 +1446,8 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'spread_uid' => $_orderSpreadUid,
                 'top_uid' => $_orderTopUid,
                 'is_selfbuy' => $isSelfBuy,
-                'real_name' => $merchantCart['order']['isTake'] ? $post['real_name'] : ($address['real_name'] ?? ''),
-                'user_phone' => $merchantCart['order']['isTake'] ? $post['phone'] : ($address['phone'] ?? ''),
+                'real_name' => $merchantCart['order']['isTake'] ? ($post['real_name'] ?? '') : (($address['real_name'] ?? '') ?: ($post['real_name'] ?? '')),
+                'user_phone' => $merchantCart['order']['isTake'] ? ($post['phone'] ?? '') : (($address['phone'] ?? '') ?: ($post['phone'] ?? '')),
                 'user_address' => $user_address,
                 'cart_id' => implode(',', array_column($merchantCart['list'], 'cart_id')),
                 'total_num' => $merchantCart['order']['total_num'],
@@ -1322,6 +1455,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'total_postage' => $merchantCart['order']['isCityTake'] ? $merchantCart['order']['city_take_postage'] : $merchantCart['order']['postage_price'],
                 'pay_postage' => $merchantCart['order']['isCityTake'] ? $merchantCart['order']['city_take_postage'] : $merchantCart['order']['postage_price'],
                 'svip_discount' => $merchantCart['order']['svip_discount'],
+                'merchant_member_discount_price' => $merchantCart['order']['merchant_member_discount_price'],
                 'pay_price' => $merchantCart['order']['pay_price'],
                 'integral' => $merchantCart['order']['total_integral'],
                 'integral_price' => $merchantCart['order']['total_integral_price'],
@@ -1353,8 +1487,8 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             'total_postage' => $totalPostage,
             'total_price' => $orderInfo['total_price'],
             'total_num' => $totalNum,
-            'real_name' => $address['real_name'] ?? '',
-            'user_phone' => $address['phone'] ?? '',
+            'real_name' => ($address['real_name'] ?? '') ?: ($orderList[0]['real_name'] ?? ''),
+            'user_phone' => ($address['phone'] ?? '') ?: ($orderList[0]['user_phone'] ?? ''),
             'user_address' => $user_address,
             'pay_price' => $orderInfo['order_price'],
             'coupon_price' => bcadd($orderInfo['total_platform_coupon_price'], $orderInfo['order_coupon_price'], 2),
@@ -1582,6 +1716,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                             'extension_two' => $extension_two,
                             'postage_price' => $cart['postage_price'],
                             'svip_discount' => $cart['svip_discount'],
+                            'merchant_member_discount_price' => $cart['merchant_member_discount_price'],
                             'cost' => $cart['cost'],
                             'coupon_price' => $cart['coupon_price'],
                             'platform_coupon_price' => $cart['platform_coupon_price'],
@@ -1641,6 +1776,12 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return $group;
     }
 
+    /**
+     * 获取表单信息：按表单配置校验并整理用户提交的扩展表单数据，必填项缺失时抛出异常
+     * @param int $mer_form_id 商户表单ID
+     * @param array $extends 用户提交的表单扩展数据（以购物车/商品为键的二维数组）
+     * @return array 整理后的订单扩展表单数据
+     */
     protected function getFormInfo($mer_form_id, $extends)
     {
         $params = app()->make(FormRepository::class)->getFormKeys($mer_form_id);
@@ -1682,6 +1823,11 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return $address;
     }
 
+    /**
+     * 解析配送方式，返回是否支持自提、快递配送、同城配送的标志
+     * @param string|array $way 配送方式（1自提、2快递配送、3同城配送），可为逗号分隔字符串或数组
+     * @return array [是否自提, 是否快递配送, 是否同城配送]
+     */
     protected function validateDelivery($way)
     {
         $takes = false;
@@ -1696,6 +1842,52 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return [$takes,$delivery,$city_takes];
     }
 
+    /**
+     * 根据用户选择的配送方式与商家支持范围，归一化为最终的配送方式选择
+     * @param bool $isTake 用户是否选择自提
+     * @param bool $isCityTake 用户是否选择同城配送
+     * @param bool $allowTake 商家是否支持自提
+     * @param bool $allowDelivery 商家是否支持快递配送
+     * @param bool $allowCityTake 商家是否支持同城配送
+     * @return array [是否自提, 是否同城配送]
+     */
+    protected function normalizeDeliverySelection(
+        bool $isTake,
+        bool $isCityTake,
+        bool $allowTake,
+        bool $allowDelivery,
+        bool $allowCityTake
+    ): array
+    {
+        if ($isTake && $allowTake) {
+            return [true, false];
+        }
+        if ($isCityTake && $allowCityTake) {
+            return [false, true];
+        }
+        if (!$isTake && !$isCityTake && $allowDelivery) {
+            return [false, false];
+        }
+
+        if ($allowDelivery) {
+            return [false, false];
+        }
+        if ($allowTake) {
+            return [true, false];
+        }
+
+        // 同城配送还需要前端选择配送站点，不能仅凭“支持同城”直接选中。
+        return [false, false];
+    }
+
+    /**
+     * 校验购物车并组装下单数据：验证购物车基本信息和商户信息，整理以商户为单位的购物车列表
+     * @param array $cartId 购物车ID列表
+     * @param mixed $address 收货地址信息
+     * @param object $user 用户对象
+     * @param bool $svip_status 用户是否为SVIP会员且SVIP开关开启
+     * @return array [订单类型, 订单模式, 商户表单ID, 以商户为单位的购物车列表]
+     */
     protected function validateCartList($cartId,$address,$user, $svip_status)
     {
         $storeCartRepository = app()->make(storeCartRepository::class);
@@ -1711,10 +1903,21 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         //获取商户的基本信息
         $merchantData = $this->getMerchantData($data['merIds'], $user, $order_type);
         //获取以商户为单位的购物车信心列表
-        $merchantCartList = $this->getMerchantCartList($cartData, $merchantData, $order_type,$svip_status);
+        $merchantCartList = $this->getMerchantCartList(
+            $cartData,
+            $merchantData,
+            $order_type,
+            $svip_status,
+            (int)$user->uid
+        );
         return [$order_type, $order_model, $mer_form_id, $merchantCartList];
     }
 
+    /**
+     * 汇总购物车数据的各类ID信息：商品类型、支付状态、各商品购买数量合计、商户ID集合
+     * @param \think\Collection $res 购物车数据集合
+     * @return array 包含 product_type、is_pays、productNum、merIds 的数组
+     */
     protected function getIdsData($res)
     {
         // 购物车所有商户的信息
@@ -1740,6 +1943,12 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return compact('product_type','is_pays','productNum','merIds');
     }
 
+    /**
+     * 校验购物车基础信息：商品类型、支付状态、商品有效性、限购数量、活动商品等，不合法时抛出异常
+     * @param array $data getIdsData 汇总的各类ID数据
+     * @param \think\Collection $res 购物车数据集合
+     * @return array [订单类型, 订单模式, 商户表单ID]
+     */
     protected function validateCartBasic($data, $res)
     {
         // 购物车所有商户的信息
@@ -1748,7 +1957,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
 
         $order_type = $data['product_type'][0];
         $mer_form_id = 0;
-        $order_model = 0;
+        $order_model = null;
         $productNum = $data['productNum'];
 
         $storeOrderRepository = app()->make(StoreOrderRepository::class);
@@ -1756,10 +1965,23 @@ class StoreOrderCreateRepository extends StoreOrderRepository
             if (!$cart['checkCartProduct']) $this->returnFail($cart);
             if ($cart['is_pay'])throw new ValidateException('存在以支付购物车信息');
             if ($cart['cart_num'] <= 0) throw new ValidateException('购买商品数必须大于0');
+            if ((int)$cart['product']['product_type'] === 0 && (int)$cart['product']['is_price_negotiable'] === 1) {
+                throw new ValidateException('该商品价格面议，暂不支持直接购买');
+            }
+            $currentOrderModel = (int)$cart['product']['type'];
             if (!$mer_form_id) $mer_form_id = $cart['product']['mer_form_id'];
-            if (!$order_model) $order_model = $cart['product']['type'];
+            if ($order_model === null) {
+                $order_model = $currentOrderModel;
+            } else if ($currentOrderModel !== $order_model) {
+                throw new ValidateException('不同类型商品请分开下单');
+            }
             if ($mer_form_id && $k) throw new ValidateException('存在表单信息商品，请单独购买');
-            if ($order_model && $k) throw new ValidateException('虚拟商品必须单独购买');
+            if ($order_model && $order_model != ProductRepository::DEFINE_TYPE_SERVICE_CARD && $k) {
+                throw new ValidateException('虚拟商品必须单独购买');
+            }
+            if ($currentOrderModel == ProductRepository::DEFINE_TYPE_SERVICE_CARD) {
+                $this->assertServiceCardCart($cart);
+            }
             if ($order_model == 4 && !$this->validateReservation($cart))
                 throw new ValidateException('当前时间已经预约满了～');
             if ($order_type == 0 ) {
@@ -1787,7 +2009,7 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 }
             }
         }
-        return [$order_type, $order_model, $mer_form_id];
+        return [$order_type, (int)($order_model ?? 0), $mer_form_id];
     }
 
     /**
@@ -1872,6 +2094,13 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return $cumulative[$low]['item'] ?? reset($itemsArr);
     }
 
+    /**
+     * 获取订单涉及商户的详细信息（含商户分类、优惠券、开票状态），并整理为以商户ID为键的数组
+     * @param array $merIds 商户ID列表
+     * @param object $user 用户对象
+     * @param int $order_type 订单类型
+     * @return array 以商户ID为键的商户信息数组
+     */
     protected function getMerchantData($merIds, $user, $order_type)
     {
         $uid = $user->uid;
@@ -1899,9 +2128,12 @@ class StoreOrderCreateRepository extends StoreOrderRepository
      * @return array
      * @author Qinii
      */
-    protected function getMerchantCartList($res, $merchantInfoData, $order_type, $svip_status)
+    protected function getMerchantCartList($res, $merchantInfoData, $order_type, $svip_status, int $uid)
     {
         $arr = [];
+        $memberLevelCache = [];
+        $memberPriceCache = [];
+        $memberRepository = app()->make(MerchantMemberRepository::class);
         foreach ($res as $item) {
             //商户信息
             if (!isset($arr[$item['mer_id']])) {
@@ -1909,12 +2141,72 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 $merchantData['take'] = merchantConfig($item['mer_id'], $this->configFiled);
                 $arr[$item['mer_id']] = $merchantData;
             }
-            if (!$order_type && $svip_status && $item['product']['show_svip_price']) {
+            $isServiceCardCart = $this->isServiceCardCart($item);
+            $showMerchantMemberPrice = false;
+            $priceSetting = (int)($item['product']['member_price_setting'] ?? 0);
+            $priceType = (int)($item['product']['svip_price_type'] ?? 0);
+            if (
+                !$order_type
+                && $priceSetting === 2
+                && $priceType > 0
+                && isset($item['productAttr']['price'])
+            ) {
+                $merId = (int)$item['mer_id'];
+                if (!array_key_exists($merId, $memberLevelCache)) {
+                    $memberLevelCache[$merId] = $memberRepository->memberDiscount($uid, $merId);
+                }
+                $memberLevel = $memberLevelCache[$merId];
+                if ($memberLevel) {
+                    $originalPrice = (string)$item['productAttr']['price'];
+                    $fixedPrice = null;
+                    if ($priceType === 2) {
+                        $cacheKey = implode(':', [
+                            $merId,
+                            (int)$item['product_id'],
+                            (int)$memberLevel['level'],
+                        ]);
+                        if (!array_key_exists($cacheKey, $memberPriceCache)) {
+                            $memberPriceCache[$cacheKey] = MerchantMemberProductPrice::getDB()
+                                ->where('mer_id', $merId)
+                                ->where('product_id', (int)$item['product_id'])
+                                ->where('level', (int)$memberLevel['level'])
+                                ->column('price', 'value_id');
+                        }
+                        $fixedPrice = $memberPriceCache[$cacheKey][(int)$item['productAttr']['value_id']] ?? null;
+                    }
+                    $memberPrice = $memberRepository->calculateProductMemberPrice(
+                        $originalPrice,
+                        $priceType,
+                        $memberLevel,
+                        $fixedPrice === null ? null : (string)$fixedPrice
+                    );
+                    if (bccomp($memberPrice, $originalPrice, 2) < 0) {
+                        $showMerchantMemberPrice = true;
+                        $item['productAttr']['show_merchant_member_price'] = true;
+                        $item['productAttr']['merchant_member_price'] = $memberPrice;
+                        $item['productAttr']['org_price'] = $originalPrice;
+                        $item['productAttr']['price'] = $memberPrice;
+                    }
+                }
+            }
+            if (
+                !$showMerchantMemberPrice
+                && !$order_type
+                && $priceSetting === 1
+                && $svip_status
+                && $item['product']['show_svip_price']
+            ) {
                 $item['productAttr']['show_svip_price'] = true;
                 $item['productAttr']['org_price'] = $item['productAttr']['price'];
                 $item['productAttr']['price'] = $item['productAttr']['svip_price'];
             } else {
                 $item['productAttr']['show_svip_price'] = false;
+            }
+            if (!$showMerchantMemberPrice) {
+                $item['productAttr']['show_merchant_member_price'] = false;
+            }
+            if ($isServiceCardCart) {
+                $this->prepareServiceCardCart($item);
             }
             switch($order_type)
             {
@@ -1941,6 +2233,224 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return $list;
     }
 
+    /**
+     * 判断购物车项是否为次卡/年卡商品。
+     *
+     * 下单链路里只有普通商品类型下的服务卡才走次卡/年卡校验和配送方式转换。
+     * 秒杀、拼团、预售等活动商品即使带有类似字段，也不能进入这条权益发放流程。
+     *
+     * @param mixed $cart 购物车项。
+     */
+    protected function isServiceCardCart($cart): bool
+    {
+        return (int)($cart['product_type'] ?? -1) === ProductRepository::PRODUCT_TYPE_NORMAL
+            && (int)($cart['product']['type'] ?? ProductRepository::DEFINE_TYPE_ENTITY) === ProductRepository::DEFINE_TYPE_SERVICE_CARD;
+    }
+
+    /**
+     * 校验购物车项是否满足次卡/年卡下单条件。
+     *
+     * 次卡/年卡只允许作为普通商品下单，不参与秒杀、拼团等活动流程。
+     * 这里同时校验商品上下架、SKU 库存、规则存在和固定有效期是否已结束。
+     * 该校验会在确认订单和创建订单两个阶段执行，避免确认页之后规则被改坏仍能下单。
+     *
+     * @param mixed $cart 购物车项。
+     */
+    protected function assertServiceCardCart($cart): void
+    {
+        if ((int)($cart['product']['product_type'] ?? -1) !== ProductRepository::PRODUCT_TYPE_NORMAL) {
+            throw new ValidateException('次卡/年卡必须使用普通商品下单');
+        }
+        if ((int)($cart['product']['is_show'] ?? 0) !== 1 || (int)($cart['product']['is_used'] ?? 0) !== 1) {
+            throw new ValidateException('商品已下架');
+        }
+        if ((int)($cart['productAttr']['stock'] ?? 0) < (int)$cart['cart_num']) {
+            throw new ValidateException('库存不足');
+        }
+
+        $rule = $this->resolveServiceCardRule($cart);
+        if ($this->isServiceCardRuleExpired($rule)) {
+            throw new ValidateException('次卡/年卡有效期已结束');
+        }
+    }
+
+    /**
+     * 为次卡/年卡购物车项补充规则快照和服务方式信息。
+     *
+     * 确认订单页需要展示 card_rule、service_type 等信息，创建订单时也会把这些内容写入 cart_info。
+     * 后续发卡会从订单商品 cart_info 读取下单时的 SKU 与规则，避免商品编辑后影响历史订单。
+     *
+     * @param mixed $cart 购物车项，按引用写入规则展示字段。
+     */
+    protected function prepareServiceCardCart(&$cart): void
+    {
+        $rule = $this->resolveServiceCardRule($cart);
+        if ($this->isServiceCardRuleExpired($rule)) {
+            throw new ValidateException('次卡/年卡有效期已结束');
+        }
+
+        $ruleData = app()->make(ProductRepository::class)->formatProductCardRule($rule->toArray());
+        $serviceType = (int)($ruleData['service_type'] ?? StoreProductCardRuleRepository::SERVICE_TYPE_STORE);
+        if (!in_array($serviceType, StoreProductCardRuleRepository::SERVICE_TYPES, true)) {
+            $serviceType = StoreProductCardRuleRepository::SERVICE_TYPE_STORE;
+        }
+        $serviceTypeLabel = StoreProductCardRuleRepository::SERVICE_TYPE_LABELS[$serviceType] ?? '';
+        $ruleData['service_type'] = $serviceType;
+        $ruleData['service_type_label'] = $serviceTypeLabel;
+        $ruleData['service_type_text'] = $serviceTypeLabel;
+
+        $cart['productAttr']['card_rule'] = $ruleData;
+        $cart['productAttr']['service_type'] = $serviceType;
+        $cart['productAttr']['service_type_label'] = $serviceTypeLabel;
+        $cart['service_type'] = $serviceType;
+        $cart['service_type_label'] = $serviceTypeLabel;
+    }
+
+    /**
+     * 查找购物车 SKU 对应的启用次卡/年卡规则。
+     *
+     * 规则必须按商户、商品、SKU 精确命中。优先使用 value_id，兼容 unique 兜底。
+     * 找不到规则说明该 SKU 没有可售权益配置，不能继续下单。
+     *
+     * @param mixed $cart 购物车项。
+     * @return mixed
+     */
+    protected function resolveServiceCardRule($cart)
+    {
+        $rule = app()->make(StoreProductCardRuleRepository::class)->getEnabledRule(
+            (int)$cart['mer_id'],
+            (int)$cart['product_id'],
+            (int)($cart['productAttr']['value_id'] ?? 0),
+            (string)($cart['productAttr']['unique'] ?? '')
+        );
+        if (!$rule) {
+            throw new ValidateException('次卡/年卡规格规则不存在');
+        }
+
+        return $rule;
+    }
+
+    /**
+     * 按自然日判断固定有效期规则是否过期。
+     *
+     * 结束日期当天仍可购买，避免 DATE 值被当作当天 00:00:00 而提前过期。
+     */
+    protected function isServiceCardRuleExpired($rule): bool
+    {
+        if ((int)$rule['validity_type'] !== StoreProductCardRuleRepository::VALIDITY_TYPE_DATE_RANGE
+            || !$rule['valid_end_time']
+        ) {
+            return false;
+        }
+
+        $endTime = strtotime((string)$rule['valid_end_time']);
+
+        return $endTime && date('Y-m-d', $endTime) < date('Y-m-d');
+    }
+
+    /**
+     * 将次卡/年卡规则的服务方式转换为订单配送能力。
+     *
+     * 到店服务对应自提/到店核销；上门服务对应配送地址流程；
+     * 次卡/年卡不走普通快递或同城配送，因此第三个返回值固定为 false。
+     *
+     * @param mixed $cart 购物车项。
+     * @return array [支持到店, 支持上门, 支持同城]
+     */
+    protected function serviceCardDeliveryAbility($cart): array
+    {
+        $serviceType = (int)($cart['service_type'] ?? $cart['productAttr']['card_rule']['service_type'] ?? StoreProductCardRuleRepository::SERVICE_TYPE_STORE);
+        if (!in_array($serviceType, StoreProductCardRuleRepository::SERVICE_TYPES, true)) {
+            $serviceType = StoreProductCardRuleRepository::SERVICE_TYPE_STORE;
+        }
+
+        return [
+            in_array($serviceType, [StoreProductCardRuleRepository::SERVICE_TYPE_STORE, StoreProductCardRuleRepository::SERVICE_TYPE_BOTH], true),
+            in_array($serviceType, [StoreProductCardRuleRepository::SERVICE_TYPE_HOME, StoreProductCardRuleRepository::SERVICE_TYPE_BOTH], true),
+            false,
+        ];
+    }
+
+    /**
+     * 汇总商户维度的次卡/年卡服务方式信息。
+     *
+     * 同一商户订单中如果所有卡服务方式一致，就回传 service_type 供前端展示；
+     * 如果混合了不同服务方式，只保留用户本次选择的 selected_service_type。
+     * selected_service_type 由确认订单页选择的到店/上门结果推导，用于创建订单时决定 order_type。
+     *
+     * @param array $merchantCart 单个商户下的购物车集合。
+     * @param bool $isTake 用户本次是否选择到店服务。
+     * @return array
+     */
+    protected function serviceCardMerchantInfo(array $merchantCart, bool $isTake): array
+    {
+        $serviceType = 0;
+        foreach ($merchantCart['list'] as $cart) {
+            $cartServiceType = (int)($cart['service_type'] ?? $cart['productAttr']['card_rule']['service_type'] ?? 0);
+            if (!$cartServiceType) {
+                continue;
+            }
+            if ($serviceType === 0) {
+                $serviceType = $cartServiceType;
+            } else if ($serviceType !== $cartServiceType) {
+                $serviceType = 0;
+                break;
+            }
+        }
+
+        $selectedServiceType = $isTake
+            ? StoreProductCardRuleRepository::SERVICE_TYPE_STORE
+            : StoreProductCardRuleRepository::SERVICE_TYPE_HOME;
+        $info = [
+            'selected_service_type' => $selectedServiceType,
+            'selected_service_type_label' => StoreProductCardRuleRepository::SERVICE_TYPE_LABELS[$selectedServiceType] ?? '',
+        ];
+
+        if ($serviceType > 0) {
+            $info['service_type'] = $serviceType;
+            $info['service_type_label'] = StoreProductCardRuleRepository::SERVICE_TYPE_LABELS[$serviceType] ?? '';
+        }
+
+        return $info;
+    }
+
+    /**
+     * 构建次卡/年卡订单级服务信息。
+     *
+     * v2 下单最终需要把 selected_service_type 转成订单字段：
+     * 到店服务：order_type = 1，isTake = true，不需要收货地址；
+     * 上门服务：order_type = 0，isTake = false，同样不允许走普通物流配送。
+     *
+     * @param array $merchantCartList 按商户分组后的购物车数据。
+     * @return array
+     */
+    protected function serviceCardOrderInfo(array $merchantCartList): array
+    {
+        foreach ($merchantCartList as $merchantCart) {
+            if (!isset($merchantCart['selected_service_type'])) {
+                continue;
+            }
+
+            $selectedServiceType = (int)$merchantCart['selected_service_type'];
+            return [
+                'service_type' => (int)($merchantCart['service_type'] ?? 0),
+                'service_type_label' => (string)($merchantCart['service_type_label'] ?? ''),
+                'selected_service_type' => $selectedServiceType,
+                'selected_service_type_label' => (string)($merchantCart['selected_service_type_label'] ?? ''),
+                'delivery_order_type' => $selectedServiceType === StoreProductCardRuleRepository::SERVICE_TYPE_STORE ? 1 : 0,
+                'isTake' => $selectedServiceType === StoreProductCardRuleRepository::SERVICE_TYPE_STORE,
+                'allow_address' => false,
+            ];
+        }
+
+        return [];
+    }
+
+    /**
+     * 校验预约商品在预约日期的库存是否充足
+     * @param array $cart 购物车商品数据（含 product_id、reservation_id、reservation_date、cart_num）
+     * @return bool 预约库存充足返回true，否则返回false
+     */
     public function validateReservation($cart)
     {
         $valueReservationRepository = app()->make(ProductAttrValueReservationRepository::class);
@@ -1974,9 +2484,10 @@ class StoreOrderCreateRepository extends StoreOrderRepository
      * @param float $totalPrice
      * @param array $merchantCart
      * @param array $address
-     * @return float
+     * @param string|null $deliveryTime
+     * @return array [配送费, 配送站点类型, 结算配送费, 配送服务费, 生效的配送配置]
      */
-    protected function getDeliveryFee(float $totalPrice, $merchantCart, $address) : float
+    protected function getDeliveryFee(float $totalPrice, $merchantCart, $address, ?string $deliveryTime = null) : array
     {
         // 计算重量
         $totalWeight = 0;
@@ -1985,23 +2496,42 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         }
         $deliveryConfigRepository = app()->make(DeliveryConfigRepository::class);
         $deliverySettings = $deliveryConfigRepository->getDeliveryConfig($merchantCart['mer_id']);
-        if (!$deliverySettings) {
-            throw new ValidateException('商户：【' . $deliverySettings['merchant']['mer_name'] . '】，未设置配送费用信息，无法计算配送费，请切换其他配送方式');
+        $deliveryStation = app()->make(DeliveryStationRepository::class)->deliveryStationInfo(
+            $merchantCart['take_id'],
+            $merchantCart['mer_id']
+        );
+        $isPlatformDelivery = (int)$deliveryStation['type'] === DeliveryStation::TYPE_PLATFORM;
+        if ($isPlatformDelivery) {
+            if ((int)systemConfig('platform_delivery_status') !== 1) {
+                throw new ValidateException('平台配送暂未开启，请切换其他配送方式');
+            }
+            $deliverySettings = $deliveryConfigRepository->getDeliveryConfig(0);
         }
+        if (!$deliverySettings) {
+            $deliveryName = $isPlatformDelivery ? '平台' : '商户：【' . $merchantCart['mer_name'] . '】';
+            throw new ValidateException($deliveryName . '未设置配送费用信息，无法计算配送费，请切换其他配送方式');
+        }
+        $deliveryName = $isPlatformDelivery ? '平台配送' : '商户：【' . $merchantCart['mer_name'] . '】';
         // 是否到达起送价
         if ($totalPrice < $deliverySettings['min_delivery_amount']) {
-            throw new ValidateException('商户：【' . $deliverySettings['merchant']['mer_name'] . '】，订单金额不能低于起送价，起送价：¥' . $deliverySettings['min_delivery_amount']);
+            throw new ValidateException($deliveryName . '订单金额不能低于起送价，起送价：¥' . $deliverySettings['min_delivery_amount']);
         }
-        // 是否到达免配送费金额
-        if ($totalPrice >= $deliverySettings['free_shipping_amount']) {
-            return 0;
-        }
-        return $deliveryConfigRepository->deliveryFee(
+        $deliveryFee = $deliveryConfigRepository->deliveryFee(
             $merchantCart['take_id'],
             $totalWeight,
             $deliverySettings->toArray(),
-            $address->toArray()
+            $address->toArray(),
+            $merchantCart['mer_id'],
+            $deliveryTime
         );
+        $serviceFee = bcmul(bcdiv($deliverySettings['commission_rate'], 100, 2), $deliveryFee, 2);
+        // 包邮金额为 0 表示未启用包邮；达到有效包邮金额时仍保留实际配送成本用于结算。
+        if ((float)$deliverySettings['free_shipping_amount'] > 0
+            && $totalPrice >= $deliverySettings['free_shipping_amount']
+        ) {
+            return [0, (int)$deliveryStation['type'], $deliveryFee, $serviceFee, $deliverySettings];
+        }
+        return [$deliveryFee, (int)$deliveryStation['type'], $deliveryFee, $serviceFee, $deliverySettings];
     }
     /**
      * 检查上门服务是否在商品支持范围内
@@ -2015,5 +2545,3 @@ class StoreOrderCreateRepository extends StoreOrderRepository
         return app()->make(ProductReservationRepository::class)->checkRangeByType($merId, $address);
     }
 }
-
-

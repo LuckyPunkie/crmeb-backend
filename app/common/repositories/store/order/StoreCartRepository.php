@@ -16,8 +16,10 @@ namespace app\common\repositories\store\order;
 
 use app\common\dao\store\order\StoreCartDao;
 use app\common\dao\store\order\StoreCartPriceDao;
+use app\common\model\merchant\MerchantMemberProductPrice;
 use app\common\model\store\product\Product;
 use app\common\repositories\BaseRepository;
+use app\common\repositories\merchant\MerchantMemberRepository;
 use app\common\repositories\store\coupon\StoreCouponProductRepository;
 use app\common\repositories\store\coupon\StoreCouponRepository;
 use app\common\repositories\store\product\ProductRepository;
@@ -112,6 +114,9 @@ class StoreCartRepository extends BaseRepository
         $keyArray = array_column($merchantInfoData,'mer_id');
         $merchantInfoData = array_combine($keyArray,$merchantInfoData);
         $productNumber = 0;
+        $memberLevelCache = [];
+        $memberPriceCache = [];
+        $memberRepository = app()->make(MerchantMemberRepository::class);
         
         foreach ($res as $item) {
             if ($item['is_pay']) throw new ValidateException('存在以支付购物车信息');
@@ -134,12 +139,67 @@ class StoreCartRepository extends BaseRepository
                     $couponIds = $storeCouponProductRepository->productByCouponId([$item['product']['product_id']]);
                     $arr[$item['mer_id']]['hasCoupon'] = count($couponIds) ? $coupon_make->validProductCouponExists([$item['product']['product_id']], $hasCoupon) : 0;
                 }
-                if ($svip_status && !$item['product']['product_type'] && $item['product']['show_svip_price']) {
+                $showMerchantMemberPrice = false;
+                $priceSetting = (int)($item['product']['member_price_setting'] ?? 0);
+                $priceType = (int)($item['product']['svip_price_type'] ?? 0);
+                if (
+                    !$item['product']['product_type']
+                    && $priceSetting === 2
+                    && $priceType > 0
+                ) {
+                    $merId = (int)$item['mer_id'];
+                    if (!array_key_exists($merId, $memberLevelCache)) {
+                        $memberLevelCache[$merId] = $memberRepository->memberDiscount((int)$uid, $merId);
+                    }
+                    $memberLevel = $memberLevelCache[$merId];
+                    if ($memberLevel) {
+                        $originalPrice = (string)$item['productAttr']['price'];
+                        $fixedPrice = null;
+                        if ($priceType === 2) {
+                            $cacheKey = implode(':', [
+                                $merId,
+                                (int)$item['product']['product_id'],
+                                (int)$memberLevel['level'],
+                            ]);
+                            if (!array_key_exists($cacheKey, $memberPriceCache)) {
+                                $memberPriceCache[$cacheKey] = MerchantMemberProductPrice::getDB()
+                                    ->where('mer_id', $merId)
+                                    ->where('product_id', (int)$item['product']['product_id'])
+                                    ->where('level', (int)$memberLevel['level'])
+                                    ->column('price', 'value_id');
+                            }
+                            $fixedPrice = $memberPriceCache[$cacheKey][(int)$item['productAttr']['value_id']] ?? null;
+                        }
+                        $memberPrice = $memberRepository->calculateProductMemberPrice(
+                            $originalPrice,
+                            $priceType,
+                            $memberLevel,
+                            $fixedPrice === null ? null : (string)$fixedPrice
+                        );
+                        if (bccomp($memberPrice, $originalPrice, 2) < 0) {
+                            $showMerchantMemberPrice = true;
+                            $item['productAttr']['show_merchant_member_price'] = true;
+                            $item['productAttr']['merchant_member_price'] = $memberPrice;
+                            $item['productAttr']['org_price'] = $originalPrice;
+                            $item['productAttr']['price'] = $memberPrice;
+                        }
+                    }
+                }
+                if (
+                    !$showMerchantMemberPrice
+                    && $priceSetting === 1
+                    && $svip_status
+                    && !$item['product']['product_type']
+                    && $item['product']['show_svip_price']
+                ) {
                     $item['productAttr']['show_svip_price'] = true;
                     $item['productAttr']['org_price'] = $item['productAttr']['price'];
                     $item['productAttr']['price'] = $item['productAttr']['svip_price'];
                 } else {
                     $item['productAttr']['show_svip_price'] = false;
+                }
+                if (!$showMerchantMemberPrice) {
+                    $item['productAttr']['show_merchant_member_price'] = false;
                 }
                 $arr[$item['mer_id']]['list'][] = $item;
             }
@@ -298,6 +358,13 @@ class StoreCartRepository extends BaseRepository
         });
     }
 
+    /**
+     * 获取用户未删除、未失效、未支付的购物车ID列表，可按商家ID和游客标识过滤
+     * @param int $uid 用户ID
+     * @param int $merId 商家ID，为0时不限制商家
+     * @param string $tourist_unique_key 游客唯一标识，为空时不限制
+     * @return array 购物车ID列表
+     */
     public function getCartIds(int $uid, int $merId = 0, string $tourist_unique_key = '')
     {
         $where['uid'] = $uid;
@@ -376,6 +443,12 @@ class StoreCartRepository extends BaseRepository
         return compact('list', 'fail');
     }
 
+    /**
+     * 更新单个购物车商品的改价信息，已存在整单改价时不允许再进行单商品改价
+     * @param int $cartId 购物车ID
+     * @param array $params 改价参数
+     * @return mixed 新增或更新改价信息的写入结果
+     */
     public function updatePrice(int $cartId, array $params)
     {
         $make = app()->make(StoreCartPriceDao::class);
@@ -389,6 +462,11 @@ class StoreCartRepository extends BaseRepository
         return $make->add($cartId, $params);
     }
 
+    /**
+     * 整单改价：在事务内按改价比例将改价后金额分摊到每个购物车商品并写入改价信息，任一步失败则回滚
+     * @param array $params 改价参数（含购物车ID、用户ID、商家ID、改价方式及改价金额等）
+     * @return bool 改价成功返回true
+     */
     public function batchUpdatePrice(array $params)
     {
         $cartList = $this->dao->cartIbByData($params['cart_ids'], $params['uid'], null)->where('mer_id', $params['merId'])->append(['checkCartProduct', 'UserPayCount', 'ActiveSku','spu']);

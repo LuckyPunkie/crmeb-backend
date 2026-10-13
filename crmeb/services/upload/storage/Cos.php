@@ -155,7 +155,7 @@ class Cos extends BaseUpload
         try {
             $key = $this->getUploadPath($key);
             $this->fileInfo->uploadInfo = $this->app()->putObject($key, $body);
-            $this->fileInfo->filePath = ($this->cdn ?: $this->uploadUrl) . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
             $this->fileInfo->fileName = $key;
             $isImage = isset($fileHandle) ? $this->isImageFileHandle($fileHandle) : $this->isImageByPath($key);
@@ -374,10 +374,16 @@ class Cos extends BaseUpload
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
             curl_setopt($ch, CURLOPT_POST, 1);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $this->json2str($params));
-            $result = curl_exec($ch);
-            if(curl_errno($ch)) $result = curl_error($ch);
+            $response = curl_exec($ch);
+            $curlError = curl_error($ch);
             curl_close($ch);
-            $result = json_decode($result, 1);
+            if ($response === false) {
+                throw new Exception($curlError ?: '获取腾讯云临时密钥失败');
+            }
+            $result = json_decode($response, true);
+            if (!is_array($result)) {
+                throw new Exception('腾讯云临时密钥响应格式错误');
+            }
             if (isset($result['Response'])) {
                 $result = $result['Response'];
                 if(isset($result['Error'])){
@@ -392,9 +398,9 @@ class Cos extends BaseUpload
             $result['bucket'] = $this->storageName;
             $result['region'] = $this->storageRegion;
             return $result;
-        }catch(\Exception $e){
+        }catch(\Throwable $e){
             if($result == null){
-                $result = "error: " . + $e->getMessage();
+                $result = "error: " . $e->getMessage();
             }else{
                 $result = json_encode($result);
             }

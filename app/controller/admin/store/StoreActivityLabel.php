@@ -13,6 +13,7 @@
 namespace app\controller\admin\store;
 
 use think\App;
+use think\exception\ValidateException;
 use crmeb\basic\BaseController;
 use app\validate\admin\ActivityLabelValidate;
 use app\common\repositories\store\StoreActivityCateRepository;
@@ -84,7 +85,24 @@ class StoreActivityLabel extends BaseController
             'is_show',
             'status',
             'sort',
+            ['start_time', null],
+            ['end_time', null],
         ]);
+        foreach (['start_time', 'end_time'] as $field) {
+            if ($data[$field] === '') {
+                $data[$field] = null;
+            } elseif ($data[$field] && strtotime($data[$field]) === false) {
+                throw new ValidateException(($field === 'start_time' ? '开始时间' : '结束时间') . '格式错误');
+            }
+        }
+        if (
+            $data['start_time'] &&
+            $data['end_time'] &&
+            strtotime($data['start_time']) > strtotime($data['end_time'])
+        ) {
+            throw new ValidateException('开始时间不能大于结束时间');
+        }
+
         app()->make(ActivityLabelValidate::class)->check($data);
         return $data;
     }

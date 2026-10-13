@@ -195,6 +195,10 @@ class UserRelationRepository extends BaseRepository
                 // 组装待插入的数据参数
                 $param = ['type' => $data['type'], 'type_id' => $item, 'uid' => $uid];
 
+                if ((int)$data['type'] === 10) {
+                    app()->make(UserMerchantRepository::class)->getInfo($uid, (int)$item);
+                }
+
                 // 检查当前类型ID是否已存在，如果不存在则创建新记录
                 if(!$this->dao->getWhereCount($param)) {
                     $this->dao->create($param);

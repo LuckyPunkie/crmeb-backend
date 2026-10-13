@@ -51,6 +51,26 @@ class Merchant extends BaseModel
         return 'merchant';
     }
 
+    public function setMerProductTypeAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getMerProductTypeAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
+    public function setPlatformCategoryAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getPlatformCategoryAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
     public function getDeliveryWayAttr($value)
     {
         if (!$value) return [];
@@ -90,7 +110,7 @@ class Merchant extends BaseModel
     {
         return $this->hasMany(Product::class, 'mer_id', 'mer_id')
             ->where((new ProductDao())->productShow())
-            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good')
+            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,is_price_negotiable,price_negotiable_text')
             ->order('is_good DESC,sort DESC');
     }
 
@@ -105,7 +125,7 @@ class Merchant extends BaseModel
         $list = Product::where('mer_id', $this['mer_id'])
             ->with(['reservation','merchant'])
             ->where((new ProductDao())->productShow())
-            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,cate_id,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type')
+            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,cate_id,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type,is_price_negotiable,price_negotiable_text')
             ->order('is_good DESC, sort DESC, create_time DESC')
             ->limit(10)
             ->select()->append(['show_svip_info','activity_labels']);
@@ -121,7 +141,7 @@ class Merchant extends BaseModel
             ->with(['reservation','merchant'])
             ->where((new ProductDao())->productShow())
             ->whereLike('delivery_way',"%1%")
-            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,cate_id,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type')
+            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,cate_id,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type,is_price_negotiable,price_negotiable_text')
             ->order('sort DESC, create_time DESC')
             ->limit(3)
             ->select()->append(['activity_labels']);
@@ -151,7 +171,7 @@ class Merchant extends BaseModel
             ->with(['reservation','merchant'])
             ->where((new ProductDao())->productShow())
             ->where('is_good', 1)
-            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,create_time,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type')
+            ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,create_time,activity_label_ids,delivery_free,give_coupon_ids,delivery_way,type,product_type,is_price_negotiable,price_negotiable_text')
             ->order('is_good DESC,sort DESC,create_time DESC')
             ->limit(3);
     }

@@ -126,7 +126,7 @@ class StoreOrderStatusDao extends BaseDao
         $time = '';
         if ($res) {
             $timer = ((int)systemConfig('auto_take_order_timer')) ?: 15;
-            $time = date('Y-m-d H:i:s',strtotime("+ $timer day"));
+            $time = date('Y-m-d H:i:s',strtotime("+ $timer day",strtotime($res['change_time'])));
         }
         return $time;
     }

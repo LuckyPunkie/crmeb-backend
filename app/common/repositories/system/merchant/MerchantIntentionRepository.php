@@ -109,7 +109,9 @@ class MerchantIntentionRepository extends BaseRepository
         // 设置默认的状态和失败消息
         $data['status'] = 0;
         $data['fail_msg'] = '';
-
+        $data['platform_category'] = is_array($data['platform_category']) ? json_encode($data['platform_category']) : $data['platform_category'];
+        $data['mer_product_type'] = is_array($data['mer_product_type']) ? json_encode($data['mer_product_type'])
+            : $data['mer_product_type'];
         // 调用DAO层的方法更新数据库中的记录
         return $this->dao->update($id, $data);
     }

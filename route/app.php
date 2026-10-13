@@ -15,13 +15,13 @@ use think\facade\Route;
 
 Route::get('install','Install/begin');
 Route::group('install',function(){
-   route::get('environment','/environment') ;
-   route::get('databases','/databases') ;
-   route::post('databases/create','/create') ;
-   route::post('databases/check','/databasesCheck') ;
-   route::post('perform/:n','/perform') ;
-   route::get('end','/end') ;
-   route::get('loader','/swooleCompiler') ;
+    route::get('environment','/environment') ;
+    route::get('databases','/databases') ;
+    route::post('databases/create','/create') ;
+    route::post('databases/check','/databasesCheck') ;
+    route::post('perform/:n','/perform') ;
+    route::get('end','/end') ;
+    route::get('loader','/swooleCompiler') ;
 })->prefix('Install');
 
 // 收钱吧同款：统一收款中转短链（微信「普通链接二维码」规则建议配此前缀）

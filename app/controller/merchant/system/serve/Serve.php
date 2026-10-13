@@ -13,6 +13,8 @@
 
 namespace app\controller\merchant\system\serve;
 
+use think\Exception;
+use crmeb\services\CrmebServeServices;
 use app\common\repositories\system\serve\ServeMealRepository;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use crmeb\basic\BaseController;
@@ -109,4 +111,15 @@ class Serve extends BaseController
     }
 
 
+    public function getUserInfo()
+    {
+        try{
+            $service =  app()->make(CrmebServeServices::class,[$this->request->merId()]);
+            $info =$service->copy()->getUserInfo();
+        }catch (Exception $exception) {
+            $info = [];
+        }
+
+        return app('json')->success($info);
+    }
 }

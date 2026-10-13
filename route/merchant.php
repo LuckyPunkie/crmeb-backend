@@ -15,15 +15,6 @@ use app\common\middleware\CheckSiteOpenMiddleware;
 use app\common\middleware\InstallMiddleware;
 use think\facade\Route;
 use app\common\middleware\RequestLockMiddleware;
-//
-//Route::group(config('admin.merchant_prefix'), function () {
-//    Route::miss(function () {
-//        $DB = DIRECTORY_SEPARATOR;
-//        return view(app()->getRootPath() . 'public' . $DB . 'mer.html');
-//    });
-//})
-//    ->middleware(InstallMiddleware::class)
-//    ->middleware(CheckSiteOpenMiddleware::class);
 
 Route::group(config('admin.api_merchant_prefix') . '/', function () {
     $path = $this->app->getRootPath() . 'route' . DIRECTORY_SEPARATOR.'merchant';

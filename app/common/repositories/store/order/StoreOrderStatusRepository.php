@@ -16,6 +16,7 @@ namespace app\common\repositories\store\order;
 use app\common\repositories\user\UserRepository;
 use app\common\dao\store\order\StoreOrderStatusDao;
 use app\common\repositories\BaseRepository;
+use app\common\repositories\delivery\DeliveryServiceRepository;
 use app\common\repositories\store\service\StoreServiceRepository;
 use app\common\repositories\store\service\StoreServiceUserRepository;
 
@@ -41,6 +42,7 @@ class StoreOrderStatusRepository extends BaseRepository
     public const U_TYPE_ADMIN = 2;
     public const U_TYPE_MERCHANT = 3;
     public const U_TYPE_SERVICE = 4;
+    public const U_TYPE_DELIVERY = 5;
 
     //订单变动类型
     //取消
@@ -225,6 +227,29 @@ class StoreOrderStatusRepository extends BaseRepository
         $data['nickname'] = $service->nickname;
 
         // 创建日志记录
+        return $this->dao->create($data);
+    }
+
+    /**
+     * 创建配送员日志
+     *
+     * 配送员与店铺客服使用不同的数据表，单独记录操作者类型，避免将配送员
+     * 误识别为客服或系统操作。
+     *
+     * @param int $service_id 配送员服务ID
+     * @param array $data 包含日志详细信息的数据数组
+     * @return bool|int 返回创建的日志ID或false
+     */
+    public function createDeliveryLog(int $service_id, array $data)
+    {
+        $service = app()->make(DeliveryServiceRepository::class)->getWhere([
+            'service_id' => $service_id,
+        ]);
+
+        $data['user_type'] = self::U_TYPE_DELIVERY;
+        $data['uid'] = $service_id;
+        $data['nickname'] = $service->name ?? '';
+
         return $this->dao->create($data);
     }
 

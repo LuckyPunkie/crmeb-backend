@@ -8,7 +8,7 @@
 // +----------------------------------------------------------------------
 // | Author: CRMEB Team <admin@crmeb.com>
 // +----------------------------------------------------------------------
-namespace  crmeb\services\pay\storage;
+namespace crmeb\services\pay\storage;
 
 use crmeb\services\pay\BasePay;
 use crmeb\services\pay\PayInterface;
@@ -72,16 +72,17 @@ class Weixin extends BasePay implements PayInterface
                 );
                 break;
             case 'weixinApp':
-                if (Payment::instance()->isV3PAy()) {
-                    $config = Payment::instance()->payClient()->appPay(
+                $services = Payment::instance()->setAccessEnd(Payment::APP);
+                if ($services->isV3PAy()) {
+                    $config = $services->payClient()->appPay(
                         outTradeNo:$order['order_sn'],
                         total:$order['pay_price'],
                         description:$order['body'],
                         attach:$order['attach']
                     );
                 } else {
-                    $config = Payment::instance()->appPay(
-                        openid: $openid,
+                    $config = $services->appPay(
+                        openid: null,
                         out_trade_no: $order['order_sn'],
                         total_fee: $order['pay_price'],
                         attach: $order['attach'],
@@ -97,6 +98,7 @@ class Weixin extends BasePay implements PayInterface
                     attach: $order['attach'],
                     body: $order['body']
                 );
+
                 break;
             case 'routine':
                 $services = Payment::instance()->setAccessEnd(Payment::MINI);
@@ -137,20 +139,16 @@ class Weixin extends BasePay implements PayInterface
         return compact('config');
     }
 
-    public function payOrderRefund(string $outTradeNo, array $options = [], $type = 0)
+    public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $service = Payment::instance();
-        if ($type == 2) {
-            $service->setAccessEnd('mini');
-        }
+        $service = Payment::instance()->setAccessEnd($this->resolvePaymentAccessEnd($channel));
         $config = $service->payOrderRefund(orderNo:$outTradeNo, opt:$options);
         return compact('config');
     }
 
-    public function refund(string $outTradeNo, array $options = [])
+    public function refund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $config = Payment::instance()->payOrderRefund(orderNo:$outTradeNo, opt:$options);
-        return compact('config');
+        return $this->payOrderRefund($outTradeNo, $options, $channel);
     }
 
     public function handleNotify()

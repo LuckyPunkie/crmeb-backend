@@ -32,41 +32,45 @@ Route::group(function () {
     //平台
     Route::group('diy/categroy', function () {
 
-        Route::get('lst', '/lst')->name('systemDiyPageCategroyLst')->option([
-            '_alias' => '列表 ',
-        ]);
+        Route::get('lst', [app\controller\admin\system\diy\PageCategroy::class,'lst'])
+            ->name('systemDiyPageCategroyLst')
+            ->option([
+                '_alias' => '列表 ',
+            ]);
 
-        Route::get('options', '/options')->option([
-            '_alias' => '列表 ',
-            '_auth' => false,
-        ]);
+        Route::get('options', [app\controller\admin\system\diy\PageCategroy::class,'options']);
 
-        Route::get('form', '/createForm')->name('systemDiyPageCategroyCreateForm')->option([
-            '_alias' => '添加表单',
-            '_auth' => false,
-            '_form' => 'systemDiyPageCategroyCreate',
-        ]);
-        Route::post('create', '/create')->name('systemDiyPageCategroyCreate')->option([
-            '_alias' => '添加',
-        ]);
+        Route::get('form', [app\controller\admin\system\diy\PageCategroy::class,'createForm'])
+            ->name('systemDiyPageCategroyCreateForm')
+            ->option([
+                '_alias' => '添加表单',
+                '_auth' => false,
+                '_form' => 'systemDiyPageCategroyCreate',
+            ]);
 
-        Route::get(':id/form', '/updateForm')->name('systemDiyPageCategroyUpdateForm')->option([
+        Route::post('create', [app\controller\admin\system\diy\PageCategroy::class,'create'])
+            ->name('systemDiyPageCategroyCreate')
+            ->option([
+                '_alias' => '添加',
+            ]);
+
+        Route::get(':id/form', [app\controller\admin\system\diy\PageCategroy::class,'updateForm'])->name('systemDiyPageCategroyUpdateForm')->option([
             '_alias' => '编辑表单',
             '_auth' => false,
             '_form' => 'systemDiyPageCategroyUpdate',
         ]);
-        Route::post('update/:id', '/update')->name('systemDiyPageCategroyUpdate')->option([
+        Route::post('update/:id', [app\controller\admin\system\diy\PageCategroy::class,'update'])->name('systemDiyPageCategroyUpdate')->option([
             '_alias' => '编辑',
         ]);
 
-        Route::post('status/:id', '/switchStatus')->name('systemDiyPageCategroyStatus')->option([
+        Route::post('status/:id', [app\controller\admin\system\diy\PageCategroy::class,'switchStatus'])->name('systemDiyPageCategroyStatus')->option([
             '_alias' => '编辑状态',
         ]);
-        Route::delete('delete/:id', '/delete')->name('systemDiyPageCategroyDelete')->option([
+        Route::delete('delete/:id', [app\controller\admin\system\diy\PageCategroy::class,'delete'])->name('systemDiyPageCategroyDelete')->option([
             '_alias' => '删除',
         ]);
 
-    })->prefix('admin.system.diy.PageCategroy')->option([
+    })->option([
         '_path' => '/setting/diy/plantform/category/list',
         '_auth' => true,
     ]);

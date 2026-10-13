@@ -24,7 +24,7 @@ class DeliveryStationValidate extends Validate
         'switch_city|同城配送' => 'require|in:0,1',
         'switch_take|到店自提' => 'require|in:0,1',
         'station_name|提货点名称' => 'require',
-        'type' => 'require|integer|in:0,1,2',
+        'type' => 'require|integer|in:0,1,2,3',
         'business|配送品类' => 'requireIf:type,1|requireIf:type,2|number',
         'city_name|所属城市' => 'requireIf:type,1|requireIf:type,2',
         'station_address|提货点地址' => 'require',

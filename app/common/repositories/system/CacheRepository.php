@@ -68,6 +68,8 @@ class CacheRepository extends BaseRepository
     const COUPON_AGREE = 'sys_coupon_agree';
     //付费会员协议
     const SYS_SVIP = 'sys_svip';
+    //店铺会员注册及授权协议
+    const MERCHANT_MEMBER_AUTHORIZE_AGREE = 'merchant_member_authorize_agree';
     //分销说明
     const PROMOTER_EXPLAIN = 'promoter_explain';
     //商圈入驻协议
@@ -76,8 +78,15 @@ class CacheRepository extends BaseRepository
     const BUSINESS_ENTRY_AGREE = 'business_entry_agree';
     //消费送股/入股协议
     const EQUITY_INVEST_AGREE = 'equity_invest_agree';
+    //配送员入驻协议
+    const DELIVERTMAN_ENTRY_AGREE = 'deliveryman_entry_agree';
 
 
+    /**
+     * 获取协议/条款列表（根据类型与小程序审核状态组合返回）
+     * @param $type 类型标识，为0时额外返回注销声明、关于我们、资质证照
+     * @return array 协议列表（label 标签 + key 键值）
+     */
     public function getAgreeList($type)
     {
         $data = [
@@ -98,7 +107,10 @@ class CacheRepository extends BaseRepository
             $data[] = ['label' => '注销声明', 'key' => self::CANCELLATION_MSG];
             $data[] = ['label' => '关于我们', 'key' => self::ABOUT_US];
             $data[] = ['label' => '资质证照', 'key' => self::SYS_CERTIFICATE];
+
         }
+        $data[] = ['label' => '配送员入驻协议', 'key' => self::DELIVERTMAN_ENTRY_AGREE];
+        $data[] = ['label' => '店铺会员用户授权', 'key' => self::MERCHANT_MEMBER_AUTHORIZE_AGREE];
         return $data;
     }
 
@@ -130,10 +142,12 @@ class CacheRepository extends BaseRepository
             self::PLATFORM_RULE, // 平台规则协议
             self::COUPON_AGREE, // 优惠券协议
             self::SYS_SVIP, // SVIP系统协议
+            self::MERCHANT_MEMBER_AUTHORIZE_AGREE, // 店铺会员注册及授权协议
             self::PROMOTER_EXPLAIN, // 推广说明协议
             self::CIRCLE_ENTRY_AGREE, // 商圈入驻协议
             self::BUSINESS_ENTRY_AGREE, // 商户入驻协议
             self::EQUITY_INVEST_AGREE, // 消费送股/入股协议
+            self::DELIVERTMAN_ENTRY_AGREE, //配送员入驻协议
         ];
     }
 
@@ -258,6 +272,11 @@ HTML;
         file_put_contents(public_path() . 'protocol.html', $html);
     }
 
+    /**
+     * 设置用户注册协议页面内容（生成 register.html 静态页面）
+     * @param string $content 协议HTML内容
+     * @return void
+     */
     public function setUserRegister($content)
     {
         $html = <<<HTML

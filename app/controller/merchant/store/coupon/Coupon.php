@@ -208,10 +208,9 @@ class Coupon extends BaseController
     public function select()
     {
         // 获取查询参数
-        $where = $this->request->params(['coupon_name']);
+        $where = $this->request->params(['coupon_name',['send_type',3]]);
         // 设置查询条件
         $where['status'] = 1;
-        $where['send_type'] = 3;
         // 获取分页参数
         [$page, $limit] = $this->getPage();
         return app('json')->success($this->repository->getList($this->request->merId(), $where, $page, $limit));

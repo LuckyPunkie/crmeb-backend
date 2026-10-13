@@ -186,16 +186,17 @@ class Menu extends BaseController
     {
         $pre = '/' . config('admin.' . ($this->merchant ? 'merchant' : 'admin') . '_prefix');
         $menus = [];
+
         if($this->request->adminInfo()->level) {
             if($this->request->isAgent()) {
                 $circleId = $this->request->param('circle_id');
                 if (!$circleId) {
-                    return app('json')->fail('参数错误，组织ID不存在');
+                    $circleId = $this->request->adminInfo()->region_ids[0] ?? 0;
                 }
                 $adminRule = $this->request->adminRule();
-                $menus = $this->repository->ruleByMenuList($adminRule[$circleId]);
+                $menus = $this->repository->ruleByMenuList($adminRule[$circleId], 0, $this->request->isAgent());
             } else {
-                $menus = $this->repository->ruleByMenuList($this->request->adminRule(), $this->merchant); // 后台子管理员权限
+                $menus = $this->repository->ruleByMenuList($this->request->adminRule(), $this->merchant, 0); // 后台子管理员权限
             }
         } else {
             // 超级管理员权限
@@ -221,7 +222,7 @@ class Menu extends BaseController
         $pre = '/' . config('admin.merchant_prefix');
         $merchant = $this->request->merchant();
         if ($this->request->adminInfo()->level) {
-            $menus = $this->repository->ruleByMenuList($this->request->adminRule(), $this->merchant);
+            $menus = $this->repository->ruleByMenuList($this->request->adminRule(), $this->merchant, 0);
         } else {
             $menus = $merchant->type_id ? $this->repository->typesByValidMenuList($merchant->type_id) : $this->repository->getValidMenuList($this->merchant);
         }
@@ -261,7 +262,8 @@ class Menu extends BaseController
     {
         $is_mer = $this->request->param('is_mer',0);
         $keyword = $this->request->param('keyword');
-        $menusList = $this->repository->getMenusList($is_mer,$keyword);
+        $isAgent = $is_mer ? 0 : $this->request->isAgent();
+        $menusList = $this->repository->getMenusList($is_mer, $keyword, $isAgent);
         return app('json')->success($menusList);
     }
 

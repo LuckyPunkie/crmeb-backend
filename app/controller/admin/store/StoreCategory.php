@@ -213,28 +213,49 @@ class StoreCategory extends BaseController
     {
         $type = $this->request->param('type', null);
         $lv = $this->request->param('lv', null);
+        $mer_id = $this->request->merId();
+        $platform_category = [];
+        if ($mer_id) {
+            $platform_category = $this->request->merchant()->platform_category ?: [];
+        }
         if (!is_null($lv)) $lv = $lv + 1;
         $data = $this->repository->getList($type, $lv);
         if ($lv) {
             $ret = $data;
         } else {
-            $ret = [];
-            foreach ($data as $key => $value) {
-                if (isset($value['children'])) {
-                    $level = [];
-                    foreach ($value['children'] as $child) {
-                        if (isset($child['children'])) {
-                            $level[] = $child;
-                        }
-                    }
-                    if (isset($level) && !empty($level)) {
-                        $value['children'] = $level;
-                        $ret[] = $value;
-                    }
-                }
-            }
+            $ret = $this->filterUsableCategoryTree($data, $platform_category);
         }
         return app('json')->success($ret);
+    }
+
+    private function filterUsableCategoryTree(array $data, array $platformCategory = []): array
+    {
+        $allowedCategory = $platformCategory ? array_flip(array_map('intval', $platformCategory)) : [];
+        $ret = [];
+        foreach ($data as $value) {
+            if (empty($value['children'])) {
+                continue;
+            }
+            $level = [];
+            foreach ($value['children'] as $child) {
+                if (empty($child['children'])) {
+                    continue;
+                }
+                if ($allowedCategory) {
+                    $child['children'] = array_values(array_filter($child['children'], function ($item) use ($allowedCategory) {
+                        return isset($allowedCategory[(int)$item['store_category_id']]);
+                    }));
+                }
+                if (!empty($child['children'])) {
+                    $level[] = $child;
+                }
+            }
+            if ($level) {
+                $value['children'] = $level;
+                $ret[] = $value;
+            }
+        }
+        return $ret;
     }
 
     /**

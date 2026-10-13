@@ -84,7 +84,7 @@ class UploadService
             $config['secretKey'] = systemConfig($prefix[$type].'secretKey');
             $make = app()->make(StorageRepository::class);
             $res = $make->getConfig($type,$config['accessKey']);
-            $config['uploadUrl'] = self::formatUrlScheme($res['domain']);
+            $config['uploadUrl'] = self::normalizeDomain($res['domain']);
             $config['storageName'] = $res['name'];
             //京东云特殊处理
             if (self::STORAGE_JINGDONG !== $type){
@@ -93,7 +93,7 @@ class UploadService
                 $config['storageRegion'] = systemConfig('jd_storageRegion') ?: $res['region'];
             }
             if(isset($res['cdn']) && $res['cdn']){
-                $config['cdn'] = trim(self::formatUrlScheme($res['cdn']),'/').'/';
+                $config['cdn'] = self::normalizeDomain($res['cdn']);
             }
 
         }
@@ -116,7 +116,53 @@ class UploadService
         $url = trim($url);
         if ($url === '' || preg_match('/^https?:\/\//i', $url)) return $url;
         if (strpos($url, '//') === 0) return 'https:' . $url;
+        if (preg_match('/^[a-z][a-z0-9+.-]*:\/\//i', $url)) return $url;
         return 'https://' . $url;
+    }
+
+    /**
+     * 统一存储域名格式，域名末尾不保留斜杠。
+     */
+    public static function normalizeDomain(string $url): string
+    {
+        return rtrim(self::formatUrlScheme($url), '/');
+    }
+
+    /**
+     * 判断存储域名是否为有效的 HTTP(S) URL。
+     */
+    public static function isValidDomain(string $url): bool
+    {
+        $rawUrl = trim($url);
+        if (preg_match('/^[a-z][a-z0-9+.-]*:\/\//i', $rawUrl)
+            && !preg_match('/^https?:\/\//i', $rawUrl)) {
+            return false;
+        }
+        $url = self::normalizeDomain($url);
+        if ($url === '' || preg_match('/\s/', $url)) return false;
+
+        $parts = parse_url($url);
+        return is_array($parts)
+            && isset($parts['scheme'], $parts['host'])
+            && in_array(strtolower($parts['scheme']), ['http', 'https'], true)
+            && !isset($parts['user'], $parts['pass'], $parts['query'], $parts['fragment']);
+    }
+
+    /**
+     * 获取 URL 的源（协议、主机和端口），用于匹配空间域名与 CDN 域名。
+     */
+    public static function getUrlOrigin(string $url): string
+    {
+        $url = self::normalizeDomain($url);
+        $parts = parse_url($url);
+        if (!is_array($parts) || !isset($parts['scheme'], $parts['host'])) return '';
+
+        $scheme = strtolower($parts['scheme']);
+        if (!in_array($scheme, ['http', 'https'], true)) return '';
+
+        $origin = $scheme . '://' . strtolower($parts['host']);
+        if (isset($parts['port'])) $origin .= ':' . $parts['port'];
+        return $origin;
     }
 
 

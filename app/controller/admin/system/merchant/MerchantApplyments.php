@@ -49,6 +49,16 @@ class MerchantApplyments extends BaseController
     }
 
     /**
+     * 申请记录状态统计
+     * @return \think\response\Json
+     */
+    public function title()
+    {
+        $where = $this->request->params(['date', 'status', 'mer_id']);
+        return app('json')->success($this->repository->getStatusStatistics($where));
+    }
+
+    /**
      * 详情
      * @param $id
      * @return \think\response\Json

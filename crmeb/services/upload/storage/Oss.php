@@ -147,7 +147,7 @@ class Oss extends BaseUpload
 
             $this->fileInfo->uploadInfo = $uploadInfo;
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
-            $this->fileInfo->filePath = trim($this->cdn ?: $this->uploadUrl,'/') .'/'. ltrim($key,'/');
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
 
             return $this->afterUpload($this->isImageFileHandle($fileHandle), $this->fileInfo->filePath, $this->fileInfo->fileName);
@@ -179,7 +179,7 @@ class Oss extends BaseUpload
             }
             $this->fileInfo->uploadInfo = $uploadInfo;
             $this->fileInfo->realName = $key;
-            $this->fileInfo->filePath = ($this->cdn ?: $this->uploadUrl) . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
             return $this->afterUpload($this->isImageByPath($key), $this->fileInfo->filePath, $this->fileInfo->fileName);
         } catch (UploadException $e) {

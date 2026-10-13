@@ -18,103 +18,101 @@ use app\common\middleware\MerchantCheckBaseInfoMiddleware;
 Route::group(function () {
 
     //商户员工对应的用户列表
-    Route::get('manager/user/lst', 'merchant.user.UserMerchant/managerUserLst');
+    Route::get('manager/user/lst', [app\controller\merchant\user\UserMerchant::class,'managerUserLst']);
 
     //搜索记录
-    Route::get('user/search_log', 'admin.user.User/SearchLog')->name('merchantUserSearchLog')->option([
+    Route::get('user/search_log', [app\controller\admin\user\User::class, 'searchLog'])
+        ->name('merchantUserSearchLog')->option([
         '_alias' => '搜索记录',
         '_path' => '/user/searchRecord',
         '_auth' => true,
     ]);
-    Route::get('user/search_log/export', 'admin.user.User/exportSearchLog')->name('merchantUserExportSearchLog')
+
+    Route::get('user/search_log/export', [app\controller\admin\user\User::class, 'exportSearchLog'])->name('merchantUserExportSearchLog')
         ->option([
         '_alias' => '用户搜索记录导出',
         '_path' => '/user/searchRecord',
     ]);
     //清除搜索记录
-    Route::get('user/clear_search_log', 'admin.user.User/clearSearchLog')->name('merchantUserClearSearchLog')->option([
+    Route::get('user/clear_search_log', [app\controller\admin\user\User::class, 'clearSearchLog'])->name('merchantUserClearSearchLog')->option([
         '_alias' => '清除用户搜索记录',
     ]);
 
     //商户用户列表
     Route::group('user', function () {
-        Route::get('lst', '/getList')->name('merchantUserLst')->option([
+        Route::get('lst', [app\controller\merchant\user\UserMerchant::class, 'getList'])->name('merchantUserLst')->option([
             '_alias' => '列表',
         ]);
         //修改用户标签
-        Route::get('change_label/form/:id', '/changeLabelForm')->name('merchantUserChangeLabelForm')->option([
+        Route::get('change_label/form/:id', [app\controller\merchant\user\UserMerchant::class, 'changeLabelForm'])->name('merchantUserChangeLabelForm')->option([
             '_alias' => '修改标签表单',
             '_auth' => false,
             '_form' => 'merchantUserChangeLabel',
         ]);
-        Route::post('change_label/:id', '/changeLabel')->name('merchantUserChangeLabel')->option([
+        Route::post('change_label/:id', [app\controller\merchant\user\UserMerchant::class, 'changeLabel'])->name('merchantUserChangeLabel')->option([
             '_alias' => '修改标签',
         ]);
-        Route::get('order/:uid', '/order')->name('merchantUserOrder')->option([
+        Route::get('order/:uid', [app\controller\merchant\user\UserMerchant::class, 'order'])->name('merchantUserOrder')->option([
             '_alias' => '订单列表',
         ]);
-        Route::get('coupon/:uid', '/coupon')->name('merchantUserCoupon')->option([
+        Route::get('coupon/:uid', [app\controller\merchant\user\UserMerchant::class, 'coupon'])->name('merchantUserCoupon')->option([
             '_alias' => '优惠券',
         ]);
-    })->prefix('merchant.user.UserMerchant')->option([
+    })->option([
         '_path' => '/user/list',
         '_auth' => true,
     ]);
 
     //用户自动标签
     Route::group('auto_label', function () {
-        Route::get('lst', '/getList')->name('merchantLabelRuleLst')->option([
+        Route::get('lst', [app\controller\merchant\user\LabelRule::class, 'getList'])->name('merchantLabelRuleLst')->option([
             '_alias' => '列表',
         ]);
-        Route::post('create', '/create')->name('merchantLabelRuleCreate')->option([
+        Route::post('create', [app\controller\merchant\user\LabelRule::class, 'create'])->name('merchantLabelRuleCreate')->option([
             '_alias' => '添加',
         ]);
-        Route::post('update/:id', '/update')->name('merchantLabelRuleUpdate')->option([
+        Route::post('update/:id', [app\controller\merchant\user\LabelRule::class, 'update'])->name('merchantLabelRuleUpdate')->option([
             '_alias' => '编辑',
         ]);
-        Route::delete('delete/:id', '/delete')->name('merchantLabelRuleDelete')->option([
+        Route::delete('delete/:id', [app\controller\merchant\user\LabelRule::class, 'delete'])->name('merchantLabelRuleDelete')->option([
             '_alias' => '删除',
         ]);
-        Route::post('sync/:id', '/sync')->name('merchantLabelRuleSync')->option([
+        Route::post('sync/:id', [app\controller\merchant\user\LabelRule::class, 'sync'])->name('merchantLabelRuleSync')->option([
             '_alias' => '自动同步',
         ]);
-    })->prefix('merchant.user.LabelRule')->option([
+    })->option([
         '_path' => '/user/maticlabel',
         '_auth' => true,
     ]);
 
     //手动标签
     Route::group('user/label', function () {
-        Route::get('lst', '/lst')->name('merchantUserLabelLst')->option([
+        Route::get('lst', [app\controller\admin\user\UserLabel::class, 'lst'])->name('merchantUserLabelLst')->option([
             '_alias' => '列表',
         ]);
-        Route::post('user/label', '/create')->name('merchantUserLabelCreate')->option([
+        Route::post('user/label', [app\controller\admin\user\UserLabel::class, 'create'])->name('merchantUserLabelCreate')->option([
             '_alias' => '添加',
         ]);
-        Route::get('form', '/createForm')->name('merchantUserLabelCreateForm')->option([
+        Route::get('form', [app\controller\admin\user\UserLabel::class, 'createForm'])->name('merchantUserLabelCreateForm')->option([
             '_alias' => '添加表单',
             '_auth' => false,
             '_form' => 'merchantUserLabelCreate',
         ]);
-        Route::delete(':id', '/delete')->name('merchantUserLabelDelete')->option([
+        Route::delete(':id', [app\controller\admin\user\UserLabel::class, 'delete'])->name('merchantUserLabelDelete')->option([
             '_alias' => '删除',
         ]);
-        Route::post(':id', '/update')->name('merchantUserLabelUpdate')->option([
+        Route::post(':id', [app\controller\admin\user\UserLabel::class, 'update'])->name('merchantUserLabelUpdate')->option([
             '_alias' => '编辑',
         ]);
-        Route::get('form/:id', '/updateForm')->name('merchantUserLabelUpdateForm')->option([
+        Route::get('form/:id', [app\controller\admin\user\UserLabel::class, 'updateForm'])->name('merchantUserLabelUpdateForm')->option([
             '_alias' => '编辑表单',
             '_auth' => false,
             '_form' => 'merchantUserLabelUpdate',
         ]);
-    })->prefix('admin.user.UserLabel')->option([
+    })->option([
         '_path' => '/user/label',
         '_auth' => true,
     ]);
-
-
-
-
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(MerchantTokenMiddleware::class, true)
     ->middleware(MerchantAuthMiddleware::class)

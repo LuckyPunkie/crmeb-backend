@@ -36,6 +36,7 @@ class PaymentConfig extends BaseConfig implements ConfigHandlerInterface
     public $refundUrl;
     public $isV3PAy;
     public $routineMchId;
+    public string $v3Key = '';
     // /**
     //  * @var HttpCommonConfig
     //  */
@@ -84,8 +85,9 @@ class PaymentConfig extends BaseConfig implements ConfigHandlerInterface
         $this->appId = $this->httpConfig->getConfig(DefaultConfig::OFFICIAL_APPID);
         $this->mchId = $this->httpConfig->getConfig(DefaultConfig::WEIXIN_PAY_MCHID);
         $this->key = $this->httpConfig->getConfig('pay.weixin.key');
-        $this->certPath = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('pay.weixin.client_cert');
-        $this->keyPath = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('pay.weixin.client_key');
+        $this->v3Key = $this->httpConfig->getConfig('pay.weixin.v3_key', '');
+        $this->certPath = $this->publicFilePath($this->httpConfig->getConfig('pay.weixin.client_cert'));
+        $this->keyPath = $this->publicFilePath($this->httpConfig->getConfig('pay.weixin.client_key'));
         $this->notifyUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
             .$this->httpConfig->getConfig('pay.weixin.notifyUrl');
         $this->refundUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
@@ -99,14 +101,31 @@ class PaymentConfig extends BaseConfig implements ConfigHandlerInterface
         $this->appId = $this->httpConfig->getConfig(DefaultConfig::MINI_APPID);
         $this->mchId = $this->httpConfig->getConfig(DefaultConfig::MINI_PAY_MCHID);
         $this->key = $this->httpConfig->getConfig('pay.mini.key');
-        $this->certPath = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('pay.mini.client_cert');
-        $this->keyPath = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('pay.mini.client_key');
+        $this->v3Key = $this->httpConfig->getConfig('pay.mini.v3_key', '');
+        $this->certPath = $this->publicFilePath($this->httpConfig->getConfig('pay.mini.client_cert'));
+        $this->keyPath = $this->publicFilePath($this->httpConfig->getConfig('pay.mini.client_key'));
         $this->notifyUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
             .$this->httpConfig->getConfig('pay.mini.notifyUrl');
         $this->refundUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
             .$this->httpConfig->getConfig('pay.mini.refundUrl');
         $this->routineMchId = $this->httpConfig->getConfig('pay.mini.routine_mchid','');
         $this->isV3PAy = $this->httpConfig->getConfig('pay.mini.isV3PAy');
+    }
+
+    public function getApp()
+    {
+        //$this->init = true;
+        $this->appId = $this->httpConfig->getConfig(DefaultConfig::APP_APPID);
+        $this->mchId = $this->httpConfig->getConfig(DefaultConfig::WEIXIN_PAY_MCHID);
+        $this->key = $this->httpConfig->getConfig('pay.weixin.key');
+        $this->v3Key = $this->httpConfig->getConfig('pay.weixin.v3_key', '');
+        $this->certPath = $this->publicFilePath($this->httpConfig->getConfig('pay.weixin.client_cert'));
+        $this->keyPath = $this->publicFilePath($this->httpConfig->getConfig('pay.weixin.client_key'));
+        $this->notifyUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
+            .$this->httpConfig->getConfig('pay.weixin.notifyUrl');
+        $this->refundUrl =  trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL))
+            .$this->httpConfig->getConfig('pay.weixin.refundUrl');
+        $this->isV3PAy = $this->httpConfig->getConfig('pay.weixin.isV3PAy');
     }
 
     // /**
@@ -129,6 +148,7 @@ class PaymentConfig extends BaseConfig implements ConfigHandlerInterface
         return [
             'app_id' => $this->appId,
             'mch_id' => $this->mchId,
+            'secret_key' => $this->v3Key ?: $this->key,
             'v2_secret_key' =>  $this->key,
             'private_key' => $this->keyPath,
             'certificate' => $this->certPath,

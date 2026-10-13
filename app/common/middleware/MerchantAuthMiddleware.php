@@ -37,11 +37,11 @@ class MerchantAuthMiddleware extends BaseMiddleware
 
         if ($admin->level) {
             $rules = $role->idsByRules($request->merId(), $admin->roles);
-            $menus = count($rules) ? ($merchant->type_id ? $menu->typesByRoutes($merchant->type_id, $rules) : $menu->idsByRoutes($rules)) : [];
+            $menus = count($rules) ? ($merchant->type_id ? $menu->typesByRoutes($merchant->type_id, $rules, 1, 0) : $menu->idsByRoutes($rules, 1, 0)) : [];
             $msg = '没有权限访问';
         } else {
             $rules = [];
-            $menus = $merchant->type_id ? $menu->merchantTypeByRoutes($merchant->type_id) : [];
+            $menus = $merchant->type_id ? $menu->merchantTypeByRoutes($merchant->type_id, 1, 0) : [];
             $msg = '请前往平台后台-商户 - 店铺管理 - 店铺类型-编辑店铺权限';
         }
 

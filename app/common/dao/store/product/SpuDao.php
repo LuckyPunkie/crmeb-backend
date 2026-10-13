@@ -22,12 +22,21 @@ use crmeb\services\VicWordService;
 
 class SpuDao extends  BaseDao
 {
+    /**
+     * 获取当前 DAO 关联的 SPU 模型类名，供 BaseDao 统一调用
+     * @return string SPU 模型类名
+     */
     public function getModel(): string
     {
         return Spu::class;
     }
 
 
+    /**
+     * 构建 SPU 列表查询：先收集符合条件的商品ID集合，再关联商品表按关键词、价格区间、活动类型、标签、状态等条件过滤并排序
+     * @param $where SPU 查询条件，支持 keyword、spu_id、is_show、price_on/price_off、product_type、activity_id、labels、scope、order 等
+     * @return mixed SPU 查询对象
+     */
     public function search($where)
     {
         // 1. 提前收集所有符合条件的 product_id
@@ -125,6 +134,11 @@ class SpuDao extends  BaseDao
     }
 
 
+    /**
+     * 收集满足筛选条件的商品ID集合：关联商品、预约表及（非预约类型时的）商户表，按商户、商品、配送方式等条件过滤
+     * @param $where 商品筛选条件
+     * @return array|false 商品ID数组，无匹配数据时返回 false
+     */
     private function collectProductIds($where)
     {
         $query = Product::alias('P')->where('P.is_del', 0)
@@ -232,7 +246,16 @@ class SpuDao extends  BaseDao
                 else if ($where['hot_type'] == 'good') $query->where('P.is_benefit', 1);
             })
             ->when(isset($where['svip']) && $where['svip'] !== '',function($query)use($where){
-                $query->where('P.svip_price_type','>',0)->where('P.mer_svip_status',1);
+                $query->where('P.member_price_setting', 1)
+                    ->where('P.svip_price_type','>',0)
+                    ->where('P.mer_svip_status',1);
+            })
+            ->when(isset($where['member_price_setting']) && $where['member_price_setting'] !== '', function ($query) use ($where) {
+                $query->where('P.member_price_setting', $where['member_price_setting']);
+            })
+            ->when(!empty($where['merchant_member_price']), function ($query) {
+                $query->where('P.member_price_setting', 2)
+                    ->where('P.product_type', 0);
             })
             ->when(isset($where['product_type']) && $where['product_type'] !== '',function($query)use($where){
                 $query->where('P.product_type',$where['product_type']);
@@ -292,6 +315,11 @@ class SpuDao extends  BaseDao
         return $query->column('P.product_id') ?: false;
     }
 
+    /**
+     * 根据排序参数生成 SPU 列表的排序 SQL 片段，未指定排序方式时默认按创建时间倒序
+     * @param $where 查询条件，其中 order 为排序方式（none/is_new/rate/sales/price_asc 等）
+     * @return string 排序 SQL 片段
+     */
     private function buildOrderSql($where)
     {
         $orderMappings = [
@@ -300,6 +328,7 @@ class SpuDao extends  BaseDao
             'rate'          => 'P.rate DESC,',
             'sort'          => 'P.sort DESC,',
             'sales'         => 'P.sales DESC,',
+            'star'          => 'S.star DESC,S.rank DESC,',
             'range_asc'     => 'P.sort DESC,',
             'price_asc'     => 'S.price ASC,',
             'price_desc'    => 'S.price DESC,',
@@ -311,6 +340,7 @@ class SpuDao extends  BaseDao
             'distance_asc'  => 'S.star ASC,S.rank ASC,',
             'distance_desc' => 'S.star DESC,S.rank DESC,',
         ];
+
         if(!isset($where['order'])){
             $where['order'] = 'none';
         }
@@ -497,7 +527,16 @@ class SpuDao extends  BaseDao
                 else if ($where['hot_type'] == 'good') $query->where('P.is_benefit', 1);
             })
             ->when(isset($where['svip']) && $where['svip'] !== '',function($query)use($where){
-                $query->where('P.svip_price_type','>',0)->where('P.mer_svip_status',1);
+                $query->where('P.member_price_setting', 1)
+                    ->where('P.svip_price_type','>',0)
+                    ->where('P.mer_svip_status',1);
+            })
+            ->when(isset($where['member_price_setting']) && $where['member_price_setting'] !== '', function ($query) use ($where) {
+                $query->where('P.member_price_setting', $where['member_price_setting']);
+            })
+            ->when(!empty($where['merchant_member_price']), function ($query) {
+                $query->where('P.member_price_setting', 2)
+                    ->where('P.product_type', 0);
             })
             ->when(isset($where['delivery_type']) && $where['delivery_type'] !== '',function($query)use($where){
                 $productWay = [];

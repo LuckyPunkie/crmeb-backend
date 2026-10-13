@@ -56,7 +56,10 @@
         "fastknife/ajcaptcha": "^1.1",
         "aws/aws-sdk-php": "^3.301",
         "ucloud/ucloud-sdk-php": "^0.3.5",
-        "topthink/think-filesystem": "^2.0"
+        "topthink/think-filesystem": "^2.0",
+        "phpoffice/phpword": "^1.4",
+        "smalot/pdfparser": "^2.12",
+        "alibabacloud/dysmsapi-20170525": "^4.6"
     },
     "require-dev": {
         "symfony/var-dumper": "^5.0|^6.0"

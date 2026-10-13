@@ -17,17 +17,20 @@ use think\facade\Queue;
 use crmeb\basic\BaseController;
 use crmeb\jobs\BatchDeliveryJob;
 use crmeb\services\ExcelService;
+use app\common\model\store\product\StoreUserCardVerifyLog;
 use app\common\repositories\store\order\{
     OrderStatus,
     StoreOrderRepository,
     StoreOrderRepository as repository,
     MerchantReconciliationRepository
 };
+use app\common\repositories\store\product\StoreUserCardRepository;
 use app\common\repositories\delivery\DeliveryOrderRepository;
 use app\services\serve\ServeServices;
 use think\exception\ValidateException;
 use app\validate\merchant\OrderValidate;
 use app\common\repositories\delivery\DeliveryServiceRepository;
+use app\common\repositories\store\product\StoreUserCardVerifyLogRepository;
 
 class Order extends BaseController
 {
@@ -106,7 +109,7 @@ class Order extends BaseController
     public function takeLst()
     {
         [$page, $limit] = $this->getPage();
-        $where = $this->request->params(['date', 'order_sn', 'username', 'keywords']);
+        $where = $this->request->params(['date', 'order_sn', 'username', 'keywords','merchant_take_id']);
         $where['take_order'] = 1;
         $where['status'] = -1;
         $where['verify_date'] = $where['date'];
@@ -124,7 +127,7 @@ class Order extends BaseController
      */
     public function chart()
     {
-        $where = $this->request->params(['date', 'order_sn', 'username', 'order_type', 'keywords', 'order_id', 'activity_type', 'group_order_sn', 'store_name', 'filter_delivery', 'filter_product', 'delivery_id', 'group_order_id', 'uid', 'nickname', 'real_name', 'phone','is_behalf', 'is_virtual']);
+        $where = $this->request->params(['date', 'order_sn', 'username', 'order_type', 'keywords', 'order_id', 'activity_type', 'group_order_sn', 'store_name', 'filter_delivery', 'filter_product', 'delivery_id', 'group_order_id', 'uid', 'nickname', 'real_name', 'phone','is_behalf', 'is_virtual','merchant_take_id']);
         $where['mer_id'] = $this->request->merId();
         $pay_type = $this->request->param('pay_type', '');
         if ($pay_type != '') $where['pay_type'] = $this->repository::PAY_TYPE_FILTEER[$pay_type];
@@ -140,7 +143,7 @@ class Order extends BaseController
      */
     public function takeChart()
     {
-        $where = $this->request->params(['date', 'order_sn', 'username', 'keywords']);
+        $where = $this->request->params(['date', 'order_sn', 'username', 'keywords','merchant_take_id']);
         $where['take_order'] = 1;
         $where['verify_date'] = $where['date'];
         unset($where['date']);
@@ -160,7 +163,7 @@ class Order extends BaseController
      */
     public function orderType()
     {
-        $where = $this->request->params(['date', 'order_sn', 'username', 'order_type', 'keywords', 'order_id', 'activity_type', 'group_order_sn', 'store_name', 'filter_delivery', 'filter_product', 'delivery_id', 'group_order_id', 'uid', 'nickname', 'real_name', 'phone','is_behalf', 'is_virtual']);
+        $where = $this->request->params(['date', 'order_sn', 'username', 'order_type', 'keywords', 'order_id', 'activity_type', 'group_order_sn', 'store_name', 'filter_delivery', 'filter_product', 'delivery_id', 'group_order_id', 'uid', 'nickname', 'real_name', 'phone','is_behalf', 'is_virtual','merchant_take_id']);
         $where['mer_id'] = $this->request->merId();
         $pay_type = $this->request->param('pay_type', '');
         if ($pay_type != '') $where['pay_type'] = $this->repository::PAY_TYPE_FILTEER[$pay_type];
@@ -419,8 +422,30 @@ class Order extends BaseController
      */
     public function verify($id)
     {
-        $data = $this->request->params(['data', 'verify_code']);
+        $data = $this->request->params(['data', 'verify_code', ['verify_count', 1], ['remark', ''], ['service_type', 0]]);
         $merId = $this->request->merId();
+        $cardRepository = app()->make(StoreUserCardRepository::class);
+        $card = $cardRepository->detailByVerifyCode((string)$data['verify_code'], $merId);
+        if ($card) {
+            if ((int)$card['order_id'] !== (int)$id) {
+                return app('json')->fail('次卡/年卡不属于当前订单');
+            }
+            $serviceType = (int)($data['service_type'] ?: (is_array($data['data'] ?? null) ? ($data['data']['service_type'] ?? 0) : 0));
+
+            $card = $cardRepository->verifyByCode(
+                (string)$data['verify_code'],
+                $merId,
+                (int)$data['verify_count'],
+                0,
+                $this->request->merAdminId(),
+                StoreUserCardVerifyLog::VERIFY_TYPE_MERCHANT,
+                (string)$data['remark'],
+                $serviceType
+            );
+
+            return app('json')->success('次卡/年卡核销成功', $card);
+        }
+
         // 根据订单ID、商家ID、验证码和订单类型查询订单，并连带查询订单产品信息
         $order = $this->repository->getWhere(['order_id' => $id, 'mer_id' => $merId, 'verify_code' => $data['verify_code'], 'order_type' => 1], '*', ['orderProduct']);
         // 如果订单不存在，则抛出验证异常
@@ -827,5 +852,68 @@ class Order extends BaseController
             return app('json')->fail('同步失败');
         }
         return app('json')->success('同步成功');
+    }
+
+    /**
+     * 次卡/年卡独立核销入口。
+     *
+     * 次卡/年卡核销只更新用户卡和核销日志，不走普通订单 verifyOrder，也不会调用 splitOrder。
+     * 当固定次数卡全部核销完后，StoreUserCardRepository 会负责把原订单推进到已完成。
+     *
+     * @param int $merId 商户 ID。
+     * @param int|string $id 订单 ID。
+     */
+    public function verifyCard($id)
+    {
+        $data = $this->request->params(['data', 'verify_code', ['num', 1], ['remark', ''], ['service_type', 0]]);
+        // 根据订单ID、商家ID、验证码和订单类型查询订单，并连带查询订单产品信息
+        $repository = app()->make(StoreOrderRepository::class);
+        $merId = $this->request->merId();
+        $order = $repository->getWhere(['order_id' => $id, 'mer_id' => $merId, 'verify_code' =>
+            $data['verify_code']], '*', ['storeUserCard']);
+
+        if ($order['status'] && $order['is_virtual'] !== 5)
+            return app('json')->fail('[1]订单已全部核销，请勿重复操作');
+
+        $card = $order->storeUserCard;
+        if ($card) {
+            if ((int)$card['order_id'] !== (int)$id) {
+                return app('json')->fail('次卡/年卡不属于当前订单');
+            }
+            app()->make(StoreUserCardRepository::class)->verifyByCode(
+                (string)$card->verify_code,
+                (int)$merId,
+                (int)$data['data']['num'],
+                0,
+                $this->request->adminId(),
+                StoreUserCardVerifyLog::VERIFY_TYPE_MERCHANT,
+                (string)$data['remark']
+            );
+            return app('json')->success('核销成功');
+        }
+        return app('json')->fail('核销失败');
+    }
+
+    /**
+     * 次卡/年卡订单核销记录列表。
+     *
+     * 这里按订单和商户过滤 store_user_card_verify_log，用于查看某张次卡/年卡的核销流水。
+     * 权限仍按当前客服/服务人员归属商户校验，避免跨商户查看核销记录。
+     *
+     * @param int $merId 商户 ID。
+     * @param int|string $id 订单 ID。
+     */
+    public function verifyCardLog($id)
+    {
+        [$page, $limit] = $this->getPage();
+        $storeUserCardVerifyLog = app()->make(StoreUserCardVerifyLogRepository::class);
+
+        $where = [
+            'order_id' => $id,
+            'mer_id' => $this->request->merId(),
+            'date' =>  $this->request->param('date','')
+        ];
+        $data = $storeUserCardVerifyLog->getList($where, $page, $limit);
+        return  app('json')->success($data);
     }
 }

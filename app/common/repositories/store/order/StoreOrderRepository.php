@@ -12,7 +12,6 @@
 namespace app\common\repositories\store\order;
 
 use think\facade\Cache;
-use crmeb\services\pay\Pay;
 use app\controller\admin\order\Order;
 use app\common\dao\store\order\StoreOrderDao;
 use app\common\model\store\order\StoreGroupOrder;
@@ -20,6 +19,8 @@ use app\common\model\store\order\StoreOrder;
 use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\delivery\DeliveryOrderRepository;
+use app\common\repositories\delivery\DeliveryConfigRepository;
+use app\common\repositories\delivery\DeliveryServiceBillRepository;
 use app\common\repositories\delivery\DeliveryServiceRepository;
 use app\common\repositories\store\coupon\StoreCouponRepository;
 use app\common\repositories\store\coupon\StoreCouponUserRepository;
@@ -32,6 +33,7 @@ use app\common\repositories\store\product\ProductGroupBuyingRepository;
 use app\common\repositories\store\product\ProductPresellSkuRepository;
 use app\common\repositories\store\product\ProductRepository;
 use app\common\repositories\store\product\StoreDiscountRepository;
+use app\common\repositories\store\product\StoreUserCardRepository;
 use app\common\repositories\store\shipping\ExpressRepository;
 use app\common\repositories\store\StorePrinterRepository;
 use app\common\repositories\system\attachment\AttachmentRepository;
@@ -41,9 +43,14 @@ use app\common\repositories\user\UserBillRepository;
 use app\common\repositories\user\UserBrokerageRepository;
 use app\common\repositories\user\UserMerchantRepository;
 use app\common\repositories\user\UserRepository;
+use app\common\repositories\merchant\MerchantMemberRepository;
+use app\common\repositories\merchant\ShoppingCreditsRepository;
+use app\common\repositories\merchant\ShoppingCreditsSettlementRepository;
 use crmeb\jobs\PayGiveCouponJob;
 use crmeb\jobs\SendSmsJob;
 use crmeb\jobs\UserBrokerageLevelJob;
+use crmeb\services\pay\factory\StoreOrderPayFactory;
+use crmeb\services\pay\PayServices;
 use crmeb\services\CrmebServeServices;
 use crmeb\services\ExpressService;
 use crmeb\services\printer\Printer;
@@ -62,7 +69,6 @@ use app\common\repositories\user\MemberinterestsRepository;
 use app\common\repositories\store\staff\StaffsRepository;
 use app\common\repositories\store\product\ProductAttrValueReservationRepository;
 use app\common\repositories\circle\CircleFinancialRecordRepository;
-use app\common\repositories\wechat\WechatUserRepository;
 use EasyWeChat\Support\Arr;
 
 /**
@@ -74,8 +80,10 @@ class StoreOrderRepository extends BaseRepository
      * 支付类型 0余额 1 微信 2 小程序 3 微信 4 支付宝 5 支付宝 6 微信 7 线下支付 8 微信扫码枪支付 9 支付宝扫码枪支付
      * PAY_TYPE 里的数据位置不可随意变动，否则会影响到支付方式对应关系
      */
-    const PAY_TYPE = ['balance', 'weixin', 'routine', 'h5', 'alipay', 'alipayQr', 'weixinQr', 'offline', 'weixinBarCode', 'alipayBarCode', 'mock'];
-    const PAY_TYPE_FILTEER = [0 => 0, 1 => '1,2,3,6,8', 2 => '4,5,9', 3 => 7];
+    // 下标即订单表 pay_type 的存储值，只能追加不能调整顺序：
+    // 10 = mock（我们的模拟支付，已有历史订单），11 = shoppingCredits（官方 v4.2 购物金，官方原为 10）
+    const PAY_TYPE = ['balance', 'weixin', 'routine', 'h5', 'alipay', 'alipayQr', 'weixinQr', 'offline', 'weixinBarCode', 'alipayBarCode', 'mock', 'shoppingCredits'];
+    const PAY_TYPE_FILTEER = [0 => 0, 1 => '1,2,3,6,8', 2 => '4,5,9', 3 => 7, 4 => 11];
     const TYPE_SN_ORDER = 'wxo';
     const TYPE_SN_PRESELL = 'wxp';
     const TYPE_SN_USER_ORDER = 'wxs';
@@ -107,7 +115,8 @@ class StoreOrderRepository extends BaseRepository
      * @param null|string $combine 是否使用组合支付，如果为null，则从系统配置中获取。
      * @return array 返回包含支付配置和订单ID的信息。
      */
-    public function pay(string $type, ?User $user, StoreGroupOrder $groupOrder, $return_url = '', $isApp = false, $combine = null, $authCode = '')
+    public function pay(string $type, ?User $user, StoreGroupOrder $groupOrder, $return_url = '', $isApp = false,
+        $combine = null, $authCode = '')
     {
         // 模拟支付：后台「支付设置-基础配置」开启 pay_mock_open，且前端选择 mock
         if ($type === 'mock') {
@@ -125,66 +134,36 @@ class StoreOrderRepository extends BaseRepository
         if ($type === 'balance') {
             return $this->payBalance($user, $groupOrder);
         }
-        $openid = '';
-        if (in_array($type, ['alipayQr', 'alipay'], true)) {
-            $order = $groupOrder->getPayParams($return_url, $authCode);
-            $store = 'alipay';
-        } else {
-            // 判断是否使用组合支付，如果未指定，则从系统配置中获取默认值
-            if (is_null($combine)) {
-                $config = systemConfig(['open_wx_combine','wechat_service_tool']);
-                $combine = $config['open_wx_combine'];
-                if (
-                    $combine &&
-                    in_array($type, ['weixin', 'weixinApp', 'routine', 'h5', 'weixinQr','weixinBarCode'])
-                ) {
-                    if ($config['wechat_service_tool']) {
-                        if (
-                            $groupOrder['activity_type'] != 20 &&
-                            count($groupOrder['orderList']->toArray()) == 1 &&
-                            $groupOrder->orderList[0]->merchant->applyment_id && $groupOrder->orderList[0]->merchant->applyment_switch
-                        ) { $combine = true; }else{ $combine = false; }
-                    }
-                } else {
-                    $combine = false;
-                }
-            }
-            $wechatUserRepository = app()->make(WechatUserRepository::class);
-            if ($type == 'routine') {
-                $openid = $wechatUserRepository->idByRoutineId($user['wechat_user_id']);
-            } else {
-                $openid = $wechatUserRepository->idByOpenId($user['wechat_user_id']);
-            }
+        if ($type === ShoppingCreditsRepository::PAY_TYPE) {
+            $result = app()->make(ShoppingCreditsSettlementRepository::class)->payStoreOrder($user, $groupOrder, $this);
+            return app('json')->status('success', '支付成功', $result);
+        }
+
+        if (!in_array($type, ['alipayQr', 'alipay'], true)) {
             // 在支付前触发一个事件，允许其他功能模块对支付行为进行干预或附加操作
             event('order.pay.before', compact('groupOrder', 'type', 'isApp'));
+        }
 
-            // $combine = 1;
-            if ($combine) {
-                if ($config['wechat_service_tool']) {
-                    $order = $groupOrder->getTransactionsPayParams($authCode);
-                    $store = 'partner';
-                } else {
-                    $order = $groupOrder->getCombinePayParams();
-                    $store = 'combine';
-                }
-            } else {
-                $order = $groupOrder->getPayParams($return_url, $authCode);
-                $store = 'weixin';
-            }
-        }
-        // 如果是APP支付，且支付方式为微信或支付宝，则在支付方式后添加App后缀
-        if (in_array($type, ['weixin', 'alipay'], true) && $isApp) {
-            $type .= 'App';
-        }
-        $service = new Pay($store);
+        $dto = StoreOrderPayFactory::make(
+            $type,
+            $user,
+            $groupOrder,
+            $return_url,
+            $isApp,
+            $combine,
+            $authCode
+        );
+
         // 生成支付配置
-        $config = $service->pay($type, $order, $openid);
-        if($authCode && $config['paid'] == 1) {
-            $orders['transaction_id'] = $config['transaction_id'];
+        $config = app()->make(PayServices::class)->pay($dto);
+        Log::info('支付参数:'.var_export($config,true));
+        $paid = $config['paid'] ?? ($config['config']['paid'] ?? 0);
+        if($authCode && $paid == 1) {
+            $orders['transaction_id'] = $config['transaction_id'] ?? ($config['config']['transaction_id'] ?? '');
             $this->paySuccess($groupOrder, 0, $orders);
         }
         // 返回支付配置和订单ID，支付配置中包含支付方式的状态信息
-        return app('json')->status($type, $config + ['order_id' => $groupOrder['group_order_id'], 'pay_price' => $groupOrder['pay_price']]);
+        return app('json')->status($dto->payType, $config + ['order_id' => $groupOrder['group_order_id'], 'pay_price' => $groupOrder['pay_price']]);
     }
 
     /**
@@ -200,7 +179,6 @@ class StoreOrderRepository extends BaseRepository
      */
     public function payBalance(User $user, StoreGroupOrder $groupOrder)
     {
-
         // 检查余额支付是否开启，如果没有开启则抛出异常
         if (!systemConfig('yue_pay_status'))
             throw new ValidateException('未开启余额支付');
@@ -295,8 +273,9 @@ class StoreOrderRepository extends BaseRepository
     public function paySuccess(StoreGroupOrder $groupOrder, $is_combine = 0, $subOrders = [], $isListen = 0)
     {
         $groupOrder->append(['user']);
+        $serviceCardOrders = [];
         //修改订单状态
-        $res = Db::transaction(function () use ($subOrders, $is_combine, $groupOrder, $isListen) {
+        $res = Db::transaction(function () use ($subOrders, $is_combine, $groupOrder, $isListen, &$serviceCardOrders) {
             $time = date('Y-m-d H:i:s');
             $groupOrder->paid = 1;
             $groupOrder->pay_time = $time;
@@ -331,6 +310,7 @@ class StoreOrderRepository extends BaseRepository
 
             // 循环开始
             foreach ($groupOrder->orderList as $_k => $order) {
+                $isPoints = false;
                 $order->paid = 1;
                 $order->pay_time = $time;
                 $svipDiscount = bcadd($order->svip_discount, $svipDiscount, 2);
@@ -365,7 +345,8 @@ class StoreOrderRepository extends BaseRepository
                     //更新助力状态
                     $productAssistSetRepository->changStatus($order->orderProduct[0]['activity_id']);
                 }
-                if (($order->order_type == 1 && $order->status != 10) || $order->is_virtual == 4)
+                if (($order->order_type == 1 && $order->status != 10) || $order->is_virtual == 4 ||
+                    $order->is_virtual == 5)
                     $order->verify_code = $this->verifyCode();
                 // 代客下单无需核销类型直接修改订单状态为待评价
                 if ($order->behalf_no_verify && $order->is_behalf && $order->status == 0 && $order->order_type == 1) {
@@ -380,6 +361,18 @@ class StoreOrderRepository extends BaseRepository
                     $order->delivery_id = $msg;
                     $order->verify_time = date('Y-m-d H:i:s', time());
                     $isPoints = true;
+                }
+                if ($cdk_type == ProductRepository::DEFINE_TYPE_SERVICE_CARD) {
+                    $serviceCardIssued = $order->delivery_id !== '次卡/年卡已发放';
+                    app()->make(StoreUserCardRepository::class)->issueByOrder($order);
+                    // 次卡/年卡支付后应停留在待使用，等真实核销后再推进订单状态。
+                    $order->status = OrderStatus::ORDER_STATUS_PENDING_SHIPMENT;
+                    $order->delivery_type = OrderStatus::DELIVER_TYPE_VERIFY;
+                    $order->delivery_name = '自动发卡';
+                    $order->delivery_id = '次卡/年卡已发放';
+                    if ($serviceCardIssued) {
+                        $serviceCardOrders[] = $order;
+                    }
                 }
                 // 判断同城配送是否自动给第三方下单
                 if($order->order_type == 2 && $order->take->type){
@@ -496,7 +489,17 @@ class StoreOrderRepository extends BaseRepository
                     }
 
                     if (!$is_combine && $order->pay_type != 7) {
-                        $merchantRepository->addLockMoney($order->mer_id, 'order', $order->order_id, $_payPrice);
+                        $shoppingCreditsPayType = array_search(
+                            ShoppingCreditsRepository::PAY_TYPE,
+                            self::PAY_TYPE,
+                            true
+                        );
+                        if ((int)$order->pay_type === $shoppingCreditsPayType) {
+                            app()->make(ShoppingCreditsSettlementRepository::class)
+                                ->settleStoreOrderMerchant($order, (string)$_order_rate);
+                        } else {
+                            $merchantRepository->addLockMoney($order->mer_id, 'order', $order->order_id, $_payPrice);
+                        }
                     }
                 }
                 if ($is_combine) {
@@ -512,6 +515,7 @@ class StoreOrderRepository extends BaseRepository
                     ];
                 }
                 $userMerchantRepository->updatePayTime($uid, $order->mer_id, $order->pay_price);
+                app()->make(MerchantMemberRepository::class)->refreshLevel($uid, $order->mer_id);
                 // 如果不是定时任务通知，则推送消息通知商家有新订单
                 if(!$isListen) {
                     SwooleTaskService::merchant('notice', [
@@ -562,6 +566,20 @@ class StoreOrderRepository extends BaseRepository
                 Queue::push(SendSmsJob::class, ['tempId' => 'RESERVATION_ORDER_NOTICE', 'id' => $order->order_id]);
             }
         });
+
+        foreach ($serviceCardOrders as $serviceCardOrder) {
+            $merchant = $serviceCardOrder->mer_id
+                ? app()->make(MerchantRepository::class)->get((int)$serviceCardOrder->mer_id)
+                : null;
+            event('mini_order_shipping', [
+                'product',
+                $serviceCardOrder,
+                OrderStatus::DELIVER_TYPE_VERIFY,
+                '',
+                '',
+                $merchant ? (string)$merchant->sub_mchid : '',
+            ]);
+        }
         //满额分销
         if ($groupOrder->user && !$groupOrder->user->is_promoter && systemConfig('promoter_type') == 3) {
             app()->make(UserRepository::class)->meetWithPromoter($groupOrder->user->uid);
@@ -830,7 +848,7 @@ class StoreOrderRepository extends BaseRepository
      * @param integer|null $uid 用户ID，可选参数。如果提供此参数，将查询指定用户ID的订单。
      * @return null|\app\common\model\StoreOrder 返回订单对象，如果未找到订单则返回null。
      */
-    public function getDetail($id, $uid = null)
+    public function getDetail($id, $uid = null, bool $withTakeOrderList = true)
     {
         // 初始化查询条件
         $where = [];
@@ -847,7 +865,6 @@ class StoreOrderRepository extends BaseRepository
                 // 收货信息，包括订单ID和收货单ID
                 return $query->field('order_id,order_receipt_id');
             },
-            'takeOrderList.orderProduct', // 提货单中的产品信息
             'deliveryOrder' => function ($query) {
                 return $query->with(['deliveryService' => function ($query) {
                     return $query->field('service_id,name,phone,avatar');
@@ -855,6 +872,9 @@ class StoreOrderRepository extends BaseRepository
             },
             'presellOrder'
         ];
+        if ($withTakeOrderList) {
+            $with[] = 'takeOrderList.orderProduct';
+        }
 
         // 根据是否提供用户ID，调整查询条件
         if ($uid) {
@@ -904,8 +924,57 @@ class StoreOrderRepository extends BaseRepository
             }
         }
         $order['auto_take_time'] = app()->make(StoreOrderStatusRepository::class)->getTakeStatus($order->order_id);
+        $this->appendUserCardsToDetail($order);
         // 返回订单详情
         return $order;
+    }
+
+    /**
+     * 获取核销订单的子订单列表
+     *
+     * @param int $id 主订单ID
+     * @param int $uid 用户ID
+     * @return array|null
+     */
+    public function getTakeOrderList(int $id, int $uid): ?array
+    {
+        $order = $this->dao->search(['uid' => $uid])
+            ->where('order_id', $id)
+            ->where('is_del', 0)
+            ->find();
+        if (!$order) {
+            return null;
+        }
+
+        return $order->takeOrderList()->with(['orderProduct'])->select()->toArray();
+    }
+
+    /**
+     * 为订单详情追加次卡/年卡权益信息。
+     *
+     * 用户卡在支付发放后独立保存，订单详情需要从用户卡快照表读取，
+     * 再分别挂到订单顶层 user_cards 和每个 orderProduct.user_cards。
+     * 顶层字段方便前端统一展示订单权益，订单商品字段方便按商品维度查看核销码和剩余次数。
+     *
+     * @param StoreOrder $order 订单模型，会按引用写入展示字段。
+     */
+    protected function appendUserCardsToDetail(StoreOrder $order): void
+    {
+        $cards = app()->make(StoreUserCardRepository::class)->listByOrderId((int)$order['order_id']);
+        $order['user_cards'] = $cards;
+
+        if (empty($order['orderProduct'])) {
+            return;
+        }
+
+        $cardsByOrderProduct = [];
+        foreach ($cards as $card) {
+            $cardsByOrderProduct[(int)$card['order_product_id']][] = $card;
+        }
+
+        foreach ($order['orderProduct'] as $orderProduct) {
+            $orderProduct['user_cards'] = $cardsByOrderProduct[(int)$orderProduct['order_product_id']] ?? [];
+        }
     }
 
     /**
@@ -934,7 +1003,8 @@ class StoreOrderRepository extends BaseRepository
                 'merchant' => function ($query) {
                     // 关联商家，只获取商家ID和名称
                     return $query->field('mer_id,mer_name');
-                }
+                },
+                'storeUserCard'
             ])
             ->find();
 
@@ -942,16 +1012,16 @@ class StoreOrderRepository extends BaseRepository
         if (!$data)
             throw new ValidateException('数据不存在');
 
-        // 如果订单状态为已核销，则抛出异常提示订单已全部核销
-        if($data['product_type'] == 0 && $data['is_virtual'] == 4) {
-            if(!in_array($data['status'], [0,1,20])) {
-                throw new ValidateException('该订单已全部核销');
-            }
-        } else {
-            if($data['status']) {
-                throw new ValidateException('该订单已全部核销');
-            }
-        }
+        //// 如果订单状态为已核销，则抛出异常提示订单已全部核销
+        //if($data['product_type'] == 0 && $data['is_virtual'] == 4) {
+        //    if(!in_array($data['status'], [0,1,20])) {
+        //        throw new ValidateException('该订单已全部核销');
+        //    }
+        //} else {
+        //    if($data['status']) {
+        //        throw new ValidateException('该订单已全部核销');
+        //    }
+        //}
 
         // 返回查询到的订单数据
         return $data;
@@ -1096,7 +1166,7 @@ class StoreOrderRepository extends BaseRepository
 
 
     /**
-     * 处理订单的领取操作。
+     * 处理订单的确认收货操作。
      * 此函数主要用于将订单状态更新为已领取，同时记录相应的日志。
      *
      * @param int $id 订单ID。
@@ -1123,8 +1193,9 @@ class StoreOrderRepository extends BaseRepository
         // 订单状态（0：待发货；1：待收货；2：待评价；3：已完成； 9: 拼团中 10:  待付尾款 11:尾款超时未付 -1：已退款）
         $order->status = $order->activity_type == 20 ? 3 : 2;
         // 设置订单的确认收货时间。
-        $order->verify_time = date('Y-m-d H:i:s');
-        // 触发订单领取前的事件。
+        $now = date('Y-m-d H:i:s');
+        $order->verify_time = $now;
+        // 触发订单确认收货前的事件。
         event('order.take.before', compact('order'));
         // 创建订单状态更新对象。
         $storeOrderStatusRepository = app()->make(StoreOrderStatusRepository::class);
@@ -1136,13 +1207,17 @@ class StoreOrderRepository extends BaseRepository
             'change_type' => $storeOrderStatusRepository::ORDER_STATUS_TAKE,
         ];
         // 使用事务处理订单状态的更新和日志的记录。
-        Db::transaction(function () use ($order, $user, $storeOrderStatusRepository, $orderStatus, $isApi) {
-            // 执行领取后的处理逻辑。
+        Db::transaction(function () use ($order, $user, $storeOrderStatusRepository, $orderStatus, $isApi, $now) {
+            // 执行确认收货后的处理逻辑。
             $this->takeAfter($order, $user);
 
             if($order['order_type'] == 2 && $order->deliveryOrder) {
                 $order->deliveryOrder->status = 4;
+                if (empty($order->deliveryOrder->confirm_time)) {
+                    $order->deliveryOrder->confirm_time = $now;
+                }
                 $order->deliveryOrder->save();
+                app()->make(DeliveryServiceBillRepository::class)->createDeliveryIncome((int)$order->deliveryOrder->delivery_order_id);
             }
             // 保存订单的更新。
             $order->save();
@@ -1480,6 +1555,12 @@ class StoreOrderRepository extends BaseRepository
         event('order.changePrice', compact('order', 'data'));
     }
 
+    /**
+     * 重新计算订单赠送积分：按积分开关、订单积分比例和支付金额计算，SVIP会员再按会员积分倍率加成
+     * @param object $order 订单对象（含 svip_discount 字段）
+     * @param float $payPrice 实际支付金额
+     * @return string 计算后的赠送积分
+     */
     public function recalculateGiveIntegral($order, $payPrice)
     {
         $order_total_give_integral = 0;
@@ -1624,9 +1705,9 @@ class StoreOrderRepository extends BaseRepository
             $count += $item['product_num'];
             $weight += $item['cart_info']['productAttr']['weight'];
         }
-        if ($config['mer_is_cargo'] !== 0) {
+        //if ($config['mer_is_cargo'] !== 0) {
             $expData['cargo'] = mb_substr($cargo, 0, 19) .'等';
-        }
+        //}
         // 组装发货数据，包括运输公司、收货人和发货人信息、模板ID等。
         $expData['com'] = $data['com'];
         $expData['to_name'] = $orderInfo->real_name;
@@ -1724,15 +1805,18 @@ class StoreOrderRepository extends BaseRepository
         app()->make(StoreImportRepository::class)->update($import['import_id'], $arr);
     }
 
+    /**
+     * 拼接订单商品的发货清单文本（商品名+规格+数量+单位，逐行换行分隔）
+     * @param object $order 订单对象（含 orderProduct 关联）
+     * @return string 商品清单文本，无商品时返回空字符串
+     */
     public function getOrderCargo($order)
     {
         $cargo = '';
         foreach ($order->orderProduct as $item) {
             $cargo .= $item['cart_info']['product']['store_name']. ' ' . $item['cart_info']['productAttr']['sku'] . ' * ' . $item['product_num'] . $item['cart_info']['product']['unit_name'] . PHP_EOL;
         }
-        if ($cargo)
-            $cargo = substr($cargo, 0, strlen($cargo) - 1);
-        return $cargo;
+        return mb_substr(rtrim($cargo), 0, 32, 'UTF-8');
     }
 
     /**
@@ -1771,6 +1855,14 @@ class StoreOrderRepository extends BaseRepository
         });
     }
 
+    /**
+     * 商家寄件下单：组装寄件参数调用快递服务创建寄件订单，并在事务内更新订单寄件信息、写入订单状态日志
+     * @param object $order 订单对象
+     * @param int $merId 商家ID
+     * @param array $data 寄件参数（快递公司、寄件人信息、预约时间等）
+     * @param int $service_id 售后服务ID，为0时记录管理员日志
+     * @return void
+     */
     public function shoipment($order, $merId, $data, $service_id)
     {
         if ($order->is_stock_up !== 0 )
@@ -1821,6 +1913,7 @@ class StoreOrderRepository extends BaseRepository
             $update['task_id'] =  $dump['task_id'];
             $update['kuaidi_order_id'] =  $dump['order_id'];
             $update['delivery_id'] =  $dump['kuaidinum'];
+            $update['status'] = 1;
             $orderStatus['change_message'] = '商家寄件创建订单:'.$dump['kuaidinum'] ?? $dump['order_id'];
             $this->dao->update($order->order_id, $update);
             if ($service_id) {
@@ -1831,6 +1924,15 @@ class StoreOrderRepository extends BaseRepository
         });
     }
 
+    /**
+     * 取消商家寄件：调用快递服务取消寄件订单，并在事务内执行取消后的订单寄件信息清理
+     * @param object $orderInfo 订单对象
+     * @param int $merId 商家ID
+     * @param string $msg 取消原因
+     * @param int $service_id 售后服务ID
+     * @param int $uid 用户ID，用户主动取消时传入
+     * @return void
+     */
     public function cancelShipment($orderInfo, $merId, $msg, $service_id = 0, $uid = 0)
     {
 
@@ -1847,6 +1949,13 @@ class StoreOrderRepository extends BaseRepository
         });
     }
 
+    /**
+     * 商家寄件取消后的订单处理：清空订单寄件信息并重置发货状态，写入对应来源的订单状态日志
+     * @param object $orderInfo 订单对象
+     * @param int $uid 用户ID，用户取消时记录用户日志
+     * @param int $service_id 售后服务ID，为0时记录管理员日志
+     * @return void
+     */
     public function cancelShipmentAfrer($orderInfo, $uid = 0, $service_id = 0)
     {
         $statusRepository = app()->make(StoreOrderStatusRepository::class);
@@ -2002,7 +2111,9 @@ class StoreOrderRepository extends BaseRepository
         }
 
         // 小程序发货管理
-        event('mini_order_shipping', ['product', $order, OrderStatus::DELIVER_TYPE_SAME_CITY, '', '']);
+        $merchant = app()->make(MerchantRepository::class)->get($merId);
+        $sub_mchid = $merchant ? $merchant->sub_mchid : '';
+        event('mini_order_shipping', ['product', $order, OrderStatus::DELIVER_TYPE_SAME_CITY, '', '', $sub_mchid]);
 
         Queue::push(SendSmsJob::class, ['tempId' => 'ORDER_DELIVER_SUCCESS', 'id' => $id]);
 
@@ -2141,7 +2252,7 @@ class StoreOrderRepository extends BaseRepository
 
         // 将查询结果中的integral字段转换为整型
         $res['integral'] = (int)$res['integral'];
-
+        $this->appendUserCardsToDetail($res);
         // 返回包含附加信息的查询结果
         return $res->append(['refund_extension_one', 'refund_extension_two']);
     }
@@ -2398,6 +2509,7 @@ class StoreOrderRepository extends BaseRepository
                     // 加载推广人的简要信息
                     $query->field('uid,nickname,avatar');
                 },
+                'storeUserCard'
             ]);
 
         // 计算满足条件的商家总数
@@ -2626,6 +2738,7 @@ class StoreOrderRepository extends BaseRepository
             ->append(['refund_status', 'open_receipt'], true)
             ->select();
 
+        $hasLocation = ($where['lat'] ?? '') !== '' && ($where['lng'] ?? '') !== '';
         // 处理预售价和已支付价格
         foreach ($list as &$order) {
             if ($order->activity_type == 2) {
@@ -2640,6 +2753,66 @@ class StoreOrderRepository extends BaseRepository
 
             if ($order->is_virtual == 4) {
                 $order->merchant['checkin'] = merchantConfig($order->mer_id,['enable_assigned', 'enable_checkin', 'checkin_radius', 'enable_trace', 'trace_form_id','enable_tostore_assigned','checkin_take_photo']);
+            }
+            if ((int)($where['service_type'] ?? 0) === 2) {
+                $order->service_fee = $order->deliveryOrder
+                    ? $order->deliveryOrder->service_fee
+                    : $order->delivery_service_fee;
+                if ($order->take) {
+                    $order->take->distance = '';
+                    if ($hasLocation && $order->take->lat && $order->take->lng) {
+                        $distance = getDistance(
+                            $where['lat'],
+                            $where['lng'],
+                            $order->take->lat,
+                            $order->take->lng
+                        );
+                        if ($distance < 0.9) {
+                            $distance = max(bcmul($distance, 1000, 0), 1) . 'm';
+                            if ($distance === '1m') {
+                                $distance = '100m以内';
+                            }
+                        } else {
+                            $distance .= 'km';
+                        }
+                        $order->take->distance = $distance;
+                    }
+                }
+
+                // 计算配送员当前位置到最终收货地址的距离，统一放在订单外层返回。
+                $order->distance = 0;
+                $order->distance_unit = '';
+                if ($hasLocation) {
+                    $deliveryOrder = $order->deliveryOrder;
+                    $toLat = $deliveryOrder ? (float)($deliveryOrder->to_lat ?? 0) : 0;
+                    $toLng = $deliveryOrder ? (float)($deliveryOrder->to_lng ?? 0) : 0;
+
+                    // 手动派单的旧记录或未生成配送单时，按订单收货地址补充解析。
+                    $deliveryAddress = $deliveryOrder
+                        ? ($deliveryOrder->to_address ?: $order->user_address)
+                        : $order->user_address;
+                    if ((!$toLat || !$toLng) && $deliveryAddress) {
+                        try {
+                            $location = lbs_address([], $deliveryAddress)['location'] ?? [];
+                            $toLat = (float)($location['lat'] ?? 0);
+                            $toLng = (float)($location['lng'] ?? 0);
+                        } catch (\Throwable $e) {
+                            $toLat = 0;
+                            $toLng = 0;
+                        }
+                    }
+
+                    if ($toLat && $toLng) {
+                        $distanceMeters = max((float)getDistance($where['lat'], $where['lng'], $toLat, $toLng), 0.001) * 1000;
+                        if ($distanceMeters < 1000) {
+                            $order->distance = (int)round($distanceMeters);
+                            $order->distance_unit = 'm';
+                        } else {
+                            $order->distance = round($distanceMeters / 1000, 2);
+                            $order->distance_unit = 'km';
+                        }
+                    }
+                }
             }
             // 计算领取数量
             $order->takeOrderCount = count($order['takeOrderList']);
@@ -2868,7 +3041,7 @@ class StoreOrderRepository extends BaseRepository
         $res = null;
         try {
             $res = app()->make(StorePrinterRepository::class)->startPrint($merId, $order, $product, $print_type);
-            Log::info('打印结果:'.var_export([$res, true]));
+            Log::info('打印结果:'.var_export($res, true));
         } catch (\think\Exception $exception) {
             // 打印失败时记录日志
             Log::error('打印失败：' . $exception->getMessage());
@@ -2900,18 +3073,32 @@ class StoreOrderRepository extends BaseRepository
         $spl = app()->make(StoreOrderSplitRepository::class)->splitOrder($order, $splitData, $serviceId, 1);
         if ($spl) $order = $spl;
 
-        // 更新订单状态为已核销，并设置核销时间和服务人员ID
-        $order->status = 2;
-        $order->verify_time = date('Y-m-d H:i:s');
-        $order->verify_service_id = $serviceId;
-
-        // 触发订单核销前的事件
-        event('order.verify.before', compact('order'));
-
         // 实例化订单状态仓库，用于后续订单状态的变更记录
         $storeOrderStatusRepository = app()->make(StoreOrderStatusRepository::class);
         // 使用事务处理订单状态的更新和订单变更日志的记录
-        Db::transaction(function () use ($order, $storeOrderStatusRepository, $serviceId) {
+        Db::transaction(function () use (&$order, $storeOrderStatusRepository, $serviceId) {
+            // 拆单完成后再次锁定目标订单。全量核销不产生子订单，必须依赖这里的
+            // 状态检查来阻止两个并发请求同时把同一订单核销两次。
+            $lockedOrder = StoreOrder::getDB()
+                ->with(['user'])
+                ->where('order_id', $order->order_id)
+                ->lock(true)
+                ->find();
+            if (!$lockedOrder) {
+                throw new ValidateException('订单不存在');
+            }
+            if ((int)$lockedOrder->status !== 0) {
+                throw new ValidateException('订单已全部核销，请勿重复操作');
+            }
+
+            $lockedOrder->status = 2;
+            $lockedOrder->verify_time = date('Y-m-d H:i:s');
+            $lockedOrder->verify_service_id = $serviceId;
+            $order = $lockedOrder;
+
+            // 触发订单核销前的事件
+            event('order.verify.before', compact('order'));
+
             // 执行订单核销后的处理逻辑
             $this->takeAfter($order, $order->user);
             // 保存更新后的订单信息
@@ -2950,15 +3137,9 @@ class StoreOrderRepository extends BaseRepository
      * @param object $order 订单对象，包含订单的相关信息
      * @return string 二维码图片的URL
      */
-    public function wxQrcode($orderId, $order)
+    public function wxQrcode($order)
     {
-        // 从订单对象中获取验证码和商家ID
-        $verify_code = $order->verify_code;
-        $mer_id = $order->mer_id;
-
-        // 获取网站的根URL，用于构造二维码的链接
-        $siteUrl = systemConfig('site_url');
-
+        $orderId = $order->order_id;
         // 根据订单号、当前日期和固定字符串生成唯一的二维码文件名
         $name = md5('owx' . $orderId . date('Ymd')) . '.jpg';
 
@@ -2976,7 +3157,22 @@ class StoreOrderRepository extends BaseRepository
         // 如果没有找到有效的二维码图片，则生成新的二维码
         if (!$imageInfo) {
             // 构造二维码的链接，包含验证码和商家ID
-            $codeUrl = set_http_type(rtrim($siteUrl, '/') . '/pages/admin/cancellate_result/index?cal_code=' . $verify_code . '&mer_id=' . $mer_id . '&is_jump=1', request()->isSsl() ? 0 : 1);
+            // 从订单对象中获取验证码和商家ID
+            $verify_code = $order->verify_code;
+            $mer_id = $order->mer_id;
+            $params = [
+                'cal_code' => $verify_code,
+                'mer_id'   => $mer_id,
+                'is_jump'  => 1,
+                'order_id' => $order->order_id
+            ];
+            $siteUrl = rtrim(systemConfig('site_url'), '/');
+            // 获取网站的根URL，用于构造二维码的链接
+            $baseUrl = $siteUrl . '/pages/admin/cancellate_result/index';
+            $codeUrl = set_http_type(
+                $baseUrl . '?' . http_build_query($params),
+                request()->isSsl() ? 0 : 1
+            );
 
             // 生成二维码图片并获取图片路径
             $imageInfo = app()->make(QrcodeService::class)->getQRCodePath($codeUrl, $name);
@@ -3680,6 +3876,12 @@ class StoreOrderRepository extends BaseRepository
         return $data;
     }
 
+    /**
+     * 获取订单支付页面配置：支付金额、支付方式开关、余额支付、超时时间、积分抵扣等信息
+     * @param int $id 组合订单ID，为0时表示普通订单
+     * @param int $uid 用户ID
+     * @return array 支付配置数据
+     */
     public function payConfig($id, $uid)
     {
         $groupOrder =null;
@@ -3713,7 +3915,15 @@ class StoreOrderRepository extends BaseRepository
             'pay_mock_open' => (int)($config['pay_mock_open'] ?? 0),
             'invalid_time' => $groupOrder ? strtotime($groupOrder['create_time'] . "+ $timer minutes") : 0,
             'activity_type' => $groupOrder['activity_type'] ?? 0,
+            'shopping_credits_status' => 0,
+            'shopping_credits_balance' => '0.00',
         ];
+        if ($groupOrder && count($groupOrder['orderList']) === 1) {
+            $merchantOrder = $groupOrder['orderList'][0];
+            $member = app()->make(MerchantMemberRepository::class)->memberInfo($uid, (int)$merchantOrder['mer_id']);
+            $data['shopping_credits_status'] = !empty($member['is_merchant_member']) && (int)$member['financial_status'] === 1 ? 1 : 0;
+            $data['shopping_credits_balance'] = $member['shopping_credits_balance'] ?? '0.00';
+        }
         return $data;
     }
 
@@ -3755,6 +3965,13 @@ class StoreOrderRepository extends BaseRepository
         'DISPATCH' => 1, // 指派
     ];
 
+    /**
+     * 员工领取订单（自派单）：将订单指派给指定员工，派单方式为员工领取
+     * @param int $merId 商家ID
+     * @param object $order 订单对象
+     * @param int $staffs_id 员工ID
+     * @return mixed merDispatch 的执行结果
+     */
     public function selfDispatch($merId, $order, $staffs_id)
     {
         return $this->merDispatch($merId, 0, $order, ['staffs_id' => $staffs_id], self::ENABLE_ASSIGNED['RECEIVE']);
@@ -4061,6 +4278,12 @@ class StoreOrderRepository extends BaseRepository
         $order->save();
     }
 
+    /**
+     * 获取员工订单列表：查询员工信息并筛选属于各员工的订单，未指派订单置于列表首位
+     * @param int $merId 商家ID
+     * @param array $params 查询参数（含 staff_id）
+     * @return array ['count' => 订单总数, 'list' => 员工订单列表（含未指派分组）]
+     */
     public function getStaffOrders(int $merId, array $params)
     {
         $list = app()->make(StaffsRepository::class)->fetchMerAll($merId, $params['staff_id'])->toArray(); // 获取员工
@@ -4087,6 +4310,12 @@ class StoreOrderRepository extends BaseRepository
         return ['staffs_id' => 0, 'mer_id' => $merId, 'phone' => '', 'name' => '未指派', 'orders' => $noStaffsOrder];
     }
 
+    /**
+     * 查询已支付订单并按员工指派情况拆分，同时整理订单商品信息与预约时间段
+     * @param int $merId 商家ID
+     * @param array $where 查询条件（含 staff_id）
+     * @return array [未指派订单列表, 全部订单列表, 订单总数]
+     */
     protected function searchOrders(int $merId, $where)
     {
         $field = 'StoreOrder.order_id,StoreOrder.real_name,StoreOrder.user_phone,StoreOrder.user_address,StoreOrder.staffs_id,StoreOrder.status,StoreOrder.order_type,StoreOrder.create_time';
@@ -4152,6 +4381,11 @@ class StoreOrderRepository extends BaseRepository
         return $result;
     }
 
+    /**
+     * 计算订单商品的总重量（各商品数量×单件重量的累计值）
+     * @param object $order 订单对象（含 orderProduct 关联）
+     * @return float 订单总重量
+     */
     public function getOrderWeight($order)
     {
         $weight = 0;
@@ -4173,12 +4407,24 @@ class StoreOrderRepository extends BaseRepository
         return $services->express()->getKuaidiComs();
     }
 
+    /**
+     * 获取商家寄件订单列表（分页，来自快递服务）
+     * @param int $merId 商家ID
+     * @param int $page 页码
+     * @param int $limit 每页条数
+     * @return mixed 快递服务返回的寄件订单列表
+     */
     public function shipmentList($merId, $page, $limit)
     {
         $services = app()->make(CrmebServeServices::class, [$merId]);
         return $services->express()->getShipmentOrderList(compact('page','limit'));
     }
 
+    /**
+     * 处理商家寄件回调通知：按回调类型（失败/取消/取件/签收）更新订单寄件状态、写入订单状态日志并触发相关事件
+     * @param array $data 回调数据（含商家ID、回调类型、回调内容）
+     * @return bool|void 未找到对应订单时返回true，否则无返回值
+     */
     public function shipmentNotify($data)
     {
         $merId = $data['id'];
@@ -4254,6 +4500,11 @@ class StoreOrderRepository extends BaseRepository
         return true;
     }
 
+    /**
+     * 获取同城配送订单的配送轨迹，并计算骑手当前位置与收货地址的实时距离
+     * @param int $orderId 订单ID
+     * @return array 配送轨迹数据（含距离），订单不存在或未开始配送时返回空数组
+     */
     public function getDeliveryTrack(int $orderId)
     {
         // 同城配送订单并且是第三方配送
@@ -4285,6 +4536,11 @@ class StoreOrderRepository extends BaseRepository
     }
 
 
+    /**
+     * 判断订单是否存在进行中的退款：存在状态为0（申请中）的退款单时返回false
+     * @param int $id 订单ID
+     * @return bool 无进行中的退款返回true，否则返回false
+     */
     public function hasRefund($id)
     {
         $res = $this->dao->get($id);

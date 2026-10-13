@@ -119,10 +119,22 @@ class CommunityDao extends BaseDao
                 $query->whereIn('Community.uid',$where['uids']);
             })
             ->when(isset($where['topic_id']) && $where['topic_id'] !==  '', function ($query) use($where) {
-                $tid = $where['topic_id'];
-                $relIds = \think\facade\Db::name('community_topic_rel')->where('topic_id', $tid)->column('community_id') ?: [];
-                $query->where(function ($q) use ($tid, $relIds) {
-                    $q->where('Community.topic_id', $tid);
+                // DIY组件的多选话题以逗号分隔，统一转换后使用对应的筛选方式
+                $topicIds = is_array($where['topic_id'])
+                    ? $where['topic_id']
+                    : explode(',', (string)$where['topic_id']);
+                $topicIds = array_values(array_filter(array_map(function ($topicId) {
+                    return trim((string)$topicId);
+                }, $topicIds), function ($topicId) {
+                    return $topicId !== '';
+                }));
+                if (!$topicIds) {
+                    return;
+                }
+                // 除主话题外，笔记还可通过 community_topic_rel 关联多个话题
+                $relIds = \think\facade\Db::name('community_topic_rel')->whereIn('topic_id', $topicIds)->column('community_id') ?: [];
+                $query->where(function ($q) use ($topicIds, $relIds) {
+                    $q->whereIn('Community.topic_id', $topicIds);
                     if ($relIds) {
                         $q->whereOr('Community.community_id', 'in', $relIds);
                     }

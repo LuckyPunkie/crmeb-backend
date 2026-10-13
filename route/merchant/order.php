@@ -123,6 +123,9 @@ Route::group(function () {
         Route::post('verify/:id', 'Order/verify')->name('merchantStoreOrderVerify')->option([
             '_alias' => '核销',
         ]);
+        Route::post('card/verify/:id', 'Order/verifyCard')->name('merchantStoreOrderCardVerify')->option([
+            '_alias' => '次卡核销',
+        ]);
         Route::post('delete/:id', 'Order/delete')->name('merchantStoreOrderDelete')->option([
             '_alias' => '删除',
         ]);
@@ -131,6 +134,9 @@ Route::group(function () {
         ]);
         Route::post('offline/:id', 'Order/offline')->name('merchantStoreOrderOffline')->option([
             '_alias' => '线下支付',
+        ]);
+        Route::get('card_log/:id', 'Order/verifyCardLog')->name('merchantStoreOrderCardLog')->option([
+            '_alias' => '核销记录',
         ]);
         Route::group('reservation', function () {
             Route::post('dispatch/:id', 'Order/reservationDispatch')->name('merchantStoreOrderReservationDispatch')->option([
@@ -209,6 +215,9 @@ Route::group(function () {
         ]);
         Route::get('lst', '/lst')->name('merchantStoreRefundOrderLst')->option([
             '_alias' => '列表',
+        ]);
+        Route::get('title', '/title')->name('merchantStoreRefundOrderTitle')->option([
+            '_alias' => '状态统计',
         ]);
         Route::get('detail/:id', '/detail')->name('merchantStoreRefundOrderDetail')->option([
             '_alias' => '详情',

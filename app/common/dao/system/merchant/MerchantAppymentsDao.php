@@ -75,6 +75,20 @@ class MerchantAppymentsDao extends BaseDao
         return $query;
     }
 
+    /**
+     * 按审核状态统计申请记录数量。
+     *
+     * @param array $where
+     * @return \think\Collection
+     */
+    public function statusStatistics(array $where)
+    {
+        return $this->getSearch(array_merge($where, ['is_del' => 0]))
+            ->field('status, COUNT(mer_applyments_id) AS count')
+            ->group('status')
+            ->select();
+    }
+
 
 
 }

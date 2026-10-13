@@ -258,6 +258,11 @@ class ProductGroupRepository extends BaseRepository
         return compact('sku','price','old_price');
     }
 
+    /**
+     * 计算拼团实际购买人数与虚拟人数：开启虚拟成团时按成团比例校验并拆分虚拟人数，超出比例范围抛异常
+     * @param $data 拼团参数，包含 buying_count_num、ficti_status、ficti_num
+     * @return array 返回实际购买人数与虚拟人数，键为 buying_num、ficti_num
+     */
     public function sltNumber($data)
     {
         $ficti_status = systemConfig('ficti_status');
@@ -570,15 +575,17 @@ class ProductGroupRepository extends BaseRepository
             if(!$group_status) throw new ValidateException('不可加入此团');
         }
 
-        // 查询商品的SKU信息。
-        $make = app()->make(ProductAttrValueRepository::class);
-        //$old_sku = $make->getWhere(['unique' => $data['product_attr_unique']]);
-        //if($old_sku['stock'] < $res['cart_num']) throw new ValidateException('原商品库存不足');
-
+        // 查询活动SKU，并确认其仍关联当前拼团商品的原商品规格。
         $sku_make = app()->make(ProductGroupSkuRepository::class);
         $sku = $sku_make->getWhere(['product_group_id' => $data['product_id'],'unique' => $data['product_attr_unique']]);
+        $oldSku = app()->make(ProductAttrValueRepository::class)->getWhere([
+            'product_id' => $res['product']['old_product_id'],
+            'unique' => $data['product_attr_unique'],
+        ]);
+        if (!$sku || !$oldSku) throw new ValidateException('商品信息错误');
         // 检查商品限购数量是否充足。
         if($sku['stock'] < $data['cart_num']) throw new ValidateException('商品限购数量不足');
+        if($oldSku['stock'] < $data['cart_num']) throw new ValidateException('原商品库存不足');
 
         // 如果商品有限购数量，检查购买数量是否超过限购数量。
         if($res['pay_count'] !== 0 ) {

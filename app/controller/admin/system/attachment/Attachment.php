@@ -337,20 +337,32 @@ class Attachment extends BaseController
         $file = $this->getUploadFile('file');
         if (!$file)
             return app('json')->fail('请上传视频');
+        $cover = $this->getUploadFile('cover');
         $type = (int)systemConfig('upload_type') ?: 1;
-        $upload = UploadService::create($type);
-        $info = $upload->to($this->request->merId().'/media')->asFile([
+        $attachmentCover = '';
+        if ($cover) {
+            $coverUpload = UploadService::create($type);
+            $coverInfo = $coverUpload->to($this->request->merId() . '/media/cover')->asImage()->move('cover');
+            if ($coverInfo === false) {
+                return app('json')->fail($coverUpload->getError());
+            }
+            $attachmentCover = tidy_url($coverInfo->filePath);
+        }
+
+        $videoUpload = UploadService::create($type);
+        $info = $videoUpload->to($this->request->merId().'/media')->asFile([
             'filesize' => config('upload.filesize'),
             'fileExt' => ['mp4', 'mov'],
             'fileMime' => ['video/mp4', 'video/quicktime'],
         ])->move('file');
         if ($info === false) {
-            return app('json')->fail($upload->getError());
+            return app('json')->fail($videoUpload->getError());
         }
         $data = [
             'attachment_category_id' => 0,
             'attachment_name' => $file->getOriginalName(),
-            'attachment_src' => trim(systemConfig('site_url'),'/').$info->filePath,
+            'attachment_src' => tidy_url($info->filePath),
+            'attachment_cover' => $attachmentCover,
             'attachment_type' => $this->repository::TYPE_VIDEO,
         ];
 
@@ -378,7 +390,7 @@ class Attachment extends BaseController
 
         return app('json')->success([
             'src' => $data['attachment_src'],
-            'cover' => $cover,
+            'cover' => $cover ?: $data['attachment_cover'],
             'attachment_id' => $res->attachment_id
         ]);
     }

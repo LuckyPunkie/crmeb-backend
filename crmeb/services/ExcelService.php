@@ -12,6 +12,11 @@
 
 namespace crmeb\services;
 
+use app\common\dao\merchant\MerchantMemberLevelDao;
+use app\common\model\delivery\DeliveryServiceWithdraw;
+use app\common\repositories\delivery\DeliveryServiceBillRepository;
+use app\common\repositories\delivery\DeliveryServiceWithdrawRepository;
+use app\common\repositories\merchant\MerchantMemberStatisticsRepository;
 use app\common\repositories\store\order\StoreImportDeliveryRepository;
 use app\common\repositories\store\order\StoreOrderProfitsharingRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
@@ -37,7 +42,7 @@ use think\facade\Db;
 class ExcelService
 {
 
-    public  $paytype = [0 => '余额', 1 => '微信', 2 => '微信', 3 => '微信', 4 => '支付宝', 5 => '支付宝', 6 => '微信',7 => '线下支付',  8 => '微信', 9 => '支付宝'];
+    public  $paytype = [0 => '余额', 1 => '微信', 2 => '微信', 3 => '微信', 4 => '支付宝', 5 => '支付宝', 6 => '微信', 7 => '线下支付', 8 => '微信', 9 => '支付宝', 10 => '购物金'];
     public function getAll($data)
     {
         set_time_limit(0);
@@ -161,6 +166,7 @@ class ExcelService
                     $value['product_num'] . ' ' . $value['unit_name'],
                     $productAttr['price'] ?? '',
                     $productAttr['cost'] ?? '',
+                    (int)($value['refund_num'] ?? 0),
                 ];
             }
             $one = [
@@ -189,7 +195,7 @@ class ExcelService
             ];
             $export[] = $one;
         }
-        $header = ['商户名称', '订单编号', '订单状态', '订单类型', '推广人', '用户信息', '商品名称', '商品规格', '商品数量', '商品价格', '商品成本价' ,'优惠', '实付邮费(元)', '实付金额(元)', '已退款金额(元)', '收货人', '收货人电话', '收货地址', '物流/电话', '下单时间', '支付方式', '支付状态', '自提点/服务点','商家备注', '是否删除','系统表单信息'];
+        $header = ['商户名称', '订单编号', '订单状态', '订单类型', '推广人', '用户信息', '商品名称', '商品规格', '商品数量', '商品价格', '商品成本价', '退款数量','优惠', '实付邮费(元)', '实付金额(元)', '已退款金额(元)', '收货人', '收货人电话', '收货地址', '物流/电话', '下单时间', '支付方式', '支付状态', '自提点/服务点','商家备注', '是否删除','系统表单信息'];
         $filename = '订单列表_' . date('YmdHis');
         $title = ['订单列表', '导出时间：' . date('Y-m-d H:i:s', time())];
         $foot = '';
@@ -208,7 +214,7 @@ class ExcelService
     {
         //订单状态（0：待发货；1：待收货；2：待评价；3：已完成； 9: 拼团中 10:  待付尾款 11:尾款超时未付 -1：已退款）
         $statusType = [0 => '待发货', 1 => '待收货', 2 => '待评价', 3 => '已完成', 9 => '拼团中', 10 => '待付尾款', 11 => '尾款超时未付', -1 => '已退款',];
-        $paytype = [0 => '余额', 1 => '微信', 2 => '小程序', 3 => 'H5', 4 => '支付宝', 5 => '支付宝扫码', 6 => '微信扫码',7 => '线下支付',  8 => '微信扫码枪支付', 9 => '支付宝扫码枪支付'];
+        $paytype = [0 => '余额', 1 => '微信', 2 => '小程序', 3 => 'H5', 4 => '支付宝', 5 => '支付宝扫码', 6 => '微信扫码', 7 => '线下支付', 8 => '微信扫码枪支付', 9 => '支付宝扫码枪支付', 10 => '购物金'];
         $make = app()->make(StoreOrderRepository::class);
 //        $status = $where['status'];
 //        unset($where['status']);
@@ -501,19 +507,17 @@ class ExcelService
         $i = 1;
         //平台
         if (!$where['is_mer']) {
-            $header = ['商户类别', '商户分类', '商户名称', '总订单号', '订单编号','支付方式', '交易流水号', '交易时间','第三方交易单号', '对方信息', '交易类型',
-                '收支金额', '备注'];
+            $header = ['商户类别', '商户分类', '商户名称', '总订单号', '订单编号','支付方式', '交易流水号', '交易时间','第三方交易单号', '对方信息', '交易类型', '收支金额', '备注'];
             $list = $query->page($page, $limit)->order('financial_record_id DESC')->select();
             foreach ($list as $value) {
                 $merchant = $value['merchant'] ?? [];
                 $merchantCategory = $merchant['merchantCategory'] ?? [];
                 $orderInfo = $value['orderInfo'] ?? [];
-
                 $export[] = [
                     $merchant ? (($merchant['is_trader'] ?? 0) ? '自营' : '非自营') : '平台',
                     $merchantCategory['category_name'] ?? '平台',
                     $merchant['mer_name'] ?? '平台',
-                    $orderInfo['group_order_sn'] ?? '无数据',
+                    $orderInfo->groupOrder->group_order_sn ?? '无数据',
                     $value['order_sn'],
                     isset($orderInfo['pay_type']) ? ($this->paytype[$orderInfo['pay_type']] ?? '') : '',
                     $value['financial_record_sn'],
@@ -733,22 +737,25 @@ class ExcelService
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
         foreach ($list as $item) {
+            $account = is_object($item->financial_account) ? $item->financial_account : new \stdClass();
             switch ($item->financial_type) {
                 case 1:
-                    $acount = '姓名：' . $item->financial_account->name . PHP_EOL;
-                    $acount .= '银行名称：' . $item->financial_account->bank . PHP_EOL;
-                    $acount .= '银行卡号：' . $item->financial_account->bank_code;
+                    $acount = '姓名：' . ($account->name ?? '') . PHP_EOL;
+                    $acount .= '银行名称：' . ($account->bank ?? '') . PHP_EOL;
+                    $acount .= '银行卡号：' . ($account->bank_code ?? '');
                     break;
                 case 2:
-                    $acount = '姓名：' . $item->financial_account->name . PHP_EOL;
-                    $acount .= '微信号：' . $item->financial_account->wechat . PHP_EOL;
-                    $acount .= '收款二维码地址：' . $item->financial_account->wechat_code;
+                    $acount = '姓名：' . ($account->name ?? '') . PHP_EOL;
+                    $acount .= '微信号：' . ($account->wechat ?? '') . PHP_EOL;
+                    $acount .= '收款二维码地址：' . ($account->wechat_code ?? '');
                     break;
                 case 3:
-                    $acount = '姓名：' . $item->financial_account->name . PHP_EOL;
-                    $acount .= '支付宝号：' . $item->financial_account->alipay . PHP_EOL;
-                    $acount .= '收款二维码地址：' . $item->financial_account->alipay_code;
+                    $acount = '姓名：' . ($account->name ?? '') . PHP_EOL;
+                    $acount .= '支付宝号：' . ($account->alipay ?? '') . PHP_EOL;
+                    $acount .= '收款二维码地址：' . ($account->alipay_code ?? '');
                     break;
+                default:
+                    $acount = '';
             }
             $export[] = [
                 $item->merchant->mer_name,
@@ -826,6 +833,91 @@ class ExcelService
     }
 
     /**
+     * 导出配送员提现申请。
+     */
+    public function deliveryServiceWithdraw(array $where): array
+    {
+        $data = app()->make(DeliveryServiceWithdrawRepository::class)->getExportList($where);
+        $header = [
+            '提现单号', '配送员', '配送员手机号', '用户UID', '用户昵称', '提现金额', '状态',
+            '收款方式', '收款信息', '打款流水号', '审核说明', '提现备注', '申请时间', '审核时间', '打款时间',
+        ];
+        $export = [];
+        foreach ($data['list'] as $item) {
+            $paymentInfo = $item->payment_info;
+            if (is_array($paymentInfo)) {
+                $paymentInfo = implode(',', array_values($paymentInfo));
+            }
+            $export[] = [
+                $item->withdraw_sn,
+                $item->service_name,
+                $item->service_phone,
+                $item->uid,
+                $item->nickname,
+                $item->amount,
+                DeliveryServiceWithdraw::STATUS_TEXT[(int)$item->status] ?? (string)$item->status,
+                DeliveryServiceWithdraw::PAYMENT_METHOD_TEXT[(int)$item->payment_method] ?? (string)$item->payment_method,
+                (string)$paymentInfo,
+                $item->payment_sn,
+                $item->audit_reason,
+                $item->remark,
+                $item->create_time,
+                $item->audit_time,
+                $item->pay_time,
+            ];
+        }
+
+        return [
+            'count' => $data['count'],
+            'header' => $header,
+            'title' => ['平台配送员提现记录', '生成时间:' . date('Y-m-d H:i:s')],
+            'export' => $export,
+            'foot' => '',
+            'filename' => '平台配送员提现记录_' . date('YmdHis'),
+        ];
+    }
+
+    /**
+     * 导出平台配送员资金流水。
+     */
+    public function deliveryServiceBill(array $where, int $deliveryType): array
+    {
+        $data = app()->make(DeliveryServiceBillRepository::class)->getManageExportList($where, $deliveryType);
+        $header = [
+            '流水单号', '配送员', '配送员手机号', '用户UID', '用户昵称', '订单号', '商户ID',
+            '流水类型', '收支类型', '金额', '状态', '标题', '备注', '创建时间',
+        ];
+        $export = [];
+        foreach ($data['list'] as $item) {
+            $export[] = [
+                $item->bill_sn,
+                $item->service_name,
+                $item->service_phone,
+                $item->uid,
+                $item->nickname,
+                $item->order_sn,
+                $item->mer_id,
+                DeliveryServiceBillRepository::BILL_TYPE_TEXT[$item->bill_type] ?? (string)$item->bill_type,
+                DeliveryServiceBillRepository::PM_TEXT[(int)$item->pm] ?? (string)$item->pm,
+                $item->amount,
+                DeliveryServiceBillRepository::STATUS_TEXT[(int)$item->status] ?? (string)$item->status,
+                $item->title,
+                $item->mark,
+                $item->create_time,
+            ];
+        }
+
+        return [
+            'count' => $data['count'],
+            'header' => $header,
+            'title' => ['平台配送员资金流水', '生成时间:' . date('Y-m-d H:i:s')],
+            'export' => $export,
+            'foot' => '',
+            'filename' => '平台配送员资金流水_' . date('YmdHis'),
+        ];
+    }
+
+    /**
      * 分账管理
      * @param array $where
      * @param int $id
@@ -896,6 +988,48 @@ class ExcelService
         return compact('count', 'header', 'title', 'export', 'foot', 'filename');
     }
 
+
+    /**
+     * 导出商户会员客户数据
+     */
+    public function merchantMemberCustomer(int $merId, array $where, int $page, int $limit): array
+    {
+        $data = app()->make(MerchantMemberStatisticsRepository::class)->customerList($merId, $where, $page, $limit);
+        $levelNames = app()->make(MerchantMemberLevelDao::class)->search()
+            ->where('mer_id', $merId)
+            ->where('is_del', 0)
+            ->column('name', 'level');
+        $identityNames = [
+            'member' => '会员用户',
+            'consumer' => '消费用户',
+            'normal' => '普通用户',
+        ];
+        $export = [];
+        foreach ($data['list'] as $item) {
+            $export[] = [
+                $item['uid'],
+                $item['nickname'],
+                $item['phone'] ?: '无',
+                $identityNames[$item['user_identity']] ?? '未知',
+                $levelNames[$item['level']] ?? $item['level'] . '级',
+                $item['principal'],
+                $item['gift'],
+                $item['shopping_credits_balance'],
+                (int)$item['freeze_status'] === 1 ? '冻结' : '正常',
+                implode('、', $item['label'] ?? []),
+                $item['join_time'],
+            ];
+        }
+
+        return [
+            'count' => $data['count'],
+            'header' => ['用户ID', '昵称', '手机号码', '用户身份', '会员等级', '本金余额', '赠送余额', '购物金总余额', '冻结状态', '用户标签', '入会时间'],
+            'title' => ['会员客户列表', '导出时间：' . date('Y-m-d H:i:s')],
+            'export' => $export,
+            'foot' => '',
+            'filename' => '会员客户列表_' . date('YmdHis'),
+        ];
+    }
 
     /**
      * 导出用户数据

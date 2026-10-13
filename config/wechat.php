@@ -68,6 +68,10 @@ return [
         'secret' => [
             'key' => 'wechat_app_appsecret'
         ],
+        'notifyUrl' => [
+            //必须携带斜杠开头
+            'value' => '/api/notice/pay/app'
+        ],
     ],
     //开放平台网页应用
     'web' => [
@@ -105,7 +109,7 @@ return [
             ],
             'notifyUrl' => [
                 //支付回调,必须携带斜杠开头
-                'value' => '/api/notice/wechat'
+                'value' => '/api/notice/pay/wechat'
             ],
             'refundUrl' => [
                 //退款回调,必须携带斜杠开头
@@ -155,7 +159,7 @@ return [
             ],
              'notifyUrl' => [
                 //支付回调,必须携带斜杠开头
-                'value' => '/api/notice/routine'
+                'value' => '/api/notice/pay/routine'
             ],
             'refundUrl' => [
                 //退款回调,必须携带斜杠开头
@@ -237,10 +241,10 @@ return [
 			'key' => 'wechat_service_client_key'
 		],
         'notifyUrl' => [
-            'value' => '/api/notice/partner'
+            'value' => '/api/notice/pay/partner'
         ],
         'refundUrl' => [
-            'value' => '/api/notice/partner'
+            'value' => '/api/notice/pay/partner'
         ],
 
 	],

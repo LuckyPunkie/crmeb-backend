@@ -14,10 +14,13 @@
 namespace app\controller\api\store\order;
 
 
+use app\common\model\store\product\StoreUserCardVerifyLog;
 use think\exception\ValidateException;
 use app\common\repositories\store\order\StoreOrderRepository;
+use app\common\repositories\store\product\StoreUserCardRepository;
 use crmeb\basic\BaseController;
 use think\App;
+use app\common\repositories\store\product\StoreUserCardVerifyLogRepository;
 
 class StoreOrderVerify extends BaseController
 {
@@ -30,6 +33,7 @@ class StoreOrderVerify extends BaseController
     public function __construct(App $app)
     {
         parent::__construct($app);
+        $this->merId = $this->request->param('merId');
     }
 
     /**
@@ -55,7 +59,7 @@ class StoreOrderVerify extends BaseController
         if (!$order) return app('json')->fail('订单不存在');
         if ($order['is_virtual'] == 4) {
             $auth = $this->checkStaffAuth($order);
-            if (!$auth) $this->checkServerAuth($order);
+            if (!$auth) $auth = $this->checkServerAuth($order);
         } else {
             $auth = $this->checkServerAuth($order);
         }
@@ -81,7 +85,7 @@ class StoreOrderVerify extends BaseController
     public function checkServerAuth($order)
     {
         if ($this->request->isServer()){
-            if ($order->mer_id !== $this->merId) {
+            if ($order->mer_id != $this->merId) {
                 return false;
             }
             return true;
@@ -104,7 +108,7 @@ class StoreOrderVerify extends BaseController
     {
         $this->merId = $merId;
         // 从请求中获取核销数据和验证码
-        $data = $this->request->params(['data','verify_code']);
+        $data = $this->request->params(['data', 'verify_code', ['verify_count', 1], ['remark', ''], ['service_type', 0]]);
         // 根据订单ID、商家ID、验证码和订单类型查询订单，并连带查询订单产品信息
         $order = $repository->getWhere(['order_id' => $id, 'mer_id' => $merId, 'verify_code' => $data['verify_code']], '*', ['orderProduct']);
         // 如果订单不存在，则抛出验证异常
@@ -113,25 +117,123 @@ class StoreOrderVerify extends BaseController
         if (!$order->paid)  return app('json')->fail('订单未支付');
         // 如果订单已全部核销，则抛出验证异常
 
-        if ($order['status'] && $order['is_virtual'] !== 4 )  return app('json')->fail('[1]订单已全部核销，请勿重复操作');
+        if ($order['status'] && $order['is_virtual'] !== 4 )
+            return app('json')->fail('[1]订单已全部核销，请勿重复操作');
 
         if ($order['is_virtual'] == 4) {
             $auth = $this->checkStaffAuth($order);
-            $staffs_id = $this->request->staffsList()[$order->mer_id]['staffs_id'];
+            if ($auth) {
+                $staffs_id = $this->request->staffsList()[$order->mer_id]['staffs_id'];
+            }
             if (!$auth){
-                $this->checkServerAuth($order);
-                $service_id = $this->request->serviceInfo()->service_id;
+                $auth = $this->checkServerAuth($order);
+                if ($auth) {
+                    $service_id = $this->request->serviceInfo()->service_id;
+                }
             }
         } else {
             $auth = $this->checkServerAuth($order);
             $service_id = $this->request->serviceInfo()->service_id;
         }
-        if (!$auth) app('json')->fail('没有权限操作');
+        if (!$auth) return app('json')->fail('没有权限操作');
         if ($staffs_id ?? false)
             $repository->reservationVerify($id, $order->mer_id, 0,$staffs_id);
         if ($service_id ?? false)
             $repository->verifyOrder($order, $data,$service_id);
         // 返回表示核销成功的结果
         return app('json')->success('订单核销成功');
+    }
+
+    /**
+     * 解析次卡/年卡核销操作者权限。
+     *
+     * 当前核销入口可能由门店员工或客服账号调用。员工账号只要归属于当前商户即可核销；
+     * 客服账号必须是当前商户的客服。返回的 service_id 会写入用户卡核销日志，
+     * 用来追踪本次核销由哪个移动端角色操作。
+     *
+     * @param int $merId 当前路由商户 ID。
+     * @return array 空数组表示无权限；service_id 表示可记录到核销日志的操作者 ID。
+     */
+    protected function resolveCardVerifyAuth(int $merId): array
+    {
+        if ($this->request->isStaffs() && in_array($merId, $this->request->staffsMerIds())) {
+            return ['service_id' => (int)$this->request->staffsList()[$merId]['staffs_id']];
+        }
+        if ($this->request->isServer() && $this->request->serviceInfo() && (int)$this->request->serviceInfo()->mer_id === $merId) {
+            return ['service_id' => (int)$this->request->serviceInfo()->service_id];
+        }
+
+        return [];
+    }
+
+    /**
+     * 次卡/年卡独立核销入口。
+     *
+     * 次卡/年卡核销只更新用户卡和核销日志，不走普通订单 verifyOrder，也不会调用 splitOrder。
+     * 当固定次数卡全部核销完后，StoreUserCardRepository 会负责把原订单推进到已完成。
+     *
+     * @param int $merId 商户 ID。
+     * @param int|string $id 订单 ID。
+     */
+    public function verifyCard($merId, $id)
+    {
+        $data = $this->request->params(['data', 'verify_code', ['num', 1], ['remark', ''], ['service_type', 0]]);
+        // 根据订单ID、商家ID、验证码和订单类型查询订单，并连带查询订单产品信息
+        $repository = app()->make(StoreOrderRepository::class);
+        $order = $repository->getWhere(['order_id' => $id, 'mer_id' => $merId, 'verify_code' =>
+            $data['verify_code']], '*', ['storeUserCard']);
+        $auth = $this->checkServerAuth($order);
+        if (!$auth)
+            return  app('json')->fail('没有权限操作');
+        if ($order['status'] && $order['is_virtual'] !== 5)
+            return app('json')->fail('[1]订单已全部核销，请勿重复操作');
+        $service_id = $this->request->serviceInfo()->service_id;
+
+        $card = $order->storeUserCard;
+        if ($card) {
+            if ((int)$card['order_id'] !== (int)$id) {
+                return app('json')->fail('次卡/年卡不属于当前订单');
+            }
+            $serviceType = (int)($data['service_type'] ?: (is_array($data['data'] ?? null) ? ($data['data']['service_type'] ?? 0) : 0));
+            app()->make(StoreUserCardRepository::class)->verifyByCode(
+                (string)$card->verify_code,
+                (int)$merId,
+                (int)$data['data']['num'],
+                $service_id,
+                0,
+                StoreUserCardVerifyLog::VERIFY_TYPE_MERCHANT,
+                (string)$data['remark'],
+                $serviceType
+            );
+            return app('json')->success('核销成功');
+        }
+        return app('json')->fail('核销失败');
+    }
+
+    /**
+     * 次卡/年卡订单核销记录列表。
+     *
+     * 这里按订单和商户过滤 store_user_card_verify_log，用于查看某张次卡/年卡的核销流水。
+     * 权限仍按当前客服/服务人员归属商户校验，避免跨商户查看核销记录。
+     *
+     * @param int $merId 商户 ID。
+     * @param int|string $id 订单 ID。
+     */
+    public function verifyCardLog($merId, $id)
+    {
+        [$page, $limit] = $this->getPage();
+        $repository = app()->make(StoreOrderRepository::class);
+        $order = $repository->getWhere(['order_id' => $id, 'mer_id' => $merId]);
+        $auth = $this->checkServerAuth($order);
+        if (!$auth)
+            return  app('json')->fail('没有权限操作');
+        $storeUserCardVerifyLog = app()->make(StoreUserCardVerifyLogRepository::class);
+        $where = [
+            'order_id' => $id,
+            'mer_id' => $merId,
+        ];
+        $data = $storeUserCardVerifyLog->getList($where, $page, $limit);
+
+        return  app('json')->success($data);
     }
 }

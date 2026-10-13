@@ -35,6 +35,26 @@ class Circle extends BaseModel
         return 'circle';
     }
 
+    public function setMerProductTypeAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getMerProductTypeAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
+    public function setPlatformCategoryAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getPlatformCategoryAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
     public function getCommissionRateAttr($value, $data)
     {
         return ($data['commission_type'] == 0) ? systemConfig(self::SYSTEMC_COMMISSION[$data['level']]) : $value;

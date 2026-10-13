@@ -31,6 +31,7 @@ use app\validate\api\ChangePasswordValidate;
 use app\validate\api\UserAuthValidate;
 use crmeb\basic\BaseController;
 use crmeb\services\AppleIdentityService;
+use crmeb\services\security\captcha\SliderCaptchaService;
 use crmeb\services\wechat\MiniProgram;
 use crmeb\services\SmsService;
 use crmeb\services\WechatTemplateMessageService;
@@ -151,7 +152,7 @@ class Auth extends BaseController
      */
     public function userInfo()
     {
-        $user = $this->request->userInfo()->hidden(['label_id', 'group_id', 'pwd', 'addres', 'card_id', 'last_time', 'last_ip', 'create_time', 'mark', 'status', 'spread_uid', 'spread_time', 'real_name', 'birthday', 'brokerage_price']);
+        $user = $this->request->userInfo()->hidden(['label_id', 'group_id', 'pwd', 'addres', 'card_id', 'last_time', 'last_ip', 'create_time', 'mark', 'status', 'spread_uid', 'spread_time', 'real_name', 'birthday']);
         $user->append(['service', 'topService', 'total_collect_product', 'total_collect_store', 'total_coupon', 'total_visit_product', 'total_unread', 'total_recharge', 'lock_integral', 'total_integral', 'staffs', 'delivery']);
         $data = $user->toArray();
         // 显式带回 mer_id，避免字段缓存/隐藏导致前端误判非商家
@@ -443,12 +444,18 @@ class Auth extends BaseController
 
     public function verify(UserAuthValidate $validate)
     {
-        $data = $this->request->params(['phone', ['type', 'login'], ['captchaType', 'clickWord'], ['captchaVerification', ''], 'token']);
-        //二次验证
+        $data = $this->request->params(['phone', ['type', 'login'], ['captchaType', 'blockPuzzle'], ['captchaVerification', ''], 'token']);
+        if ($data['captchaType'] !== 'blockPuzzle') {
+            return app('json')->fail('安全验证已升级，请使用滑块验证');
+        }
+        // 二次验证并消费滑块凭证
         try {
-            aj_captcha_check_two($data['captchaType'], $data['captchaVerification']);
+            app()->make(SliderCaptchaService::class)->verifyAndConsume(
+                (string)$data['phone'],
+                (string)$data['captchaVerification']
+            );
         } catch (\Throwable $e) {
-            return app('json')->fail($e->getMessage());
+            return app('json')->fail($e->getMessage() ?: '验证码错误');
         }
         $validate->sceneVerify()->check($data);
         $sms_limit_key = 'sms_limit_' . $data['phone'];
@@ -938,4 +945,52 @@ class Auth extends BaseController
             return app('json')->fail($e->getMessage());
         }
     }
+
+    /**
+     * 移动端创建滑块验证场景。
+     */
+    public function mobileAjcaptcha()
+    {
+        $captchaType = $this->request->param('captchaType/s', 'blockPuzzle');
+        if ($captchaType !== 'blockPuzzle') {
+            return app('json')->fail('不支持的验证方式');
+        }
+
+        try {
+            $clientUid = trim((string)$this->request->param('clientUid/s', ''));
+            return app('json')->success(
+                app()->make(SliderCaptchaService::class)->createScene($clientUid)
+            );
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage() ?: '验证码生成失败');
+        }
+    }
+
+    /**
+     * 移动端滑块一次验证。
+     */
+    public function mobileAjcheck()
+    {
+        $data = $this->request->params([
+            ['token', ''],
+            ['pointJson', ''],
+            ['captchaType', 'blockPuzzle'],
+            ['track', ''],
+        ]);
+        if ($data['captchaType'] !== 'blockPuzzle') {
+            return app('json')->fail('不支持的验证方式');
+        }
+
+        try {
+            app()->make(SliderCaptchaService::class)->check(
+                (string)$data['token'],
+                (string)$data['pointJson'],
+                (string)$data['track']
+            );
+            return app('json')->success();
+        } catch (\Throwable $e) {
+            return app('json')->fail('验证码错误');
+        }
+    }
+
 }

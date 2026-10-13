@@ -14,6 +14,7 @@
 namespace crmeb\listens\pay;
 
 
+use think\facade\Log;
 use app\common\repositories\user\UserRechargeRepository;
 use crmeb\interfaces\ListenerInterface;
 
@@ -22,7 +23,7 @@ class UserRechargeSuccessListen implements ListenerInterface
 
     public function handle($data): void
     {
-        $orderSn = $data['order_sn'];
-        app()->make(UserRechargeRepository::class)->paySuccess($orderSn);
+        Log::info('充值回调'.var_export($data, true));
+        app()->make(UserRechargeRepository::class)->paySuccess($data);
     }
 }

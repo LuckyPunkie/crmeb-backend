@@ -52,7 +52,7 @@ class PayStatusService
      */
     protected function queryAlipayBarCode()
     {
-        $res = AlipayService::instance()->query($this->options['order_sn']);
+        $res = AlipayService::make()->query($this->options['order_sn']);
         if($res['code'] == '10000' && $res['msg'] == 'Success' && in_array($res['trade_status'],['TRADE_SUCCESS', 'TRADE_FINISHED'])) {
             return ['transaction_id' => $res['trade_no']];
         }

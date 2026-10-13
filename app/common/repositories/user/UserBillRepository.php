@@ -72,6 +72,7 @@ class UserBillRepository extends BaseRepository
            'now_money/pay_product' => '购买商品',
            'now_money/presell' => '支付预售尾款',
            'now_money/recharge' => '余额充值',
+           'now_money/delivery_service' => '配送费转入余额',
            'now_money/sys_dec_money' => '系统减少余额',
            'now_money/sys_inc_money' => '系统增加余额',
            'now_money/major_customer_rebate' => '大客户卡折扣返还',

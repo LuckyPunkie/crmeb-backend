@@ -39,6 +39,20 @@ class MerchantApplymentsRepository extends BaseRepository
 {
 
     /**
+     * 分账商户申请审核状态文案。
+     */
+    private const STATUS_TEXT = [
+        '' => '全部',
+        0 => '待审核',
+        -1 => '平台驳回',
+        10 => '审核中',
+        11 => '店铺验证',
+        20 => '已完成',
+        30 => '已冻结',
+        40 => '微信驳回',
+    ];
+
+    /**
      *  这部分是平台收付通部分定义
      */
     const IDCARD = 'IDENTIFICATION_TYPE_MAINLAND_IDCARD';   //：中国大陆居民-身份证
@@ -465,7 +479,7 @@ class MerchantApplymentsRepository extends BaseRepository
         if (isset($data['addition_info'])) {
             $data['addition_info']['legal_person_commitment'] = $this->extractMediaId($data['addition_info']['legal_person_commitment']);
             $data['addition_info']['legal_person_video'] = $this->extractMediaId($data['addition_info']['legal_person_video']);
-            if ($data['addition_info']['business_addition_pics']) {
+            if (isset($data['addition_info']['business_addition_pics'])) {
                 $data['addition_info']['business_addition_pics'] = $this->extractMediaId($data['addition_info']['business_addition_pics']);
             } else {
                 $data['addition_info']['business_addition_pics'] = [];
@@ -844,6 +858,34 @@ class MerchantApplymentsRepository extends BaseRepository
         $count = $query->count();
         $list = $query->page($page,$limit)->select();
         return compact('count','list');
+    }
+
+    /**
+     * 统计申请记录各审核状态数量。
+     *
+     * @param array $where
+     * @return array
+     */
+    public function getStatusStatistics(array $where): array
+    {
+        unset($where['status']);
+
+        $counts = [];
+        foreach ($this->dao->statusStatistics($where)->toArray() as $row) {
+            $counts[(int)$row['status']] = (int)$row['count'];
+        }
+
+        $statistics = [];
+        foreach (self::STATUS_TEXT as $status => $title) {
+            $status = $status === '' ? '' : (int)$status;
+            $statistics[] = [
+                'status' => $status,
+                'title' => $title,
+                'count' => $status === '' ? array_sum($counts) : ($counts[$status] ?? 0),
+            ];
+        }
+
+        return $statistics;
     }
 
 

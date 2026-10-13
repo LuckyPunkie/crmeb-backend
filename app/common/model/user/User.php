@@ -16,6 +16,7 @@ namespace app\common\model\user;
 
 use app\common\model\BaseModel;
 use app\common\model\delivery\DeliveryService;
+use app\common\model\merchant\MerchantMember;
 use app\common\model\store\service\StoreService;
 use app\common\model\store\staff\Staffs;
 use app\common\model\wechat\WechatUser;
@@ -202,6 +203,12 @@ class User extends BaseModel
         return $this->hasOne(UserFields::class, 'uid', 'uid');
     }
 
+    public function merchantMembers()
+    {
+        return $this->hasMany(MerchantMember::class, 'uid', 'uid')
+            ->where('is_logoff', 0);
+    }
+
     /**
      * @param $spreadUid
      * @author xaboy
@@ -241,7 +248,9 @@ class User extends BaseModel
 
     public function delivery()
     {
-        return $this->hasMany(DeliveryService::class, 'uid', 'uid')->where('status', 1);
+        return $this->hasMany(DeliveryService::class, 'uid', 'uid')
+            ->where('is_del', 0)
+            ->where('is_open', 1);
     }
 
     public function getLockBrokerageAttr()

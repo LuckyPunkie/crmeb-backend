@@ -62,7 +62,7 @@ class StoreProduct extends BaseController
          */
         [$page, $limit] = $this->getPage();
         $type = $this->request->param('type',1);
-        $where = $this->request->params(['temp_id','cate_id','keyword','mer_cate_id','is_gift_bag','status','us_status','product_id','mer_labels',['order','sort'],'is_ficti','svip_price_type','filters_type','is_action']);
+        $where = $this->request->params(['temp_id','cate_id','keyword','mer_cate_id','is_gift_bag','status','us_status','product_id','mer_labels',['order','sort'],'is_ficti','svip_price_type','member_price_setting','filters_type','is_action']);
         $where = array_merge($where,$this->repository->switchType($type,$this->merId,0));
         return app('json')->success($this->repository->getList($this->merId,$where, $page, $limit));
     }
@@ -107,6 +107,7 @@ class StoreProduct extends BaseController
      * @store_info: string 商品简介;
      * @store_name: string 商品名称;
      * @svip_price_type?: number 会员价类型，0不参加，1默认比例，2自定义;
+     * @member_price_setting?: number 会员价方案，0不设置，1付费会员，2店铺会员;
      * @unit_name: string 单位，计量单位，例如：个、kg等;
      * @video_link?: string 视频链接地址;
      * @attr.value: string 规格名，例如尺码;

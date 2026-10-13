@@ -45,4 +45,9 @@ class DeliveryConfig extends BaseModel
     {
         return json_decode($value, true);
     }
+
+    public function getNightPremiumConfigAttr($value)
+    {
+        return json_decode($value, true);
+    }
 }

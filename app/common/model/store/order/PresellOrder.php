@@ -18,6 +18,7 @@ use app\common\model\BaseModel;
 use app\common\model\system\merchant\Merchant;
 use app\common\model\user\User;
 use app\common\repositories\store\order\PresellOrderRepository;
+use crmeb\services\pay\PayAttach;
 
 class PresellOrder extends BaseModel
 {
@@ -77,7 +78,7 @@ class PresellOrder extends BaseModel
                     'sub_mchid' => $this->merchant->sub_mchid,
                 ]
             ],
-            'attach' => 'presell',
+            'attach' => PayAttach::PRESELL,
             'body' => '尾款支付',
         ];
     }
@@ -87,7 +88,7 @@ class PresellOrder extends BaseModel
         $params = [
             'order_sn' => $this->presell_order_sn,
             'pay_price' => $this->pay_price,
-            'attach' => 'presell',
+            'attach' => PayAttach::PRESELL,
             'body' => '尾款支付'
         ];
         if ($return_url) {

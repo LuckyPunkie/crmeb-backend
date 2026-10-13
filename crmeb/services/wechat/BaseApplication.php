@@ -45,7 +45,7 @@ abstract class BaseApplication implements BaseApplicationInterface
      * 访问端
      * @var string
      */
-    protected string $accessEnd = '';
+    protected string $accessEnd = 'wechat';
 
     /**
      *

@@ -76,7 +76,13 @@ class AttachmentRepository extends BaseRepository
         $list = $query->page($page, $limit)->hidden(['user_type', 'user_id'])
             ->select();
 
+        $list->each(function ($item) {
+            if (!isset($item['attachment_cover'])) {
+                $item['attachment_cover'] = '';
+            }
+        });
         $list = getThumbWaterImage($list,['attachment_src'],'mid','','src');
+        $list = getThumbWaterImage($list, ['attachment_cover'], 'mid');
         // 返回查询结果的总条数和分页后的数据列表
         return compact('count', 'list');
     }

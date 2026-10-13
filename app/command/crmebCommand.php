@@ -22,6 +22,10 @@ use think\facade\Db;
 
 class crmebCommand extends Command
 {
+    /**
+     * 配置命令名称及描述（cm_cli 命令集）
+     * @return void
+     */
     protected function configure()
     {
         $this->setName('cm_cli')
@@ -50,9 +54,17 @@ class crmebCommand extends Command
         $context .= $this->get_msage('php think change:hotTop','更新热卖榜单');
         $context .= $this->get_msage('php think update:city','更新城市数据:将需要导入的文件 addres.txt 文件放到项目目录下');
         $context .= $this->get_msage('php think createTool','根据数据表创建新的模块');
+        $context .= $this->get_msage('php think merchant:shopping-credits-refund-query','查询退款中的支付宝购物金退款单');
+        $context .= $this->get_msage('php think merchant:member-level-reward-retry','补发店铺会员入会和升级优惠券');
         $output->info('多商户可使用的命令：'.PHP_EOL.$context);
     }
 
+    /**
+     * 拼接命令帮助信息（命令名与说明，带颜色格式）
+     * @param $name 命令名称
+     * @param $value 命令说明
+     * @return string 格式化后的帮助行文本
+     */
     public function get_msage($name,$value)
     {
         $context = "\e[34m" . str_pad($name, 30, ' ', STR_PAD_RIGHT) .'|    '. "\e[32m" . $value . "\e[0m \n";

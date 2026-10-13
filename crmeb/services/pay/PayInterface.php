@@ -14,7 +14,7 @@ interface PayInterface
 {
     public function pay($type, $order, $openid);
 
-    public function payOrderRefund(string $outTradeNo, array $options = []);
+    public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '');
 
     public function handleNotify();
 }

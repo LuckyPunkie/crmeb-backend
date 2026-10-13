@@ -17,9 +17,11 @@ use app\common\dao\user\UserRechargeDao;
 use app\common\model\user\User;
 use app\common\model\user\UserRecharge;
 use app\common\repositories\BaseRepository;
-use app\common\repositories\wechat\WechatUserRepository;
 use crmeb\jobs\SendSmsJob;
-use crmeb\services\pay\Pay;
+use crmeb\services\pay\dto\PayRefundDto;
+use crmeb\services\pay\factory\UserRechargePayFactory;
+use crmeb\services\pay\PayAttach;
+use crmeb\services\pay\PayServices;
 use think\exception\ValidateException;
 use think\facade\Db;
 use think\facade\Queue;
@@ -143,49 +145,14 @@ class UserRechargeRepository extends BaseRepository
      */
     public function pay(string $type, User $user, UserRecharge $recharge, $return_url = '', $isApp = false)
     {
-        // 根据支付方式和是否为APP环境，调整支付类型
-        if (in_array($type, ['weixin', 'alipay'], true) && $isApp) {
-            $type .= 'App';
-        }
-
         // 触发用户充值前的事件，允许其他功能模块介入
         event('user.recharge.before', compact('user', 'recharge', 'type', 'isApp'));
 
-        // 直接调用 Pay 驱动
-        $pay = app()->make(Pay::class);
-        $orderParams = $recharge->getPayParams($type === 'alipay' ? $return_url : '');
-
-        switch ($type) {
-            case 'weixin':
-                $wechatUserRepo = app()->make(WechatUserRepository::class);
-                $openId = $wechatUserRepo->idByOpenId($user['wechat_user_id']);
-                if (!$openId) throw new ValidateException('请关联微信公众号!');
-                $config = $pay->pay($type, $orderParams, $openId);
-                break;
-            case 'weixinApp':
-                $config = $pay->pay($type, $orderParams, '');
-                break;
-            case 'routine':
-                $wechatUserRepo = app()->make(WechatUserRepository::class);
-                $openId = $wechatUserRepo->idByRoutineId($user['wechat_user_id']);
-                if (!$openId) throw new ValidateException('请关联微信小程序!');
-                $config = $pay->pay($type, $orderParams, $openId);
-                break;
-            case 'alipay':
-                $orderParams['attach'] = 'user_recharge';
-                $orderParams['return_url'] = $return_url;
-                $config = (new Pay('alipay'))->pay($type, $orderParams, '');
-                break;
-            case 'alipayApp':
-                $orderParams['attach'] = 'user_recharge';
-                $config = (new Pay('alipay'))->pay($type, $orderParams, '');
-                break;
-            default:
-                $config = $pay->pay($type, $orderParams, '');
-        }
+        $dto = UserRechargePayFactory::make($type, $user, $recharge, $return_url, $isApp);
+        $config = app()->make(PayServices::class)->pay($dto);
 
         // 返回支付配置，加上充值ID和支付类型，供前端进行支付操作
-        return $config + ['recharge_id' => $recharge['recharge_id'], 'type' => $type];
+        return $config + ['recharge_id' => $recharge['recharge_id'], 'type' => $dto->payType];
     }
 
     /**
@@ -198,14 +165,16 @@ class UserRechargeRepository extends BaseRepository
      * @author xaboy
      * @day 2020/6/19
      */
-    public function paySuccess($orderId)
+    public function paySuccess($data)
     {
+        $orderId = $data['order_sn'];
+        $transaction_id = $data['data']['transaction_id'];
         $recharge = $this->dao->getWhere(['order_id' => $orderId]);
         if ($recharge->paid == 1) return;
         $recharge->paid = 1;
         $recharge->pay_time = date('Y-m-d H:i:s');
 
-        Db::transaction(function () use ($recharge) {
+        Db::transaction(function () use ($recharge,$transaction_id) {
             $price = bcadd($recharge->price, $recharge->give_price, 2);
             $mark = '成功充值余额' . floatval($recharge->price) . '元' . ($recharge->give_price > 0 ? ',赠送' . $recharge->give_price . '元' : '');
             app()->make(UserBillRepository::class)->incBill($recharge->user->uid, 'now_money', 'recharge', [
@@ -218,6 +187,8 @@ class UserRechargeRepository extends BaseRepository
             ]);
             $recharge->user->now_money = bcadd($recharge->user->now_money, $price, 2);
             $recharge->user->save();
+            $recharge->transaction_id = $transaction_id;
+            $recharge->status = 1;
             $recharge->save();
         });
         Queue::push(SendSmsJob::class,['tempId' => 'USER_BALANCE_CHANGE', 'id' =>$orderId]);
@@ -226,5 +197,127 @@ class UserRechargeRepository extends BaseRepository
         event('mini_order_shipping', ['recharge', $recharge, 3, '', '']);
 
         event('user.recharge',compact('recharge'));
+    }
+
+    /**
+     * 后台充值订单原路退款
+     * @param int $id
+     * @param float $refundPrice
+     * @return void
+     */
+    public function refund(int $id, float $refundPrice)
+    {
+        if ($refundPrice <= 0) {
+            throw new ValidateException('请输入正确的退款金额');
+        }
+        $refundPrice = sprintf('%.2f', $refundPrice);
+
+        /** @var UserRecharge|null $recharge */
+        $recharge = UserRecharge::getDB()->where('recharge_id', $id)->find();
+        if (!$recharge) {
+            throw new ValidateException('充值订单不存在');
+        }
+        if (!$recharge->paid) {
+            throw new ValidateException('未支付的充值订单不能退款');
+        }
+        if ((int)($recharge->status ?? 0) === -1) {
+            throw new ValidateException('该充值订单已退款');
+        }
+        if (!in_array($recharge->recharge_type, ['weixin', 'wechat', 'routine', 'h5', 'weixinQr', 'alipay', 'alipayQr'], true)) {
+            throw new ValidateException('当前充值方式不支持原路退款');
+        }
+        if (bccomp($refundPrice, $recharge->price, 2) === 1) {
+            throw new ValidateException('退款金额不能超过充值金额');
+        }
+
+        $refundedPrice = $recharge->refund_price ?: '0.00';
+        $remainingPrice = bcsub($recharge->price, $refundedPrice, 2);
+        if (bccomp($remainingPrice, '0.00', 2) <= 0) {
+            throw new ValidateException('该充值订单已全部退款');
+        }
+        if (bccomp($refundPrice, $remainingPrice, 2) === 1) {
+            throw new ValidateException('退款金额不能超过剩余可退金额');
+        }
+
+        $user = User::getDB()->where('uid', $recharge->uid)->find();
+        if (!$user) {
+            throw new ValidateException('用户不存在');
+        }
+
+        $refundData = [
+            'recharge_id' => $recharge->recharge_id,
+            'uid' => $recharge->uid,
+            'recharge_type' => $recharge->recharge_type,
+            'order_id' => $recharge->order_id,
+            'transaction_id' => $recharge->transaction_id,
+            'price' => $recharge->price,
+            'give_price' => $recharge->give_price,
+            'refund_price' => $refundPrice,
+            'refund_id' => 'URR' . $recharge->recharge_id . $recharge->order_id,
+        ];
+
+        try {
+            $refundDto = PayRefundDto::fromPayType($refundData['recharge_type'], $refundData['order_id'], [
+                'attach' => PayAttach::USER_RECHARGE,
+                'refund_id' => $refundData['refund_id'],
+                'refund_no' => $refundData['refund_id'],
+                'pay_price' => $refundData['price'],
+                'refund_price' => $refundData['refund_price'],
+                'transaction_id' => $refundData['transaction_id'],
+                'recharge_type' => $refundData['recharge_type'],
+            ]);
+            app()->make(PayServices::class)->refund($refundDto);
+        } catch (\Throwable $e) {
+            $message = $e->getMessage();
+            if ($message === '' || preg_match('//u', $message) !== 1 || stripos($message, 'Malformed UTF-8') !== false) {
+                $message = '原路退款失败';
+            }
+            throw new ValidateException($message);
+        }
+
+        Db::transaction(function () use ($refundData) {
+            /** @var UserRecharge|null $recharge */
+            $recharge = UserRecharge::getDB()->where('recharge_id', $refundData['recharge_id'])->lock(true)->find();
+            if (!$recharge) {
+                throw new ValidateException('充值订单不存在');
+            }
+            if ((int)($recharge->status ?? 0) === -1) {
+                throw new ValidateException('该充值订单已退款');
+            }
+
+            $refundedPrice = $recharge->refund_price ?: '0.00';
+            $remainingPrice = bcsub($recharge->price, $refundedPrice, 2);
+            if (bccomp($remainingPrice, $refundData['refund_price'], 2) === -1) {
+                throw new ValidateException('退款金额不能超过剩余可退金额');
+            }
+
+            $user = User::getDB()->where('uid', $refundData['uid'])->lock(true)->find();
+            if (!$user) {
+                throw new ValidateException('用户不存在');
+            }
+            $deductPrice = bcadd(
+                $refundData['refund_price'],
+                bccomp($refundedPrice, '0.00', 2) === 0 ? $refundData['give_price'] : '0.00',
+                2
+            );
+            $actualDeductPrice = bccomp($user->now_money, $deductPrice, 2) === -1 ? $user->now_money : $deductPrice;
+            $balance = bcsub($user->now_money, $actualDeductPrice, 2);
+            $user->save(['now_money' => $balance]);
+            $recharge->refund_price = bcadd($refundedPrice, $refundData['refund_price'], 2);
+            $recharge->status = -1;
+            $recharge->save();
+
+            if (bccomp($actualDeductPrice, '0.00', 2) === 1) {
+                app()->make(UserBillRepository::class)->decBill($user->uid, 'now_money', 'sys_dec_money', [
+                    'link_id' => $refundData['recharge_id'],
+                    'status' => 1,
+                    'title' => '充值退款扣除余额',
+                    'number' => $actualDeductPrice,
+                    'mark' => '充值订单退款，扣除余额' . floatval($actualDeductPrice) . '元' .
+                        (bccomp($actualDeductPrice, $deductPrice, 2) === -1 ? '，余额不足已扣至0' : ''),
+                    'balance' => $balance
+                ]);
+            }
+        });
     }
 }

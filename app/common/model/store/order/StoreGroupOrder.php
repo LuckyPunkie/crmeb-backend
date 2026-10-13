@@ -17,6 +17,7 @@ namespace app\common\model\store\order;
 use app\common\model\BaseModel;
 use app\common\model\user\User;
 use app\common\repositories\store\coupon\StoreCouponRepository;
+use crmeb\services\pay\PayAttach;
 
 class StoreGroupOrder extends BaseModel
 {
@@ -75,7 +76,7 @@ class StoreGroupOrder extends BaseModel
         $params = [
             'order_sn' => $this->group_order_sn,
             'sub_orders' => [],
-            'attach' => 'order',
+            'attach' => PayAttach::STORE_ORDER,
             'body' => '订单支付',
         ];
         foreach ($this->orderList as $order) {
@@ -96,7 +97,7 @@ class StoreGroupOrder extends BaseModel
         $params = [
             'order_sn' => $this->group_order_sn,
             'sub_orders' => [],
-            'attach' => 'order',
+            'attach' => PayAttach::STORE_ORDER,
             'body' => '订单支付',
             'authCode' => $authCode,
         ];
@@ -114,7 +115,7 @@ class StoreGroupOrder extends BaseModel
         $params = [
             'order_sn' => $this->group_order_sn,
             'pay_price' => $this->pay_price,
-            'attach' => 'order',
+            'attach' => PayAttach::STORE_ORDER,
             'body' => '订单支付'
         ];
         if ($return_url) {

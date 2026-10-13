@@ -40,14 +40,14 @@ return [
              */
 
             //自动分账
-             \crmeb\listens\AutoOrderProfitsharingListen::class,
-             \crmeb\listens\AutoOrderProfitsharingStatusListen::class,
+            \crmeb\listens\AutoOrderProfitsharingListen::class,
+            \crmeb\listens\AutoOrderProfitsharingStatusListen::class,
             //自动收货，用户未确认收货，超过15天未确认收货，自动确认收货
-             \crmeb\listens\AuthTakeOrderListen::class,
+            \crmeb\listens\AuthTakeOrderListen::class,
             //取消订单，未支付的订单自动取消
-             \crmeb\listens\AutoCancelGroupOrderListen::class,
+            \crmeb\listens\AutoCancelGroupOrderListen::class,
             // 取消预售订单，自动取消
-             \crmeb\listens\AuthCancelPresellOrderListen::class,
+            \crmeb\listens\AuthCancelPresellOrderListen::class,
             // 自动解冻佣金
              \crmeb\listens\AutoUnLockBrokerageListen::class,
             // 礼物收益 7 天后解冻
@@ -59,60 +59,70 @@ return [
             // 媒体内容审核超时未回调，按服务不可用放行
              \crmeb\listens\ReleaseStaleMediaCheckListen::class,
             // 自动发送短信提醒用户支付 10分钟未支付提醒
-             \crmeb\listens\AutoSendPayOrderSmsListen::class,
+            \crmeb\listens\AutoSendPayOrderSmsListen::class,
             //自动同步短信状态
-             \crmeb\listens\SyncSmsResultCodeListen::class,
+            \crmeb\listens\SyncSmsResultCodeListen::class,
             // 自动同步直播间状态，直播间同步监听，未开启可删除次行
             // \crmeb\listens\SyncBroadcastStatusListen::class,
             //商户长时间未处理退款订单，自动退款
-             \crmeb\listens\RefundOrderAgreeListen::class,
+            \crmeb\listens\RefundOrderAgreeListen::class,
             // 自动检测秒杀商品状态
-             \crmeb\listens\SeckillTImeCheckListen::class,
+            \crmeb\listens\SeckillTImeCheckListen::class,
             // 自动评价商品
-             \crmeb\listens\AutoOrderReplyListen::class,
+            \crmeb\listens\AutoOrderReplyListen::class,
             // 预售商品状态检测
-             \crmeb\listens\ProductPresellStatusListen::class,
+            \crmeb\listens\ProductPresellStatusListen::class,
             //检测拼团状态，团队是否成功和超时等
-             \crmeb\listens\ProductGroupStatusCheckListen::class,
+            \crmeb\listens\ProductGroupStatusCheckListen::class,
             //同步分销员状态
-             \crmeb\listens\SyncSpreadStatusListen::class,
+            \crmeb\listens\SyncSpreadStatusListen::class,
             // 保障服务使用数量统计
-             \crmeb\listens\GuaranteeCountListen::class,
+            \crmeb\listens\GuaranteeCountListen::class,
             // 自动解冻积分
-             \crmeb\listens\AutoUnLockIntegralListen::class,
+            \crmeb\listens\AutoUnLockIntegralListen::class,
             // 自动清空积分
-             \crmeb\listens\AutoClearIntegralListen::class,
+            \crmeb\listens\AutoClearIntegralListen::class,
             // 自动分账，商户入驻申请状态同步
-             \crmeb\listens\MerchantApplyMentsCheckListen::class,
+            \crmeb\listens\MerchantApplyMentsCheckListen::class,
              //\crmeb\listens\MerchantApplyMentsRatekListen::class,
             // 自动解冻商户金额
-             \crmeb\listens\AutoUnlockMerchantMoneyListen::class,
+            \crmeb\listens\AutoUnlockMerchantMoneyListen::class,
             // 自动同步社区话题热度
              \crmeb\listens\SumCountListen::class,
             // 同步热卖排行商品
-             \crmeb\listens\SyncHotRankingListen::class,
+            \crmeb\listens\SyncHotRankingListen::class,
             // 检测活动状态（氛围图/活动边框/系统表单）
-             \crmeb\listens\AuthCancelActivityListen::class,
+            \crmeb\listens\AuthCancelActivityListen::class,
             // 自动关闭用户到期付费会员
-             \crmeb\listens\CloseUserSvipListen::class,
+            \crmeb\listens\CloseUserSvipListen::class,
              // 自动发送付费会员优惠券
-             \crmeb\listens\SendSvipCouponListen::class,
+            \crmeb\listens\SendSvipCouponListen::class,
              // 自动同步商户保证金状态
-             \crmeb\listens\SyncMerchantMarginStatusListen::class,
+            \crmeb\listens\SyncMerchantMarginStatusListen::class,
             // 检查队列状态
-             \crmeb\listens\SyncQueueStatusListen::class,
+            \crmeb\listens\SyncQueueStatusListen::class,
             // 定时上下架监听
-             \crmeb\listens\AutoUpDownShelvesListen::class,
+            \crmeb\listens\AutoUpDownShelvesListen::class,
              // 代客下单扫码枪支付订单结果查询
-             \crmeb\listens\pay\BarCodePayStatusListen::class,
+            \crmeb\listens\pay\BarCodePayStatusListen::class,
+            //次卡过期监听
+            \crmeb\listens\ValidateCardEndTimeListen::class,
+            //重试购物金退款中的订单，兼容支付宝无退款回调场景
+            \crmeb\listens\RetryMerchantShoppingCreditsRefundListen::class,
+            //补发失败的店铺会员入会和升级优惠券
+            \crmeb\listens\RetryMerchantMemberLevelRewardListen::class
         ] : [],
         // 支付相关回调 处理逻辑
         'pay_success_user_recharge' => [\crmeb\listens\pay\UserRechargeSuccessListen::class],
+        'pay_success_merchant_shopping_credits' => [\crmeb\listens\pay\MerchantShoppingCreditsSuccessListen::class],
+        'pay.refunded.notify' => [\crmeb\listens\pay\MerchantShoppingCreditsRefundListen::class],
         'pay_success_user_order' => [\crmeb\listens\pay\UserOrderSuccessListen::class],
-        'pay_success_order' => [\crmeb\listens\pay\OrderPaySuccessListen::class],
         'pay_success_presell' => [\crmeb\listens\pay\PresellPaySuccessListen::class],
+        'pay_success_order' => [\crmeb\listens\pay\OrderPaySuccessListen::class],
         'pay_success_meal' => [\crmeb\listens\pay\MealSuccessListen::class],
-        // 附近好店买单支付回调
+        // 附近好店买单等自定义支付回调。
+        // 官方 v4.2 起微信 V3 回调改为直接触发 pay_success_{attach}，不再触发 pay.notify；
+        // 下列监听器均同时注册在各自的 pay_success_{attach} 上，这里保留仅为兼容旧回调格式。
         'pay.notify' => [
             \crmeb\listens\pay\NearbyBillPayNotifyListen::class,
             \crmeb\listens\pay\NearbyCouponBuyPaySuccessListen::class,
@@ -147,13 +157,14 @@ return [
             \crmeb\listens\pay\WelfareFreePaySuccessListen::class,
             \crmeb\listens\pay\EquityConsumePaySuccessListen::class,
         ],
+        // 商家转帐到零钱状态处理事件
+        'company_extract_status' => [\crmeb\listens\CompanyExtractStatusListen::class],
+        // 小程序发货管理事件
+        'mini_order_shipping' => [\crmeb\listens\MiniOrderShippingListen::class],
         //数据大屏
         'data.screen.send' =>[\crmeb\listens\DataScreenListen::class],
         //操作日志
-        'create_operate_log' => [\crmeb\listens\CreateOperateLogListen::class],  // 操作日志事件
-        'mini_order_shipping' => [\crmeb\listens\MiniOrderShippingListen::class],  // 小程序发货管理事件
-        // 商家转帐到零钱状态处理事件
-        'company_extract_status' => [\crmeb\listens\CompanyExtractStatusListen::class]
+        'create_operate_log' => [\crmeb\listens\CreateOperateLogListen::class],
     ],
 
     'subscribe' => [],

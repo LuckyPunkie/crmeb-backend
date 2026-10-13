@@ -26,7 +26,7 @@ Route::group(config('admin.api_openapi_prefix') . '/', function () {
             include $path . DIRECTORY_SEPARATOR . $file;
         }
     }
-        Route::miss(function () {
+    Route::miss(function () {
         return app('json')->fail('接口不存在');
     })->middleware(AllowOriginMiddleware::class);
 

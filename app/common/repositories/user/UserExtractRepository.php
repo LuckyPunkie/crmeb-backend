@@ -300,12 +300,14 @@ class UserExtractRepository extends BaseRepository
                         $openid = $wechatUserRepo->idByOpenId((int)$user['wechat_user_id']);
                         $channel_type = $openid ? 'wechat' : 'routine';
                         if (!$openid) {
-                            if (!$wechatUserRepo->idByRoutineId((int)$user['wechat_user_id'])) {
+                            $openid = $wechatUserRepo->idByRoutineId((int)$user['wechat_user_id']);
+                            if (!$openid) {
                                 throw new ValidateException('非微信用户不支持付款到零钱');
                             }
                         }
                         $ret = [
                             'channel_type' => $channel_type,
+                            'openid'       => $openid,
                             'uid'          => $user->uid,
                             'sn'           => $extract['extract_sn'],
                             'price'        => $extract['extract_price'],
@@ -350,7 +352,7 @@ class UserExtractRepository extends BaseRepository
                     // 微信转账：走 Payment::merchantPay() 静态方法
                     $res = Payment::merchantPay(
                         $ret['channel_type'],
-                        $ret['uid'],
+                        $ret['openid'],
                         $ret['sn'],
                         $ret['price'],
                         $ret['mark'],
@@ -513,7 +515,7 @@ class UserExtractRepository extends BaseRepository
             }
             $res = $this->dao->update($info['extract_id'], $extractData);
             if(!$res) {
-                Log::info('商家提现记录变更：提现记录状态变更失败。params：'.json_encode($params),'，res：'.json_encode($res));
+                Log::info('商家提现记录变更：提现记录状态变更失败。params：' . json_encode($params) . '，res：' . json_encode($res));
                 return false;
             };
         });
@@ -521,5 +523,14 @@ class UserExtractRepository extends BaseRepository
 
         Log::info('商家提现记录变更：提现记录状态变更成功,id：'.$info['extract_id'].'，status：'.$params['data']['state']);
         return true;
+    }
+
+    public function confrim($id)
+    {
+        $res = $this->dao->get($id);
+        if ($res && $res->status == 2) {
+            $res->status = 1;
+            $res->save();
+        }
     }
 }

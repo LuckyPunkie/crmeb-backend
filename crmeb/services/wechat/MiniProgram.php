@@ -1023,13 +1023,14 @@ class MiniProgram extends BaseApplication
     /**
      * 签收通知
      * @param string $merchant_trade_no
-     * @param string $received_time
+     * @param int $received_time
+     * @param string $sub_mchid
      * @return array
      * @throws TransportExceptionInterface
      */
-    public static function notifyConfirmByTradeNo(string $merchant_trade_no, string $received_time)
+    public static function notifyConfirmByTradeNo(string $merchant_trade_no, int $received_time, string $sub_mchid = '')
     {
-        return self::instance()->order()->notifyConfirmByTradeNo($merchant_trade_no, $received_time);
+        return self::instance()->order()->notifyConfirmByTradeNo($merchant_trade_no, $received_time, $sub_mchid);
     }
 
     /**

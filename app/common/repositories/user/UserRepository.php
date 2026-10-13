@@ -361,8 +361,8 @@ class UserRepository extends BaseRepository
         $count = $query->count();
 
         // 依据当前页码和每页记录数，从查询结果中获取指定页的用户信息
-        // 这里指定了只返回uid、nickname和avatar这三个字段
-        $list = $query->page($page, $limit)->setOption('field', [])->field('uid,nickname,avatar')->select();
+        // 仅返回用户基础信息、手机号和注册时间
+        $list = $query->page($page, $limit)->setOption('field', [])->field('uid,nickname,avatar,phone,user_type,create_time')->select();
 
         // 将总数和用户列表打包成数组返回
         return compact('count', 'list');
@@ -2277,18 +2277,36 @@ class UserRepository extends BaseRepository
         $user = $this->dao->get($id);
         // 根据类型确定字段名
         $field = $type ? 'member_level' : 'brokerage_level';
-        // 如果新旧级别相同，则不更新并返回true
-        if ($data[$field] == $user->$field) return true;
-        // 检查新级别是否存在
-        $bro = $make->getWhere(['brokerage_level' => $data[$field], 'type' => $type]);
-        if (!$bro && $return) {
-            throw new ValidateException('等级不存在');
+        if (!$user) {
+            if ($return) {
+                throw new ValidateException('用户不存在');
+            }
+            return false;
         }
+        if (!array_key_exists($field, $data)) {
+            if ($return) {
+                throw new ValidateException('等级参数错误');
+            }
+            return $user->$field;
+        }
+        $oldLevel = $user->$field;
+        $newLevel = $data[$field];
+        // 如果新旧级别相同，则不更新并返回true
+        if ($newLevel == $oldLevel) return $return ? true : $oldLevel;
+        // 检查新级别是否存在
+        $bro = $make->getWhere(['brokerage_level' => $newLevel, 'type' => $type]);
+        if (!$bro) {
+            if ($return) {
+                throw new ValidateException('等级不存在');
+            }
+            return $oldLevel;
+        }
+        $oldBro = $make->getWhere(['brokerage_level' => $oldLevel, 'type' => $type]);
         // 使用数据库事务处理更新操作
-        Db::transaction(function () use ($id, $data, $field, $user, $type, $bro) {
+        Db::transaction(function () use ($id, $field, $user, $type, $bro, $oldBro, $newLevel) {
             // 更新用户级别
-            $user->$field = $data[$field];
-            $bro->user_num++;
+            $user->$field = $newLevel;
+            $bro->user_num = (int)$bro->user_num + 1;
             $bro->save();
             // 如果是更新会员级别
             if ($type) {
@@ -2300,13 +2318,17 @@ class UserRepository extends BaseRepository
                     'status' => 0,
                     'mark' => '平台修改等级清除成长值' . ':' . $user->member_value,
                 ]);
-                $user->member->user_num--;
-                $user->member->save();
+                if ($oldBro && $oldBro->user_num > 0) {
+                    $oldBro->user_num = (int)$oldBro->user_num - 1;
+                    $oldBro->save();
+                }
 
                 $user->member_value = 0;
             } else {
-                $user->brokerage->user_num--;
-                $user->brokerage->save();
+                if ($oldBro && $oldBro->user_num > 0) {
+                    $oldBro->user_num = (int)$oldBro->user_num - 1;
+                    $oldBro->save();
+                }
 
             }
             // 保存用户更新
@@ -2314,6 +2336,7 @@ class UserRepository extends BaseRepository
             // 如果是更新代理级别，删除相关的代理佣金记录
             if ($type == 0) app()->make(UserBillRepository::class)->search(['category' => 'sys_brokerage'])->where('uid', $id)->delete();
         });
+        return $return ? true : $newLevel;
     }
 
     /**
@@ -2990,7 +3013,11 @@ class UserRepository extends BaseRepository
         // 根据条件初始化查询
         $query = $this->dao->search($where);
         if(isset($search)) {
-            $query->where('User.uid|User.nickname|User.phone', 'LIKE', '%' . $search . '%');
+            //$query->where(function($query) use($search){
+            //    $query->where('User.uid|User.nickname', 'LIKE', '%' . $search . '%')
+            //        ->whereOr('User.phone',$search);
+            //});
+            $query->where('User.phone',$search);
         }
 
         // 计算总条数

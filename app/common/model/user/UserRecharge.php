@@ -15,6 +15,7 @@ namespace app\common\model\user;
 
 
 use app\common\model\BaseModel;
+use crmeb\services\pay\PayAttach;
 
 /**
  * Class UserRecharge
@@ -60,7 +61,7 @@ class UserRecharge extends BaseModel
         $params = [
             'order_sn' => $this->order_id,
             'pay_price' => $this->price,
-            'attach' => 'user_recharge',
+            'attach' => PayAttach::USER_RECHARGE,
             'body' => '用户充值'
         ];
         if ($return_url) {

@@ -572,17 +572,17 @@ class StoreActivityRepository extends BaseRepository
      * @param StoreActivity $activity 活动对象，包含活动的相关信息，如活动ID
      * @return string 返回生成的微信活动二维码的路径
      */
-    public function wxQrcode(int $uid, StoreActivity $activity)
+    public function wxQrcode(int $uid, $id)
     {
         // 生成二维码文件名，基于用户ID、活动ID和当前日期，确保唯一性
-        $name = md5('wxactform_i' . $uid . $activity['activity_id'] . date('Ymd')) . '.jpg';
+        $name = md5('wxactform_i' . $uid .$id . date('Ymd')) . '.jpg';
 
         // 构建二维码的key值，用于存储和检索
-        $key = 'form_' . $activity['activity_id'] . '_' . $uid;
+        $key = 'form_' . $id. '_' . $uid;
 
         // 调用二维码服务类，生成微信小程序二维码，并返回二维码的路径
         // 参数包括二维码文件名、二维码指向的URL、是否使用代理以及存储的key
-        return app()->make(QrcodeService::class)->getWechatQrcodePath($name, '/pages/activity/registrate_activity/index?id=' . $activity['activity_id'] . '&spid=' . $uid, false, $key);
+        return app()->make(QrcodeService::class)->getWechatQrcodePath($name, '/pages/activity/registrate_activity/index?id=' . $id . '&spid=' . $uid, false, $key);
     }
 
     /**
@@ -595,14 +595,14 @@ class StoreActivityRepository extends BaseRepository
      * @param StoreActivity $activity 活动对象，包含活动相关信息，如活动ID，用于生成二维码链接。
      * @return string 返回生成的二维码路径，供后续展示或下载使用。
      */
-    public function mpQrcode(int $uid, StoreActivity $activity)
+    public function mpQrcode(int $uid, $id)
     {
         // 生成二维码文件名，包含UID、活动ID和当前日期，确保唯一性，并指定文件类型为jpg。
-        $name = md5('mpactform_i' . $uid . $activity['activity_id'] . date('Ymd')) . '.jpg';
+        $name = md5('mpactform_i' . $uid . $id . date('Ymd')) . '.jpg';
 
         // 调用二维码服务类，生成小程序二维码，指定二维码路径、目标页面和参数。
         // 这里的参数用于在打开小程序页面时传递活动ID和用户ID，用于识别和绑定用户活动关系。
-        return app()->make(QrcodeService::class)->getRoutineQrcodePath($name, 'pages/activity/registrate_activity/index', 'id=' . $activity['activity_id'] . 'spid=' . $uid);
+        return app()->make(QrcodeService::class)->getRoutineQrcodePath($name, 'pages/activity/registrate_activity/index', 'id=' . $id . '&spid=' . $uid);
     }
 
     /**

@@ -55,16 +55,17 @@ class Common extends BaseController
      */
     public function main()
     {
-        $res = Cache::remember(self::class . '@sysmain', function () {
+        $res = Cache::remember(self::class . '@sysmain:v2', function () {
             $today = $this->mainGroup('today');
             $yesterday = $this->mainGroup('yesterday');
             $month = $this->mainGroup('month');
             $lastWeek = $this->mainGroup(date('Y-m-d', strtotime('- 7day')));
+            $storeTotalNum = app()->make(MerchantRepository::class)->totalMerchantNum();
             $lastWeekRate = [];
             foreach ($lastWeek as $k => $item) {
                 $lastWeekRate[$k] = $this->getRate($item, $today[$k], 4);
             }
-            return compact('today', 'yesterday', 'lastWeekRate','month');
+            return compact('today', 'yesterday', 'lastWeekRate', 'month', 'storeTotalNum');
         }, 1800 + random_int(600, 1200));
         return app('json')->success($res);
     }
@@ -95,10 +96,10 @@ class Common extends BaseController
         $merchantRepository = app()->make(MerchantRepository::class);
         $userVisitRepository = app()->make(UserVisitRepository::class);
         $payPrice = (float)$storeOrderRepository->dayOrderPrice($date);
-        $userNum = (float)$userRepository->newUserNum($date);
-        $storeNum = (float)$merchantRepository->dateMerchantNum($date);
-        $visitUserNum = (float)$userVisitRepository->dateVisitUserNum($date);
-        $visitNum = (float)$userVisitRepository->dateVisitNum($date);
+        $userNum = (int)$userRepository->newUserNum($date);
+        $storeNum = (int)$merchantRepository->dateMerchantNum($date);
+        $visitUserNum = (int)$userVisitRepository->dateVisitUserNum($date);
+        $visitNum = (int)$userVisitRepository->dateVisitNum($date);
 
         return compact('payPrice', 'userNum', 'storeNum', 'visitUserNum', 'visitNum');
     }
@@ -424,7 +425,7 @@ class Common extends BaseController
 
     public function config()
     {
-        $config = systemConfig(['delivery_type', 'delivery_status', 'sms_use_type', 'hot_ranking_lv', 'hot_ranking_switch']);
+        $config = systemConfig(['delivery_type', 'delivery_status', 'sms_use_type', 'hot_ranking_lv', 'hot_ranking_switch','category_number_count']);
         return app('json')->success($config);
     }
 
@@ -612,4 +613,3 @@ class Common extends BaseController
 
 
 }
-

@@ -60,5 +60,9 @@ return [
         'user:backfill_code' => 'app\command\BackfillUserCode',
         // 大客户卡：虚拟充值 / 折扣返还 / 预存周更
         'major_customer:cron' => 'app\command\MajorCustomerCron',
+        //查询退款中的支付宝购物金退款单
+        'merchant:shopping-credits-refund-query' => 'app\command\QueryShoppingCreditsRefund',
+        //补发店铺会员入会和升级优惠券
+        'merchant:member-level-reward-retry' => 'app\command\RetryMerchantMemberLevelReward',
     ],
 ];

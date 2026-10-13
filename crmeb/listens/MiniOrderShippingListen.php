@@ -21,10 +21,15 @@ use think\facade\Queue;
  */
 class MiniOrderShippingListen implements ListenerInterface
 {
+    /**
+     * 小程序发货信息管理事件处理：校验发货服务开关与订单数据后，投递发货信息队列任务
+     * @param $event 事件数据（订单类型、订单、配送方式、配送单号、配送公司、子商户号）
+     * @return void
+     */
     public function handle($event): void
     {
-        [$order_type, $order, $delivery_type, $delivery_id, $delivery_name] = $event;
-        $sub_mchid = $event[5] ?? '';
+        $event = array_pad((array)$event, 6, '');
+        [$order_type, $order, $delivery_type, $delivery_id, $delivery_name, $sub_mchid] = $event;
         $order_shipping_open = systemConfig('order_shipping_open', 0);  // 小程序发货信息管理服务开关
         if (empty($order) || !$order_shipping_open) {
             return;
@@ -32,15 +37,24 @@ class MiniOrderShippingListen implements ListenerInterface
         try {
             $this->pushDeliveryMiniOrder($order_type, $order, $delivery_type, $delivery_id, $delivery_name, $sub_mchid);
         } catch (\Exception $exception) {
-            Log::error([
-                'title' => '小程序发发货管理异常',
+            Log::error('小程序发货管理异常：' . json_encode([
                 'message' => $exception->getMessage(),
                 'file' => $exception->getFile(),
                 'line' => $exception->getLine()
-            ]);
+            ], JSON_UNESCAPED_UNICODE));
         }
     }
 
+    /**
+     * 按订单类型整理发货信息并投递小程序发货信息队列（支持商品/充值/会员订单及拆单处理）
+     * @param $order_type 订单类型：product、recharge、member
+     * @param $order 订单数据
+     * @param int $delivery_type 配送方式类型（1发货/2送货/3虚拟/4电子面单/5同城/6卡密/7自提/8商家寄件）
+     * @param string $delivery_id 配送单号
+     * @param string $delivery_name 配送公司名称
+     * @param string $sub_mchid 子商户号
+     * @return bool|void 非小程序订单直接返回false
+     */
     public function pushDeliveryMiniOrder($order_type, $order, $delivery_type = 1, $delivery_id = '', $delivery_name = '', $sub_mchid = '')
     {
         $secs = 0;
@@ -95,12 +109,16 @@ class MiniOrderShippingListen implements ListenerInterface
                 $path = '/pages/users/user_bill/index';
                 break;
             case 'member':
-                if ($order['pay_type'] != 'routine' && $order['pay_price'] <= 0) {
+                if ($order['pay_type'] !== 'routine' || (float)$order['pay_price'] <= 0) {
                     return false;
                 }
-                $order_id = $order['order_sn'];
+                $order_id = (string)$order['order_sn'];
+                if ($order_id === '') {
+                    throw new ValidateException('会员订单号不能为空');
+                }
                 $delivery_type = 3;
-                $item_desc = '用户购买' . $order['member_type'] . '会员卡';
+                $member_title = trim((string)($order['title'] ?? ''));
+                $item_desc = $member_title === '' ? '付费会员' : '付费会员-' . $member_title;
                 $out_trade_no = $order_id;
                 $secs = 60;
                 $path = '/pages/annex/vip_center/index';

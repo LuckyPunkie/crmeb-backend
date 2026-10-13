@@ -25,6 +25,10 @@ use think\model\Relation;
 class StoreCartDao extends BaseDao
 {
 
+    /**
+     * 获取购物车模型类名
+     * @return string 购物车模型类名
+     */
     protected function getModel(): string
     {
         return StoreCart::class;
@@ -79,11 +83,11 @@ class StoreCartDao extends BaseDao
             ->with([
                 // 加载商品相关信息，包括商品基础信息和库存价格等
                 'product' => function ($query) {
-                    $query->field('product_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,is_used,product_type,once_max_count,once_min_count,pay_limit,mer_svip_status,svip_price_type,pay_limit,once_max_count,once_min_count');
+                    $query->field('product_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,is_used,product_type,once_max_count,once_min_count,pay_limit,mer_svip_status,svip_price_type,member_price_setting,is_price_negotiable,price_negotiable_text');
                 },
                 // 加载商品属性信息，包括SKU和特殊价格等
                 'productAttr' => function ($query) {
-                    $query->field('product_id,stock,price,unique,sku,image,svip_price,bar_code');
+                    $query->field('value_id,product_id,stock,price,unique,sku,image,svip_price,bar_code');
                 },
                 // 注释掉的商家信息加载部分，可能用于未来扩展
 //                'merchant' => function ($query) {
@@ -121,7 +125,7 @@ class StoreCartDao extends BaseDao
         return StoreCart::getDb()->where('uid', $uid)->with([
             // 获取商品基本信息，包括产品ID、分类ID、图片、商店名称等
             'product' => function ($query) use ($address) {
-                $query->field('product_id,mer_id,cate_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,temp_id,give_coupon_ids,is_gift_bag,is_used,product_type,old_product_id,integral_rate,delivery_way,delivery_free,type,extend,pay_limit,once_max_count,once_min_count,mer_svip_status,svip_price_type,refund_switch,mer_form_id,active_id,activity_label_ids');
+                $query->field('product_id,mer_id,cate_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,temp_id,give_coupon_ids,is_gift_bag,is_used,product_type,old_product_id,integral_rate,delivery_way,delivery_free,type,extend,pay_limit,once_max_count,once_min_count,mer_svip_status,svip_price_type,member_price_setting,refund_switch,mer_form_id,active_id,activity_label_ids,is_price_negotiable,price_negotiable_text');
                 $query->with([
                     'storeCategory' => function ($query) {
                         $query->field('store_category_id,cate_name,path');
@@ -181,6 +185,13 @@ class StoreCartDao extends BaseDao
         ])->whereIn('cart_id', $ids)->order('product_type DESC,cart_id DESC')->select();
     }
 
+    /**
+     * 根据购物车ID与用户ID查询购物车商品列表，并批量加载对应的配送模板信息
+     * @param array $ids 购物车ID列表
+     * @param int $uid 用户ID
+     * @param array $cityIds 城市ID列表，用于匹配配送模板
+     * @return \think\Collection 购物车商品集合，商品对象附带配送模板数据
+     */
     public function getCartItemsByIds(array $ids, int $uid, $cityIds = [])
     {
         if (!$ids && !$uid) return ;
@@ -199,6 +210,12 @@ class StoreCartDao extends BaseDao
         return $cartItems;
     }
 
+    /**
+     * 批量加载购物车商品对应的配送模板（含配送区域、包邮、不配送区域），并挂载到商品对象上
+     * @param \think\Collection $cartItems 购物车商品集合
+     * @param array $cityIds 城市ID列表，用于匹配模板的配送区域
+     * @return void
+     */
     private function batchLoadShippingTemplates($cartItems, array $cityIds)
     {
         if (empty($cityIds)) {

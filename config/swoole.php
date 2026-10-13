@@ -72,7 +72,7 @@ if (strtolower(substr(PHP_OS, 0, 3)) === 'win') {
             ],
         ],
         'queue'      => [
-            'enable'  => env('APP_DEBUG', true),
+            'enable'  => true,
             'workers' => [
                 env('queue_name', 'default') . '@redis' => [
                     'worker_num' => (int)env('SWOOLE_QUEUE_WORKER_NUM', 1),
@@ -96,7 +96,7 @@ if (strtolower(substr(PHP_OS, 0, 3)) === 'win') {
             ],
         ],
         'hot_update' => [
-            'enable'  => env('SWOOLE_HOT_UPDATE', false),
+            'enable'  => env('APP_DEBUG', false),
             'name'    => ['*.php'],
             'include' => [app_path(), root_path('crmeb')],
             'exclude' => [],

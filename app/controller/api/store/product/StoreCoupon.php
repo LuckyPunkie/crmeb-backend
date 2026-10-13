@@ -173,6 +173,29 @@ class StoreCoupon extends BaseController
     }
 
     /**
+     * 按优惠券ID集合批量获取指定商户的会员优惠券列表：校验商户参数并归一化ID后返回
+     * @param StoreCouponRepository $repository 优惠券仓储实例
+     * @return \think\response\Json JSON 响应，成功返回会员优惠券列表，缺少商户参数返回失败
+     */
+    public function merchantMemberListByIds(StoreCouponRepository $repository)
+    {
+        $merId = (int)$this->request->param('mer_id', 0);
+        if ($merId <= 0) {
+            return app('json')->fail('缺少商户参数');
+        }
+        $ids = $this->request->param('ids', []);
+        if (is_string($ids)) {
+            $ids = explode(',', $ids);
+        }
+        $ids = array_values(array_unique(array_filter(array_map('intval', (array)$ids))));
+        return app('json')->success($repository->merchantMemberCouponListByIds(
+            $ids,
+            $merId,
+            $this->uid ? (int)$this->uid : null
+        ));
+    }
+
+    /**
      *  新人注册赠送优惠券
      * @param StoreCouponRepository $couponRepository
      * @return \think\response\Json

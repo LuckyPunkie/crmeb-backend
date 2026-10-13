@@ -55,6 +55,13 @@ class OrderReceipt extends BaseController
         return app('json')->success($this->repository->getList($where, $page, $limit));
     }
 
+    public function title()
+    {
+        $where = $this->request->params(['status', 'date', 'receipt_sn','username','order_type','keyword','uid']);
+        $where['mer_id'] = $this->request->merId();
+        return app('json')->success($this->repository->getStat($where));
+    }
+
 
     /**
      * 设置收据

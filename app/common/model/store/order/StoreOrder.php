@@ -16,6 +16,7 @@ namespace app\common\model\store\order;
 
 use app\common\model\BaseModel;
 use app\common\model\community\Community;
+use app\common\model\store\product\StoreUserCard;
 use app\common\model\store\product\ProductGroupUser;
 use app\common\model\store\service\StoreService;
 use app\common\model\store\shipping\Express;
@@ -95,6 +96,11 @@ class StoreOrder extends BaseModel
     public function TopSpread()
     {
         return $this->hasOne(User::class, 'uid', 'top_uid');
+    }
+
+    public function storeUserCard()
+    {
+        return $this->hasOne(StoreUserCard::class, 'order_id', 'order_id');
     }
 
     public function getUserPhoneAttr($value)

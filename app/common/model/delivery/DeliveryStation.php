@@ -19,6 +19,8 @@ use crmeb\services\DeliverySevices;
 
 class DeliveryStation extends BaseModel
 {
+    public const TYPE_MERCHANT = 0;
+    public const TYPE_PLATFORM = 3;
 
     public static function tablePk(): string
     {
@@ -32,7 +34,7 @@ class DeliveryStation extends BaseModel
 
     public function getBusinessAttr($value, $data)
     {
-        if($data['type'] !== 0) {
+        if (in_array((int)$data['type'], [DeliverySevices::DELIVERY_TYPE_DADA, DeliverySevices::DELIVERY_TYPE_UU], true)) {
             $res = DeliverySevices::create($data['type'], $data['mer_id'])->getBusiness();
             foreach ($res as $v) {
                 if ($value == $v['key']) {

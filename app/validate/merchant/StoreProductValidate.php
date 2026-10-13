@@ -32,7 +32,7 @@ class StoreProductValidate extends Validate
         "auto_on_time|定时上架时间" => "requireIf:is_show,2|date",
         "auto_off_time|定时下架时间" => "date",
         "extension_type|分销类型" => "in:0,1",
-        'type|商品类型' => 'require|in:0,1,2,3,4',
+        'type|商品类型' => 'require|checkProductType',
         'delivery_way|发货方式' => 'requireIf:type,0|requireIf:type,1|requireIf:type,2|requireIf:type,3',
         'once_min_count|最小限购' => 'min:0',
         'pay_limit|是否限购' => 'require|in:0,1,2|payLimit',
@@ -55,10 +55,12 @@ class StoreProductValidate extends Validate
         "attr|商品规格" => "requireIf:spec_type,1|Array|checkUnique|checkValueLength",
         "attrValue|商品属性" => "require|array|productAttrValue",
         'keyword|商品关键词' => 'max:128',
+        'is_price_negotiable|是否价格面议' => 'require|in:0,1',
+        'price_negotiable_text|价格面议配置' => 'array',
     ];
 
     protected $scene = [
-        'add' => ['image','auto_on_time','auto_off_time','store_name','cate_id','mer_cate_id','unit_name','spec_type','is_show','extension_type','attr','attrValue','type','delivery_way','once_min_count','pay_limit','keyword'],
+        'add' => ['image','auto_on_time','auto_off_time','store_name','cate_id','mer_cate_id','unit_name','spec_type','is_show','extension_type','attr','attrValue','type','delivery_way','once_min_count','pay_limit','keyword','is_price_negotiable','price_negotiable_text'],
         'reservation' => [
             'reservation_time_type',
             'reservation_start_time',
@@ -103,9 +105,18 @@ class StoreProductValidate extends Validate
         return true;
     }
 
+    protected function checkProductType($value)
+    {
+        return in_array((int)$value, NewProductRepository::DEFINE_TYPES, true) ? true : '商品类型错误';
+    }
+
     protected function productAttrValue($value,$rule,$data)
     {
         $arr = [];
+        $isServiceCard = (int)$data['type'] === NewProductRepository::DEFINE_TYPE_SERVICE_CARD;
+        if ($isServiceCard && count($value) > 1) {
+            return '次卡/年卡商品暂只支持单规格';
+        }
         try{
             foreach ($value as $v){
                 $sku = '';
@@ -141,6 +152,9 @@ class StoreProductValidate extends Validate
                             return '预约库存不可小于0';
                         }
                     }
+                }
+                if($isServiceCard && empty($v['card_rule']) && empty($v['cardRule'])) {
+                    return '次卡/年卡规则必须填写';
                 }
             }
         } catch (\Exception $exception) {

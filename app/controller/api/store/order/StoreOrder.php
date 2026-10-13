@@ -21,15 +21,21 @@ use think\exception\ValidateException;
 use app\validate\api\UserReceiptValidate;
 use app\common\repositories\store\order\StoreCartRepository;
 use app\common\repositories\delivery\DeliveryOrderRepository;
+use app\common\repositories\merchant\MerchantMemberRepository;
+use app\common\repositories\merchant\ShoppingCreditsRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\store\order\StoreGroupOrderRepository;
 use app\common\repositories\store\order\StoreOrderCreateRepository;
 use app\common\repositories\store\order\StoreOrderReceiptRepository;
 use app\common\repositories\store\scanOrder\ScanOrderOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\repositories\store\order\v3\StoreOrderV3Repository;
+use app\common\repositories\store\order\v3\dto\OrderCheckDTO;
+use app\common\repositories\store\order\v3\dto\OrderCreateDTO;
 use app\common\repositories\delivery\DeliveryConfigRepository;
 use app\common\repositories\delivery\DeliveryStationRepository;
 use think\facade\Log;
+use app\common\repositories\store\product\StoreUserCardVerifyLogRepository;
 
 /**
  * Class StoreOrder
@@ -86,6 +92,7 @@ class StoreOrder extends BaseController
         $addressId = (int)$this->request->param('address_id');
         $couponIds = (array)$this->request->param('use_coupon', []);
         $takes = (array)$this->request->param('takes', []);
+        $cityTakes = (array)$this->request->param('city_takes', []);
         $useIntegral = (bool)$this->request->param('use_integral', false);
         $receipt_data = (array)$this->request->param('receipt_data', []);
         $extend = (array)$this->request->param('extend', []);
@@ -127,11 +134,35 @@ class StoreOrder extends BaseController
         $uid = $this->request->uid();
         if (!($count = count($cartId)) || $count != count($cartRepository->validIntersection($cartId, $uid)))
             return app('json')->fail('已生成订单，请勿重复提交～');
+
+        if ($payType === ShoppingCreditsRepository::PAY_TYPE) {
+            $merchantIds = $cartRepository->getSearch([])
+                ->whereIn('cart_id', $cartId)
+                ->where('uid', $uid)
+                ->where('is_del', 0)
+                ->where('is_new', 0)
+                ->where('is_fail', 0)
+                ->where('is_pay', 0)
+                ->column('mer_id');
+            $merchantIds = array_values(array_unique(array_map('intval', $merchantIds)));
+            if (count($merchantIds) !== 1) {
+                return app('json')->fail('购物金仅支持单店铺订单');
+            }
+
+            $member = app()->make(MerchantMemberRepository::class)->memberInfo($uid, $merchantIds[0]);
+            if (empty($member['is_merchant_member'])) {
+                return app('json')->fail('请先加入该店铺会员');
+            }
+            if ((int)($member['financial_status'] ?? 0) !== 1) {
+                return app('json')->fail('购物金已冻结，请联系商家');
+            }
+        }
+
         $groupOrder = app()->make(LockService::class)->exec('order.create', function () use ($key,
-            $orderCreateRepository, $receipt_data, $mark, $extend, $cartId, $payType, $takes, $couponIds, $useIntegral, $addressId, $post) {
+            $orderCreateRepository, $receipt_data, $mark, $extend, $cartId, $payType, $takes, $couponIds, $useIntegral, $addressId, $post, $cityTakes) {
             return $orderCreateRepository->v2CreateOrder($key, array_search($payType, StoreOrderRepository::PAY_TYPE)
                 , $this->request->userInfo(), $cartId, $extend, $mark, $receipt_data, $takes, $couponIds,
-                $useIntegral, $addressId, $post);
+                $useIntegral, $addressId, $post, $cityTakes);
         });
         if ($scan) {
             // 扫码订单：打印/语音按扫码下单配置走，不再走商城通用自动打印
@@ -192,10 +223,25 @@ class StoreOrder extends BaseController
      */
     public function detail($id)
     {
-        $order = $this->repository->getDetail((int)$id, $this->request->uid());
+        $order = $this->repository->getDetail((int)$id, $this->request->uid(), false);
         if (!$order)
             return app('json')->fail('订单不存在');
         return app('json')->success($order->toArray());
+    }
+
+    /**
+     * 获取核销订单的子订单列表
+     *
+     * @param $id
+     * @return mixed
+     */
+    public function takeOrderList($id)
+    {
+        $list = $this->repository->getTakeOrderList((int)$id, $this->request->uid());
+        if (is_null($list)) {
+            return app('json')->fail('订单不存在');
+        }
+        return app('json')->success($list);
     }
 
     /**
@@ -380,8 +426,8 @@ class StoreOrder extends BaseController
     public function verifyCode($id)
     {
         $order = $this->repository->getWhere(['order_id' => $id, 'uid' => $this->request->uid(), 'is_del' => 0]);
-        if (!$order)return app('json')->fail('订单状态有误');
-        return app('json')->success(['qrcode' => $this->repository->wxQrcode($id, $order)]);
+        if (!$order) return app('json')->fail('订单状态有误');
+        return app('json')->success(['qrcode' => $this->repository->wxQrcode($order)]);
     }
 
     public function del($id)
@@ -446,7 +492,9 @@ class StoreOrder extends BaseController
             return app('json')->fail('缺少商户id');
         }
 
-        $setings = app()->make(DeliveryConfigRepository::class)->deliverySettings($merId);
+        $repository = app()->make(DeliveryConfigRepository::class);
+        $setings = $repository->deliverySettings($merId);
+        $setings['platformSettings'] = $repository->getDeliveryConfig(0);
         return app('json')->success($setings);
     }
     /**
@@ -456,7 +504,7 @@ class StoreOrder extends BaseController
      */
     public function deliveryStationList()
     {
-        $params = $this->request->params([['switch_city', 0], ['switch_take', 0], ['status', 1], 'mer_id', 'address_id', 'name_and_address_search', 'longitude', 'latitude']);
+        $params = $this->request->params([['switch_city', 0], ['switch_take', 0], ['status', 1], 'mer_id', 'address_id', 'name_and_address_search', ['longitude',108.78], ['latitude',34.31]]);
         if(!$params['mer_id']) {
             return app('json')->fail('缺少商户id');
         }
@@ -510,5 +558,26 @@ class StoreOrder extends BaseController
         }
 
         return app('json')->success($this->repository->getDeliveryTrack($id));
+    }
+
+    /**
+     * 次卡/年卡订单核销记录列表。
+     *
+     * 这里按订单和商户过滤 store_user_card_verify_log，用于查看某张次卡/年卡的核销流水。
+     * 权限仍按当前客服/服务人员归属商户校验，避免跨商户查看核销记录。
+     *
+     * @param int|string $id 订单 ID。
+     */
+    public function verifyCardLog($id)
+    {
+        [$page, $limit] = $this->getPage();
+        $storeUserCardVerifyLog = app()->make(StoreUserCardVerifyLogRepository::class);
+        $where = [
+            'order_id' => $id,
+            'uid' => $this->request->uid(),
+        ];
+        $data = $storeUserCardVerifyLog->getList($where, $page, $limit);
+
+        return  app('json')->success($data);
     }
 }

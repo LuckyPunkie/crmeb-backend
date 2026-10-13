@@ -240,6 +240,17 @@ class MerchantDao extends BaseDao
     }
 
     /**
+     * 获取当前有效店铺总数。
+     */
+    public function totalMerchantNum(): int
+    {
+        return (int)Merchant::getDB()
+            ->where('is_del', 0)
+            ->where('status', 1)
+            ->count();
+    }
+
+    /**
      *  获取复制商品次数
      * @param int $merId
      * @return mixed

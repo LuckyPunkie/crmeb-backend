@@ -146,9 +146,9 @@ class UserDao extends BaseDao
                 getModelTime($query, $where['user_time'], 'User.create_time');
             }
         })->when(isset($where['sort']) && in_array($where['sort'], ['pay_count ASC', 'pay_count DESC', 'pay_price DESC', 'pay_price ASC', 'spread_count ASC', 'spread_count DESC']), function (BaseQuery $query) use ($where) {
-            $query->order('User.' . $where['sort']);
+            $query->order($where['sort']);
         }, function ($query) {
-            $query->order('User.uid DESC');
+            $query->order('uid DESC');
         })->when(isset($where['is_svip']) && $where['is_svip'] !== '', function (BaseQuery $query) use ($where) {
             if ($where['is_svip']) {
                 $query->where('User.is_svip','>',0);
@@ -411,12 +411,7 @@ class UserDao extends BaseDao
             // 处理会员等级和团ID的空值问题
             $info->member_level = $info->member_level ?: '';
             $info->group_id = $info->group_id ?: '';
-            // 删除用户敏感信息字段，这些信息不应该在订单详情中展示
-            // 删除扩展信息默认字段，影响用户编辑
-            unset($info['real_name']);
-            unset($info['sex']);
-            unset($info['birthday']);
-            unset($info['addres']);
+            unset($info['pwd']);
         }
 
         // 返回处理后的用户订单详情信息

@@ -249,8 +249,8 @@ class productAnalyticsRepository extends BaseRepository
         );
         return Cache::tag($cacheTags)->remember($cacheky, function () use ($merId) {
             $merId = $merId ? : '';
-            //0.实体商品，1.虚拟商品，2 网盘，3 卡密 4 预约商品
-            $nams = ['普通商品', '虚拟商品', '网盘商品', '卡密商品', '预约商品',];
+            // 0实体商品，1虚拟商品，2网盘，3卡密，4预约商品，5次卡/年卡商品
+            $names = ['实体商品', '虚拟商品', '网盘商品', '卡密商品', '预约商品', '次卡/年卡商品'];
             $where = $merId ? ['mer_id' => $merId] : [];
             $field = Db::raw("count(*) as count,type");
             $query = $this->dao->getSearch($where);
@@ -266,8 +266,9 @@ class productAnalyticsRepository extends BaseRepository
                 ->select()->toArray();
             $redata = [];
             foreach($res as $re) {
+                $type = (int)$re['type'];
                 $redata[] = [
-                    'name' => $nams[$re['type']],
+                    'name' => $names[$type] ?? '其他商品',
                     'value' => $re['count']
                 ];
             }

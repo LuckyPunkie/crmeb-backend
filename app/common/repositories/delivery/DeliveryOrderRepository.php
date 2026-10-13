@@ -11,6 +11,7 @@
 namespace app\common\repositories\delivery;
 
 use app\common\dao\delivery\DeliveryOrderDao;
+use app\common\model\delivery\DeliveryService;
 use app\common\model\delivery\DeliveryStation;
 use app\common\model\store\order\StoreOrder;
 use app\common\repositories\BaseRepository;
@@ -19,11 +20,13 @@ use app\common\repositories\store\order\StoreOrderStatusRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use app\common\repositories\user\UserRepository;
+use crmeb\jobs\MiniOrderConfirmJob;
 use crmeb\services\DeliverySevices;
 use FormBuilder\Factory\Elm;
 use think\exception\ValidateException;
 use think\facade\Db;
 use think\facade\Log;
+use think\facade\Queue;
 use think\facade\Route;
 
 /**
@@ -32,7 +35,31 @@ use think\facade\Route;
 class DeliveryOrderRepository extends BaseRepository
 {
 
+    public const MANAGE_STATUS_ALL = 'all';
+    public const MANAGE_STATUS_PENDING_DISPATCH = 'pending_dispatch';
+    public const MANAGE_STATUS_PENDING_ACCEPT = 'pending_accept';
+    public const MANAGE_STATUS_PICKING_UP = 'picking_up';
+    public const MANAGE_STATUS_DELIVERING = 'delivering';
+    public const MANAGE_STATUS_PENDING_REVIEW = 'pending_review';
+    public const MANAGE_STATUS_COMPLETED = 'completed';
+    public const MANAGE_STATUS_REFUNDED = 'refunded';
+    public const MANAGE_STATUS_DELETED = 'deleted';
+
+    public const MANAGE_STATUS_TEXT = [
+        self::MANAGE_STATUS_ALL => '全部',
+        self::MANAGE_STATUS_PENDING_DISPATCH => '待指派',
+        self::MANAGE_STATUS_PENDING_ACCEPT => '待骑手接单',
+        self::MANAGE_STATUS_PICKING_UP => '赶往提货点',
+        self::MANAGE_STATUS_DELIVERING => '送货中',
+        self::MANAGE_STATUS_PENDING_REVIEW => '待评价',
+        self::MANAGE_STATUS_COMPLETED => '交易完成',
+        self::MANAGE_STATUS_REFUNDED => '已退款',
+        self::MANAGE_STATUS_DELETED => '已删除',
+    ];
+
     protected $statusData = [
+        0 => '待确认',
+        1 => '待到店',
         2 => '待取货',
         3 => '配送中',
         4 => '已完成',
@@ -97,14 +124,419 @@ class DeliveryOrderRepository extends BaseRepository
                 $query->field('mer_id,mer_name');
             },
             'station',
-            'storeOrder' => function ($query) {
-                $query->field('order_id,order_sn');
-            },
+            'storeOrder.orderProduct',
+
         ])->order('create_time DESC');
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
 
         return compact('count', 'list');
+    }
+
+    /**
+     * 平台、商户后台配送订单管理列表。
+     */
+    public function manageList(array $where, int $page, int $limit, bool $isPlatform, int $merId = 0): array
+    {
+        $status = (string)($where['status'] ?? self::MANAGE_STATUS_ALL) ?: self::MANAGE_STATUS_ALL;
+        unset($where['status']);
+
+        $query = $this->getManageOrderQuery($where, $isPlatform, $merId);
+        $this->applyManageStatus($query, $status);
+        $count = (clone $query)->count();
+        $list = $query
+            ->field('StoreOrder.*')
+            ->with([
+                'take',
+                'orderProduct',
+                'merchant' => function ($query) {
+                    $query->field('mer_id,mer_name,mer_avatar');
+                },
+                'user' => function ($query) {
+                    $query->field('uid,nickname,avatar,phone');
+                },
+                'deliveryOrder' => function ($query) {
+                    $query->with(['deliveryService' => function ($query) {
+                        $query->field('service_id,name,phone,avatar');
+                    }]);
+                },
+            ])
+            ->page($page, $limit)
+            ->order('create_time DESC,order_id DESC')
+            ->select();
+
+        foreach ($list as $order) {
+            $manageStatus = $this->getOrderManageStatus($order);
+            $order->delivery_manage_status = $manageStatus;
+            $order->delivery_manage_status_text = self::MANAGE_STATUS_TEXT[$manageStatus];
+        }
+
+        return compact('count', 'list');
+    }
+
+    /**
+     * 配送订单管理头部状态统计，统计条件与列表一致。
+     */
+    public function manageTitle(array $where, bool $isPlatform, int $merId = 0): array
+    {
+        unset($where['status']);
+        $query = $this->getManageOrderQuery($where, $isPlatform, $merId);
+        $row = $query->field(Db::raw(
+            'COUNT(StoreOrder.order_id) AS all_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND StoreOrder.status = 0 AND dmo.delivery_order_id IS NULL THEN 1 ELSE 0 END), 0) AS pending_dispatch_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND dmo.status = 0 THEN 1 ELSE 0 END), 0) AS pending_accept_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND dmo.status IN (1, 2) THEN 1 ELSE 0 END), 0) AS picking_up_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND dmo.status = 3 THEN 1 ELSE 0 END), 0) AS delivering_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND StoreOrder.status = 2 THEN 1 ELSE 0 END), 0) AS pending_review_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND StoreOrder.status = 3 THEN 1 ELSE 0 END), 0) AS completed_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 0 AND StoreOrder.status = -1 THEN 1 ELSE 0 END), 0) AS refunded_count,' .
+            'COALESCE(SUM(CASE WHEN StoreOrder.is_del = 1 THEN 1 ELSE 0 END), 0) AS deleted_count'
+        ))->find();
+        $counts = $row ? $row->toArray() : [];
+        $statistics = [];
+        foreach (self::MANAGE_STATUS_TEXT as $status => $title) {
+            $statistics[] = [
+                'status' => $status,
+                'title' => $title,
+                'count' => (int)($counts[$status . '_count'] ?? 0),
+            ];
+        }
+        return $statistics;
+    }
+
+    /**
+     * 批量派单。每个订单独立执行并返回失败明细。
+     */
+    public function batchDispatch(array $orderIds, int $serviceId, bool $isPlatform, int $merId = 0): array
+    {
+        if ($serviceId <= 0) {
+            throw new ValidateException('请选择配送人员');
+        }
+        $orderIds = $this->normalizeBatchOrderIds($orderIds);
+        $successOrderIds = [];
+        $failures = [];
+        foreach ($orderIds as $orderId) {
+            try {
+                if ($isPlatform) {
+                    $this->sysDispatch($orderId, ['service_id' => $serviceId]);
+                } else {
+                    $this->merDispatch($orderId, $merId, ['service_id' => $serviceId]);
+                }
+                $successOrderIds[] = $orderId;
+            } catch (\Throwable $e) {
+                $failures[] = ['order_id' => $orderId, 'message' => $e->getMessage()];
+            }
+        }
+        return [
+            'success_count' => count($successOrderIds),
+            'fail_count' => count($failures),
+            'success_order_ids' => $successOrderIds,
+            'failures' => $failures,
+        ];
+    }
+
+    /**
+     * 批量确认送达。每个订单独立执行并返回失败明细。
+     */
+    public function batchConfirm(array $orderIds, bool $isPlatform, int $merId = 0): array
+    {
+        $orderIds = $this->normalizeBatchOrderIds($orderIds);
+        $successOrderIds = [];
+        $failures = [];
+        foreach ($orderIds as $orderId) {
+            try {
+                if ($isPlatform) {
+                    $this->sysConfirm($orderId);
+                } else {
+                    $this->confirm($orderId, $merId);
+                }
+                $successOrderIds[] = $orderId;
+            } catch (\Throwable $e) {
+                $failures[] = ['order_id' => $orderId, 'message' => $e->getMessage()];
+            }
+        }
+        return [
+            'success_count' => count($successOrderIds),
+            'fail_count' => count($failures),
+            'success_order_ids' => $successOrderIds,
+            'failures' => $failures,
+        ];
+    }
+
+    protected function getManageOrderQuery(array $where, bool $isPlatform, int $merId)
+    {
+        $where['paid'] = 1;
+        $where['is_city_delivery'] = $isPlatform ? DeliveryStation::TYPE_PLATFORM : 0;
+        if (!$isPlatform) {
+            $where['mer_id'] = $merId;
+        }
+        $query = app()->make(StoreOrderRepository::class)
+            ->search($where, $isPlatform ? null : 0)
+            ->where('StoreOrder.order_type', 2)
+            ->leftJoin('DeliveryOrder dmo', 'dmo.order_id = StoreOrder.order_id');
+        return $query;
+    }
+
+    protected function applyManageStatus($query, string $status): void
+    {
+        if (!isset(self::MANAGE_STATUS_TEXT[$status])) {
+            throw new ValidateException('配送订单状态参数错误');
+        }
+        switch ($status) {
+            case self::MANAGE_STATUS_PENDING_DISPATCH:
+                $query->where('StoreOrder.is_del', 0)
+                    ->where('StoreOrder.status', 0)
+                    ->whereNull('dmo.delivery_order_id');
+                break;
+            case self::MANAGE_STATUS_PENDING_ACCEPT:
+                $query->where('StoreOrder.is_del', 0)->where('dmo.status', 0);
+                break;
+            case self::MANAGE_STATUS_PICKING_UP:
+                $query->where('StoreOrder.is_del', 0)->whereIn('dmo.status', [1, 2]);
+                break;
+            case self::MANAGE_STATUS_DELIVERING:
+                $query->where('StoreOrder.is_del', 0)->where('dmo.status', 3);
+                break;
+            case self::MANAGE_STATUS_PENDING_REVIEW:
+                $query->where('StoreOrder.is_del', 0)->where('StoreOrder.status', 2);
+                break;
+            case self::MANAGE_STATUS_COMPLETED:
+                $query->where('StoreOrder.is_del', 0)->where('StoreOrder.status', 3);
+                break;
+            case self::MANAGE_STATUS_REFUNDED:
+                $query->where('StoreOrder.is_del', 0)->where('StoreOrder.status', -1);
+                break;
+            case self::MANAGE_STATUS_DELETED:
+                $query->where('StoreOrder.is_del', 1);
+                break;
+        }
+    }
+
+    protected function getOrderManageStatus($order): string
+    {
+        if ((int)$order->is_del === 1) {
+            return self::MANAGE_STATUS_DELETED;
+        }
+        if ((int)$order->status === -1) {
+            return self::MANAGE_STATUS_REFUNDED;
+        }
+        if ((int)$order->status === 3) {
+            return self::MANAGE_STATUS_COMPLETED;
+        }
+        if ((int)$order->status === 2) {
+            return self::MANAGE_STATUS_PENDING_REVIEW;
+        }
+        if (!$order->deliveryOrder) {
+            return self::MANAGE_STATUS_PENDING_DISPATCH;
+        }
+        $deliveryStatus = (int)$order->deliveryOrder->status;
+        if ($deliveryStatus === 0) {
+            return self::MANAGE_STATUS_PENDING_ACCEPT;
+        }
+        if (in_array($deliveryStatus, [1, 2], true)) {
+            return self::MANAGE_STATUS_PICKING_UP;
+        }
+        if ($deliveryStatus === 3) {
+            return self::MANAGE_STATUS_DELIVERING;
+        }
+        return self::MANAGE_STATUS_PENDING_REVIEW;
+    }
+
+    protected function normalizeBatchOrderIds(array $orderIds): array
+    {
+        if (!$orderIds) {
+            throw new ValidateException('请选择订单');
+        }
+        $ids = [];
+        foreach ($orderIds as $orderId) {
+            if (filter_var($orderId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+                throw new ValidateException('订单ID格式错误');
+            }
+            $ids[] = (int)$orderId;
+        }
+        $ids = array_values(array_unique($ids));
+        if (count($ids) > 100) {
+            throw new ValidateException('单次最多操作100个订单');
+        }
+        return $ids;
+    }
+
+    /**
+     * 获取平台配送开单、配送费及配送员提成趋势
+     * @param string $startDate 旧版开始日期，格式为 YYYY-MM-DD
+     * @param string $endDate 旧版结束日期，格式为 YYYY-MM-DD
+     * @param string $userSearchType 用户搜索类型
+     * @param string $userSearch 用户搜索内容
+     * @param string $date 日期筛选，支持快捷日期或日期范围
+     * @param string $deliveryName 配送员姓名
+     * @param string $deliveryUid 配送员用户UID
+     * @param string $deliveryPhone 配送员手机号
+     * @param string $deliveryKeyword 配送员关键词
+     * @return array 按日期跨度分组并补零后的趋势数据
+     */
+    public function getPlatformTrend(
+        string $startDate = '',
+        string $endDate = '',
+        string $userSearchType = 'all',
+        string $userSearch = '',
+        string $date = '',
+        string $deliveryName = '',
+        string $deliveryUid = '',
+        string $deliveryPhone = '',
+        string $deliveryKeyword = ''
+    ): array
+    {
+        if (!in_array($userSearchType, ['all', 'uid', 'phone', 'name'], true)) {
+            throw new ValidateException('用户搜索类型错误');
+        }
+        $deliveryName = trim($deliveryName);
+        $deliveryUid = trim($deliveryUid);
+        $deliveryPhone = trim($deliveryPhone);
+        $deliveryKeyword = trim($deliveryKeyword);
+        $date = $this->normalizePlatformTrendDate($date, $startDate, $endDate);
+        [$dates, $customFormat] = getStepLength($date);
+        $formatMap = [
+            'lately7' => '%m-%d',
+            'lately30' => '%m-%d',
+            'month' => '%d',
+            'year' => '%m',
+        ];
+        $groupFormat = $customFormat ?: ($formatMap[$date] ?? '%m-%d');
+
+        $query = StoreOrder::getDB()->alias('so');
+        getModelTime($query, $date, 'so.pay_time');
+        if ($userSearch !== '') {
+            $query->leftJoin('user u', 'u.uid = so.uid');
+            $search = '%' . $userSearch . '%';
+            if ($userSearchType === 'uid') {
+                if (!ctype_digit($userSearch)) {
+                    $query->whereRaw('1 = 0');
+                } else {
+                    $query->where('so.uid', (int)$userSearch);
+                }
+            } elseif ($userSearchType === 'phone') {
+                $query->whereLike('u.phone|so.user_phone', $search);
+            } elseif ($userSearchType === 'name') {
+                $query->whereLike('u.nickname|u.real_name|so.real_name', $search);
+            } else {
+                $query->whereLike(
+                    'so.uid|u.phone|u.nickname|u.real_name|so.user_phone|so.real_name',
+                    $search
+                );
+            }
+        }
+        if ($deliveryName !== '' || $deliveryUid !== '' || $deliveryPhone !== '' || $deliveryKeyword !== '') {
+            $query->join('delivery_order do', 'do.order_id = so.order_id')
+                ->join('delivery_service ds', 'ds.service_id = do.service_id')
+                ->where('ds.type', DeliveryService::TYPE_PLATFORM)
+                ->where('ds.mer_id', 0);
+            if ($deliveryName !== '') {
+                $query->whereLike('ds.name', '%' . $deliveryName . '%');
+            }
+            if ($deliveryPhone !== '') {
+                $query->whereLike('ds.phone', '%' . $deliveryPhone . '%');
+            }
+            if ($deliveryUid !== '') {
+                if (!ctype_digit($deliveryUid)) {
+                    $query->whereRaw('1 = 0');
+                } else {
+                    $query->where('ds.uid', (int)$deliveryUid);
+                }
+            }
+            if ($deliveryKeyword !== '') {
+                $query->whereLike('ds.service_id|ds.name|ds.phone', '%' . $deliveryKeyword . '%');
+            }
+        }
+
+        $rows = $query
+            ->where('so.city_delivery_type', DeliveryStation::TYPE_PLATFORM)
+            ->where('so.paid', 1)
+            ->where('so.is_del', 0)
+            ->field(Db::raw(
+                "DATE_FORMAT(so.pay_time, '{$groupFormat}') AS date," .
+                'COUNT(DISTINCT so.order_id) AS order_count,' .
+                'COALESCE(SUM(so.delivery_settlement_fee), 0) AS delivery_amount,' .
+                'COALESCE(SUM(so.delivery_service_fee), 0) AS commission_amount'
+            ))
+            ->group('date')
+            ->order('date ASC')
+            ->select()
+            ->toArray();
+
+        $rowMap = array_column($rows, null, 'date');
+        $result = [
+            'date' => [],
+            'order_count' => [],
+            'delivery_amount' => [],
+            'commission_amount' => [],
+        ];
+        foreach ($dates as $dateLabel) {
+            $row = $rowMap[$dateLabel] ?? [];
+            $result['date'][] = str_replace('-', '.', $dateLabel);
+            $result['order_count'][] = (int)($row['order_count'] ?? 0);
+            $result['delivery_amount'][] = bcadd((string)($row['delivery_amount'] ?? 0), '0', 2);
+            $result['commission_amount'][] = bcadd((string)($row['commission_amount'] ?? 0), '0', 2);
+        }
+
+        return $result;
+    }
+
+    /**
+     * 规范平台配送趋势日期参数：date 优先，未传时兼容旧版起止日期参数
+     * @param string $date 日期筛选，支持 lately7、lately30、month、year 或日期范围
+     * @param string $startDate 旧版开始日期，格式为 YYYY-MM-DD
+     * @param string $endDate 旧版结束日期，格式为 YYYY-MM-DD
+     * @return string 可供统计日期工具使用的日期筛选值
+     */
+    protected function normalizePlatformTrendDate(string $date, string $startDate, string $endDate): string
+    {
+        if ($date === '') {
+            if (($startDate === '') !== ($endDate === '')) {
+                throw new ValidateException('开始日期和结束日期需同时填写');
+            }
+            if ($startDate === '') {
+                return 'lately30';
+            }
+            if (!$this->isValidTrendDate($startDate, 'Y-m-d') || !$this->isValidTrendDate($endDate, 'Y-m-d')) {
+                throw new ValidateException('日期格式错误，请使用YYYY-MM-DD格式');
+            }
+            if (strtotime($startDate) > strtotime($endDate)) {
+                throw new ValidateException('开始日期不能晚于结束日期');
+            }
+            if ((int)((strtotime($endDate) - strtotime($startDate)) / 86400) + 1 > 60) {
+                throw new ValidateException('最多查询60天数据');
+            }
+            return str_replace('-', '/', $startDate) . '-' . str_replace('-', '/', $endDate);
+        }
+
+        if (in_array($date, ['lately7', 'lately30', 'month', 'year'], true)) {
+            return $date;
+        }
+        if (preg_match('/^(\d{4}[\/-]\d{2}[\/-]\d{2})-(\d{4}[\/-]\d{2}[\/-]\d{2})$/', $date, $matches) !== 1) {
+            throw new ValidateException('日期格式错误，请使用YYYY/MM/DD-YYYY/MM/DD格式');
+        }
+
+        $normalizedStartDate = str_replace('-', '/', $matches[1]);
+        $normalizedEndDate = str_replace('-', '/', $matches[2]);
+        if (!$this->isValidTrendDate($normalizedStartDate, 'Y/m/d') || !$this->isValidTrendDate($normalizedEndDate, 'Y/m/d')) {
+            throw new ValidateException('日期格式错误，请使用YYYY/MM/DD-YYYY/MM/DD格式');
+        }
+        if (strtotime($normalizedStartDate) > strtotime($normalizedEndDate)) {
+            throw new ValidateException('开始日期不能晚于结束日期');
+        }
+        return $normalizedStartDate . '-' . $normalizedEndDate;
+    }
+
+    /**
+     * 校验趋势统计中的单个日期是否符合指定格式且为真实日期
+     * @param string $date 待校验日期
+     * @param string $format 日期格式
+     * @return bool 日期有效时返回 true，否则返回 false
+     */
+    protected function isValidTrendDate(string $date, string $format): bool
+    {
+        $timestamp = strtotime($date . ' 00:00:00');
+        return $timestamp !== false && date($format, $timestamp) === $date;
     }
 
     /**
@@ -132,7 +564,20 @@ class DeliveryOrderRepository extends BaseRepository
          // 先检查结果是否存在
         if (!$res) throw new ValidateException('订单不存在');
 
-         // 然后再处理订单详情
+        if (in_array((int)$res['station_type'], [0, DeliveryStation::TYPE_PLATFORM], true)) {
+            $res['data'] = [
+                'order_code' => $res['order_code'],
+                'to_address' => $res['to_address'],
+                'from_address' => $res['from_address'],
+                'state' => $this->statusData[$res['status']] ?? '',
+                'note' => $res['mark'],
+                'order_price' => $res['fee'],
+                'distance' => $res['distance'],
+            ];
+            return $res;
+        }
+
+         // 第三方配送订单查询第三方详情
         try {
             $order = DeliverySevices::create($res['station_type'])->getOrderDetail($res);
             $res['data'] = [
@@ -198,7 +643,8 @@ class DeliveryOrderRepository extends BaseRepository
             'reason' => is_array($reason) ? $reason['reason'] : $reason,
         ];
         return Db::transaction(function () use ($order, $data, $merId) {
-            if($order['station_type']) {
+
+            if(in_array($order['station_type'],[DeliverySevices::DELIVERY_TYPE_DADA, DeliverySevices::DELIVERY_TYPE_UU])) {
                 if ($order['station_type'] == DeliverySevices::DELIVERY_TYPE_DADA) {
                     $options = DeliverySevices::create(DeliverySevices::DELIVERY_TYPE_DADA, $merId)->reasons();
                     $data['reason'] = $options[9]['value'];
@@ -210,6 +656,7 @@ class DeliveryOrderRepository extends BaseRepository
                 $order->reason = $data['reason'];
                 $order->save();
             }
+
             // 订单取消后操作
             $this->cancelAfter($order);
             //订单记录
@@ -396,10 +843,17 @@ class DeliveryOrderRepository extends BaseRepository
         $make = app()->make(StoreOrderRepository::class);
         $orderData = $make->get($res['order_id']);
 
-        return Db::transaction(function () use ($res, $data, $status, $reason, $deductFee, $orderData, $make) {
+        $now = date('Y-m-d H:i:s');
+        return Db::transaction(function () use ($res, $data, $status, $reason, $deductFee, $orderData, $make, $now) {
             $res->status = $status;
             $res->reason = $reason;
             $res->deduct_fee = $deductFee;
+            if ((int)$status === 3 && empty($res->pickup_time)) {
+                $res->pickup_time = $now;
+            }
+            if ((int)$status === 4 && empty($res->confirm_time)) {
+                $res->confirm_time = $now;
+            }
             $res->save();
             //订单记录
             $statusRepository = app()->make(StoreOrderStatusRepository::class);
@@ -417,7 +871,7 @@ class DeliveryOrderRepository extends BaseRepository
             if ($status == 4) {
                 $order = $make->get($res['order_id']);
                 $user = app()->make(UserRepository::class)->get($order['uid']);
-                $make->update($res['order_id'], ['status' => 2]);
+                $make->update($res['order_id'], ['status' => 2, 'verify_time' => $now]);
                 $make->takeAfter($order, $user);
             }
             // if ($status == -1) {
@@ -694,6 +1148,7 @@ class DeliveryOrderRepository extends BaseRepository
         0 => '商家配送',
         1 => '达达配送',
         2 => 'UU配送',
+        3 => '平台配送',
     ];
     /**
      * 配送员领取
@@ -705,14 +1160,31 @@ class DeliveryOrderRepository extends BaseRepository
      */
     public function selfReceive(int $merId, int $orderId, int $serviceId)
     {
-        if(!merchantConfig($merId, 'mer_delivery_order_status')) {
+        // 检查订单是否存在
+        $order = $this->orderInfo($orderId, $merId, 0);
+        if ((int)$order['delivery_grab_status'] !== 1) {
+            throw new ValidateException('当前订单不支持配送员抢单');
+        }
+        $stationType = (int)$order['city_delivery_type'];
+        if ($stationType === DeliveryStation::TYPE_PLATFORM) {
+            $this->checkPlatformDeliveryStatus();
+            if ((int)systemConfig('platform_delivery_grab_status') !== 1) {
+                throw new ValidateException('平台未开启配送员抢单，无法接单');
+            }
+        } else if (!merchantConfig($merId, 'mer_delivery_order_status')) {
             throw new ValidateException('商家未开启配送员抢单，无法接单');
         }
 
-        // 检查订单是否存在
-        $order = $this->orderInfo($orderId, $merId, 0);
         $params['service_id'] = $serviceId;
-        return $this->dispatch($order, $merId, $params, self::ENABLE_ASSIGNED['RECEIVE']);
+        return $this->dispatch(
+            $order,
+            $merId,
+            $params,
+            self::ENABLE_ASSIGNED['RECEIVE'],
+            0,
+            $stationType === DeliveryStation::TYPE_PLATFORM ? DeliveryStation::TYPE_PLATFORM : 0,
+            $serviceId
+        );
     }
     /**
      * 商家指派/管理端指派
@@ -729,6 +1201,30 @@ class DeliveryOrderRepository extends BaseRepository
         $order = $this->orderInfo($orderId, $merId, 0);
         return $this->dispatch($order, $merId, $params, self::ENABLE_ASSIGNED['DISPATCH'], $serviceLogId);
     }
+
+    /**
+     * 平台指派配送员
+     * @param int $orderId
+     * @param array $params
+     * @return bool
+     */
+    public function sysDispatch(int $orderId, array $params)
+    {
+        $this->checkPlatformDeliveryStatus();
+        $order = $this->platformOrderInfo($orderId, 0);
+        if ($order->deliveryOrder) {
+            throw new ValidateException('订单已派单，请勿重复操作');
+        }
+
+        return $this->dispatch(
+            $order,
+            (int)$order['mer_id'],
+            $params,
+            self::ENABLE_ASSIGNED['DISPATCH'],
+            0,
+            DeliveryStation::TYPE_PLATFORM
+        );
+    }
     /**
      * 同城配送派单
      *
@@ -737,13 +1233,32 @@ class DeliveryOrderRepository extends BaseRepository
      * @param array $params 派单参数
      * @return bool 派单结果
      */
-    public function dispatch($order, int $merId, array $params, int $enableAssigned, int $serviceLogId = 0)
+    public function dispatch($order, int $merId, array $params, int $enableAssigned, int $serviceLogId = 0, int $stationType = 0, int $deliveryServiceId = 0)
     {
         // 检查配送站是否存在
         $station = app()->make(DeliveryStationRepository::class)->deliveryStationInfo($order['merchant_take_id'], $merId);
-        if($station['type']) {
-            throw new ValidateException("用户所选自提点不支持商家派单，请返回列表同步第三方配送订单。当前配送方式为【{$this::DELIVERY_TYPE[$station['type']]}】");
+        if ((int)$station['type'] !== $stationType) {
+            $deliveryType = self::DELIVERY_TYPE[$station['type']] ?? '未知配送';
+            if ($stationType === 0 && (int)$station['type'] === DeliveryStation::TYPE_PLATFORM) {
+                throw new ValidateException('平台配送订单由平台操作，商户无法派单');
+            }
+            if ($stationType === DeliveryStation::TYPE_PLATFORM) {
+                throw new ValidateException("订单配送方式不是平台配送，当前配送方式为【{$deliveryType}】");
+            }
+            throw new ValidateException("用户所选自提点不支持商家派单，请返回列表同步第三方配送订单。当前配送方式为【{$deliveryType}】");
         }
+        $this->checkDeliveryService((int)$params['service_id'], $stationType, $merId);
+        $deliveryOrderStatus = 3;
+        if ($stationType === DeliveryStation::TYPE_PLATFORM) {
+            $currentStatus = $enableAssigned === self::ENABLE_ASSIGNED['RECEIVE'] ? 0 : null;
+            $deliveryOrderStatus = $this->getNextPlatformDeliveryStatus($currentStatus);
+        }
+        [$settlementFee, $serviceFee] = $this->getServiceFee(
+            $station,
+            $order,
+            $stationType === DeliveryStation::TYPE_PLATFORM ? 0 : $merId
+        );
+
         // 数据处理
         $ret = [
             'station_id' => $order['merchant_take_id'],
@@ -756,19 +1271,24 @@ class DeliveryOrderRepository extends BaseRepository
             'order_code' => '',
             'order_id' => $order['order_id'],
             'mer_id' => $merId,
-            'status' => 3,
-            'station_type' => 0,
+            'status' => $deliveryOrderStatus,
+            'station_type' => $stationType,
             'distance' => '',
             'fee' => $order['pay_postage'],
+            'settlement_fee' => $settlementFee,
             'mark' => $order['mark'],
             'uid' => $order['uid'],
             'reason' => '',
             'service_id' => $params['service_id'],
-            'service_fee' => $this->getServiceFee($station, $order),
+            'service_fee' => $serviceFee,
         ];
+        // 进入配送中的派单没有后续取货动作，直接记录派单时的取货时间。
+        if ((int)$deliveryOrderStatus === 3) {
+            $ret['pickup_time'] = date('Y-m-d H:i:s');
+        }
         //入库操作
         try {
-            Db::transaction(function () use ($ret, $order, $enableAssigned, $serviceLogId) {
+            Db::transaction(function () use ($ret, $order, $enableAssigned, $serviceLogId, $deliveryServiceId) {
                 // 创建配送订单
                 $this->dao->create($ret);
                 // 更新订单状态
@@ -786,7 +1306,9 @@ class DeliveryOrderRepository extends BaseRepository
                 ];
                 // 根据服务人员ID是否存在，分别记录服务人员日志或管理员日志
                 $storeOrderStatusRepository = app()->make(StoreOrderStatusRepository::class);
-                if ($serviceLogId) {
+                if ($deliveryServiceId) {
+                    $storeOrderStatusRepository->createDeliveryLog($deliveryServiceId, $orderStatus);
+                } elseif ($serviceLogId) {
                     $storeOrderStatusRepository->createServiceLog($serviceLogId, $orderStatus);
                 } else {
                     $storeOrderStatusRepository->createAdminLog($orderStatus);
@@ -811,16 +1333,60 @@ class DeliveryOrderRepository extends BaseRepository
     {
         // 检查订单是否存在， 1 表示配送中
         $order = $this->orderInfo($orderId, $merId, 1);
+        if ((int)$order['city_delivery_type'] === DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送订单由平台操作，商户无法改派');
+        }
         // 检查配送站是否存在
         $station = app()->make(DeliveryStationRepository::class)->deliveryStationInfo($order['merchant_take_id'], $merId);
         if($station['type']) {
-            throw new ValidateException('配送方式错误无法派单,请检查配送设置。当前设置配送方式为'.self::DELIVERY_TYPE[$station['type']]);
+            $deliveryType = self::DELIVERY_TYPE[$station['type']] ?? '未知配送';
+            throw new ValidateException('配送方式错误无法派单,请检查配送设置。当前设置配送方式为'.$deliveryType);
         }
+
+        return $this->updateDispatch($order, $params, $serviceLogId);
+    }
+
+    /**
+     * 平台改派配送员
+     * @param int $orderId
+     * @param array $params
+     * @return bool
+     */
+    public function sysUpdateDispatch(int $orderId, array $params)
+    {
+        $this->checkPlatformDeliveryStatus();
+        $order = $this->platformOrderInfo($orderId, 1);
+        if (!$order->deliveryOrder || (int)$order->deliveryOrder->station_type !== DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送记录不存在，无法改派');
+        }
+        $params['status'] = $this->getNextPlatformDeliveryStatus();
+
+        return $this->updateDispatch($order, $params);
+    }
+
+    /**
+     * 更新订单配送员
+     * @param mixed $order
+     * @param array $params
+     * @param int $serviceLogId
+     * @return bool
+     */
+    protected function updateDispatch($order, array $params, int $serviceLogId = 0)
+    {
+        $stationType = (int)$order->deliveryOrder->station_type;
+        $this->checkDeliveryService((int)$params['service_id'], $stationType, (int)$order['mer_id']);
+
         //入库操作
         try {
             Db::transaction(function () use ($params, $order, $serviceLogId) {
                 // 更新配送员id
                 $order->deliveryOrder->service_id = $params['service_id'];
+                if (array_key_exists('status', $params)) {
+                    $order->deliveryOrder->status = $params['status'];
+                }
+                if ((int)$order->deliveryOrder->status === 3 && empty($order->deliveryOrder->pickup_time)) {
+                    $order->deliveryOrder->pickup_time = date('Y-m-d H:i:s');
+                }
                 $order->deliveryOrder->save();
                 // 构建订单状态变更信息
                 $orderStatus = [
@@ -864,28 +1430,288 @@ class DeliveryOrderRepository extends BaseRepository
 
         return $order;
     }
+
+    /**
+     * 获取平台配送订单
+     * @param int $orderId
+     * @param string|int $status
+     * @return mixed
+     */
+    protected function platformOrderInfo(int $orderId, $status = '')
+    {
+        $where = [
+            'order_id' => $orderId,
+            'order_type' => 2,
+            'city_delivery_type' => DeliveryStation::TYPE_PLATFORM,
+            'paid' => 1,
+            'is_del' => 0,
+        ];
+        if ($status !== '') {
+            $where['status'] = $status;
+        }
+        $order = app()->make(StoreOrderRepository::class)->getWhere($where);
+        if (!$order) {
+            throw new ValidateException('订单不是待操作的平台配送订单，请检查订单状态');
+        }
+
+        return $order;
+    }
+
+    /**
+     * 校验平台配送开关
+     * @return void
+     */
+    protected function checkPlatformDeliveryStatus(): void
+    {
+        if ((int)systemConfig('platform_delivery_status') !== 1) {
+            throw new ValidateException('平台配送已关闭，暂时无法操作');
+        }
+    }
+
+    /**
+     * 校验配送员是否可接单
+     * @param int $serviceId
+     * @param int $stationType
+     * @param int $merId
+     * @return void
+     */
+    protected function checkDeliveryService(int $serviceId, int $stationType, int $merId): void
+    {
+        $where = [
+            'service_id' => $serviceId,
+            'status' => DeliveryService::STATUS_ENABLED,
+            'is_del' => 0,
+        ];
+        if ($stationType === DeliveryStation::TYPE_PLATFORM) {
+            $where['type'] = DeliveryService::TYPE_PLATFORM;
+            $where['mer_id'] = 0;
+        } else {
+            $where['type'] = DeliveryService::TYPE_MERCHANT;
+            $where['mer_id'] = $merId;
+        }
+
+        $service = app()->make(DeliveryServiceRepository::class)->getWhere($where);
+        if (!$service) {
+            throw new ValidateException('配送员不存在或当前不可接单');
+        }
+    }
+
+    /**
+     * 获取平台配送流程的下一状态
+     * @param int|null $currentStatus null 表示从平台派单开始计算
+     * @return int
+     */
+    protected function getNextPlatformDeliveryStatus(?int $currentStatus = null): int
+    {
+        if ($currentStatus !== null && !in_array($currentStatus, [0, 1, 2], true)) {
+            throw new ValidateException('当前配送状态没有可执行的下一步操作');
+        }
+
+        $config = systemConfig([
+            'platform_delivery_accept_status',
+            'platform_delivery_pickup_status',
+            'platform_delivery_start_status',
+        ]);
+        $statusConfig = [
+            0 => 'platform_delivery_accept_status',
+            1 => 'platform_delivery_pickup_status',
+            2 => 'platform_delivery_start_status',
+        ];
+        $startStatus = $currentStatus === null ? 0 : $currentStatus + 1;
+        for ($status = $startStatus; $status <= 2; $status++) {
+            if ((int)($config[$statusConfig[$status]] ?? 0) === 1) {
+                return $status;
+            }
+        }
+
+        return 3;
+    }
+
+    /**
+     * 平台配送员更新配送状态
+     * @param int $orderId
+     * @param int $serviceId
+     * @param int $currentStatus
+     * @param array|string $pickupImages 到店取货留底图片
+     * @return int
+     */
+    public function serviceUpdateStatus(int $orderId, int $serviceId, int $currentStatus, $pickupImages = [])
+    {
+        $this->checkPlatformDeliveryStatus();
+        $this->checkDeliveryService($serviceId, DeliveryStation::TYPE_PLATFORM, 0);
+
+        $order = $this->platformOrderInfo($orderId, 1);
+        $deliveryOrder = $order->deliveryOrder;
+        if (!$deliveryOrder || (int)$deliveryOrder->station_type !== DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送记录不存在，无法确认接单');
+        }
+        if ((int)$deliveryOrder->service_id !== $serviceId) {
+            throw new ValidateException('订单未指派给当前配送员');
+        }
+        try {
+            return Db::transaction(function () use ($order, $deliveryOrder, $serviceId, $currentStatus, $pickupImages) {
+                $lockedDeliveryOrder = $this->dao->query([
+                    'delivery_order_id' => $deliveryOrder->delivery_order_id,
+                ])->lock(true)->find();
+                if (!$lockedDeliveryOrder) {
+                    throw new ValidateException('平台配送记录不存在');
+                }
+                if ((int)$lockedDeliveryOrder->service_id !== $serviceId) {
+                    throw new ValidateException('订单已改派，请刷新后重试');
+                }
+                if ((int)$lockedDeliveryOrder->status !== $currentStatus) {
+                    throw new ValidateException('订单配送状态已变更，请刷新后重试');
+                }
+
+                $nextStatus = $this->getNextPlatformDeliveryStatus($currentStatus);
+                $lockedDeliveryOrder->status = $nextStatus;
+                if (!empty($pickupImages)) {
+                    $lockedDeliveryOrder->pickup_images = $pickupImages;
+                }
+                // ORDER_DELIVERY_CITY_ING 是日志类型字符串，配送单状态本身使用整数 3。
+                if ((int)$nextStatus === 3 && empty($lockedDeliveryOrder->pickup_time)) {
+                    $lockedDeliveryOrder->pickup_time = date('Y-m-d H:i:s');
+                }
+
+                $lockedDeliveryOrder->save();
+
+                $changeMessages = [
+                    0 => '配送员已确认接单',
+                    1 => '配送员已到达提货点',
+                    2 => '配送员已开始送货',
+                ];
+                app()->make(StoreOrderStatusRepository::class)->createDeliveryLog($serviceId, [
+                    'order_id' => $order->order_id,
+                    'order_sn' => $order->order_sn,
+                    'type' => StoreOrderStatusRepository::TYPE_ORDER,
+                    'change_message' => $changeMessages[$currentStatus],
+                    'change_type' => StoreOrderStatusRepository::DELIVERY_ORDER_DISPATCH,
+                ]);
+                return $nextStatus;
+            });
+        } catch (ValidateException $e) {
+            throw $e;
+        } catch (\Exception $e) {
+            throw new ValidateException('配送状态更新失败：' . $e->getMessage());
+        }
+    }
+
     /**
      * 配送订单确认
      * @param int $id
      * @param int $merId
+     * @param int $serviceLogId
+     * @param array|string $confirmImages 确认送达图片
      * @return bool
      */
-    public function confirm(int $orderId, int $merId, int $serviceLogId = 0)
+    public function confirm(int $orderId, int $merId, int $serviceLogId = 0, $confirmImages = [])
     {
         $order = $this->orderInfo($orderId, $merId);
+        if ((int)$order['city_delivery_type'] === DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送订单由平台操作，商户无法确认送达');
+        }
         if($order->status == 2) {
             throw new ValidateException('订单已确认！');
         }
+
+        return $this->confirmOrder($order, $serviceLogId, $confirmImages);
+    }
+
+    /**
+     * 配送员确认商户配送订单送达
+     * @param int $orderId
+     * @param int $merId
+     * @param int $serviceId
+     * @param array|string $confirmImages 确认送达图片
+     * @return bool
+     */
+    public function confirmByDeliveryService(int $orderId, int $merId, int $serviceId, $confirmImages = [])
+    {
+        $this->checkDeliveryService($serviceId, DeliveryStation::TYPE_MERCHANT, $merId);
+        $order = $this->orderInfo($orderId, $merId);
+        if ((int)$order['city_delivery_type'] === DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送订单由平台操作，商户无法确认送达');
+        }
+        if ($order->status == 2) {
+            throw new ValidateException('订单已确认！');
+        }
+        if (!$order->deliveryOrder || (int)$order->deliveryOrder->service_id !== $serviceId) {
+            throw new ValidateException('订单未指派给当前配送员');
+        }
+
+        return $this->confirmOrder($order, 0, $confirmImages, $serviceId);
+    }
+
+    /**
+     * 平台确认送达
+     * @param int $orderId
+     * @param array|string $confirmImages 确认送达图片
+     * @return bool
+     */
+    public function sysConfirm(int $orderId, $confirmImages = [])
+    {
+        $this->checkPlatformDeliveryStatus();
+        $order = $this->platformOrderInfo($orderId, 1);
+        if (!$order->deliveryOrder || (int)$order->deliveryOrder->station_type !== DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送记录不存在，无法确认送达');
+        }
+        // 平台确认不再校验配送单中间状态（待接单/待取货/配送中等），确认后直接置为已送达
+        return $this->confirmOrder($order, 0, $confirmImages);
+    }
+
+    /**
+     * 平台配送员确认平台配送订单送达
+     * @param int $orderId
+     * @param int $serviceId
+     * @param array|string $confirmImages 确认送达图片
+     * @return bool
+     */
+    public function sysConfirmByDeliveryService(int $orderId, int $serviceId, $confirmImages = [])
+    {
+        $this->checkPlatformDeliveryStatus();
+        $this->checkDeliveryService($serviceId, DeliveryStation::TYPE_PLATFORM, 0);
+        $order = $this->platformOrderInfo($orderId, 1);
+        $deliveryOrder = $order->deliveryOrder;
+        if (!$deliveryOrder || (int)$deliveryOrder->station_type !== DeliveryStation::TYPE_PLATFORM) {
+            throw new ValidateException('平台配送记录不存在，无法确认送达');
+        }
+        if ((int)$deliveryOrder->service_id !== $serviceId) {
+            throw new ValidateException('订单未指派给当前配送员');
+        }
+        if ((int)$deliveryOrder->status !== 3) {
+            throw new ValidateException('配送流程尚未完成，无法确认送达');
+        }
+
+        return $this->confirmOrder($order, 0, $confirmImages, $serviceId);
+    }
+
+    /**
+     * 完成配送订单
+     * @param mixed $order
+     * @param int $serviceLogId
+     * @param array|string $confirmImages 确认送达图片
+     * @return bool
+     */
+    protected function confirmOrder($order, int $serviceLogId = 0, $confirmImages = [], int $deliveryServiceId = 0)
+    {
+        $now = date('Y-m-d H:i:s');
         try {
-            Db::transaction(function () use ($order, $serviceLogId) {
+            Db::transaction(function () use ($order, $serviceLogId, $confirmImages, $deliveryServiceId, $now) {
                 // 配送完成
                 if($order->deliveryOrder) {
                     $order->deliveryOrder->status = 4;
+                    if (!empty($confirmImages)) {
+                        $order->deliveryOrder->confirm_images = $confirmImages;
+                    }
+                    if (empty($order->deliveryOrder->confirm_time)) {
+                        $order->deliveryOrder->confirm_time = $now;
+                    }
                     $order->deliveryOrder->save();
+                    app()->make(DeliveryServiceBillRepository::class)->createDeliveryIncome((int)$order->deliveryOrder->delivery_order_id);
                 }
                 // 更新订单状态：待评价
                 $order->status = 2;
-                $order->verify_time = date('Y-m-d H:i:s');
+                $order->verify_time = $now;
                 $order->save();
                 // 构建订单状态变更信息
                 $orderStatus = [
@@ -900,12 +1726,34 @@ class DeliveryOrderRepository extends BaseRepository
                 app()->make(StoreOrderRepository::class)->takeAfter($order, $user);
                 // 根据服务人员ID是否存在，分别记录服务人员日志或管理员日志
                 $storeOrderStatusRepository = app()->make(StoreOrderStatusRepository::class);
-                if ($serviceLogId) {
+                if ($deliveryServiceId) {
+                    $storeOrderStatusRepository->createDeliveryLog($deliveryServiceId, $orderStatus);
+                } elseif ($serviceLogId) {
                     $storeOrderStatusRepository->createServiceLog($serviceLogId, $orderStatus);
                 } else {
                     $storeOrderStatusRepository->createAdminLog($orderStatus);
                 }
             });
+
+            try {
+                if (systemConfig('order_shipping_open', 0) && (int)$order->pay_type === 2 && (float)$order->pay_price > 0) {
+                    $groupOrder = $order->groupOrder;
+                    if ($groupOrder && $groupOrder->group_order_sn) {
+                        $merchant = app()->make(MerchantRepository::class)->get((int)$order->mer_id);
+                        Queue::push(MiniOrderConfirmJob::class, [
+                            'out_trade_no' => (string)$groupOrder->group_order_sn,
+                            'received_time' => strtotime((string)$order->verify_time) ?: time(),
+                            'sub_mchid' => (string)($merchant->sub_mchid ?? ''),
+                        ]);
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::error('小程序订单签收同步任务投递失败：' . json_encode([
+                    'message' => $e->getMessage(),
+                    'order_id' => (int)$order->order_id,
+                    'order_sn' => (string)$order->order_sn,
+                ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            }
 
             return true;
         } catch (\Exception $e) {
@@ -927,34 +1775,40 @@ class DeliveryOrderRepository extends BaseRepository
      *
      * @param object $station
      * @param object $order
-     * @return void
+     * @return array
      */
-    protected function getServiceFee($station, $order)
+    protected function getServiceFee($station, $order, ?int $configMerId = null)
     {
         $deliveryConfigRepository = app()->make(DeliveryConfigRepository::class);
-        $deliverySettings = $deliveryConfigRepository->getDeliveryConfig($order['mer_id']);
+        $configMerId = $configMerId ?? (int)$order['mer_id'];
+        $deliverySettings = $deliveryConfigRepository->getDeliveryConfig($configMerId);
         if (!$deliverySettings) {
-            throw new ValidateException('商户：【' . $deliverySettings['merchant']['mer_name'] . '】，未设置配送费用信息，无法计算配送费');
+            $deliveryName = $configMerId === 0 ? '平台' : '商户';
+            throw new ValidateException($deliveryName . '未设置配送费用信息，无法计算配送费');
         }
-        // 如果不包邮，直接计算
-        if($order['pay_postage'] > 0) {
-            return bcmul(bcdiv($deliverySettings['commission_rate'], 100, 2), $order['pay_postage'], 2);
+        $settlementFee = (float)($order['delivery_settlement_fee'] ?? 0);
+        if ($settlementFee > 0) {
+            return [$settlementFee, (float)($order['delivery_service_fee'] ?? 0)];
         }
-        // 如果包邮，需要先获取到配送费再计算
-        // 计算重量
-        $totalWeight = 0;
-        foreach($order['orderProduct'] as $item) {
-            $totalWeight += $item['cart_info']['productAttr']['weight'] * $item['product_num'];
+        // 兼容升级前尚未派单的订单，旧订单没有实际配送成本快照。
+        if ($order['pay_postage'] > 0) {
+            $settlementFee = (float)$order['pay_postage'];
+        } else {
+            $totalWeight = 0;
+            foreach($order['orderProduct'] as $item) {
+                $totalWeight += $item['cart_info']['productAttr']['weight'] * $item['product_num'];
+            }
+            $settlementFee = $deliveryConfigRepository->deliveryFee(
+                $station['station_id'],
+                $totalWeight,
+                $deliverySettings->toArray(),
+                $order['user_address'],
+                (int)$order['mer_id']
+            );
         }
 
-        $fee = $deliveryConfigRepository->deliveryFee(
-            $station['station_id'],
-            $totalWeight,
-            $deliverySettings->toArray(),
-            $order['user_address']
-        );
-
-        return bcmul(bcdiv($deliverySettings['commission_rate'], 100, 2), $fee, 2);
+        $serviceFee = bcmul(bcdiv($deliverySettings['commission_rate'], 100, 2), $settlementFee, 2);
+        return [$settlementFee, $serviceFee];
     }
 
     public function getDeliveryTrack($deliveryOrder)

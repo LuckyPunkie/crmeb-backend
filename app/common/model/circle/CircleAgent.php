@@ -50,6 +50,26 @@ class CircleAgent extends BaseModel
         return $value ? json_decode($value, true) : [];
     }
 
+    public function setMerProductTypeAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getMerProductTypeAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
+    public function setPlatformCategoryAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getPlatformCategoryAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
     public function user()
     {
         return $this->hasOne(User::class, 'uid', 'uid')->field('uid, nickname, phone, avatar');

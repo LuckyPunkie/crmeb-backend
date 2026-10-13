@@ -109,24 +109,17 @@ class CustomHttpClient implements HttpClientInterface
         // 设置请求头
         foreach ($options['headers'] as $key => $value) {
             if (is_string($key)) {
-                $values = [];
-                if (is_array($value)) {
-                    foreach ($value as $item) {
-                        [$type, $val] = strstr($item, ':') !== false ? explode(':', $item) : [null, null];
-                        if ($type && $val) {
-                            $values[] = $val;
-                        }
-                    }
-                    $headers[$key] = implode(',', $values);
-                } else {
-                    $values[] = $value;
-                    $headers[$key] = implode(',', $values);
-                }
+                $headers[$key] = implode(',', array_map('strval', (array)$value));
             } else {
                 $values = [];
-                [$type, $val] = strstr($value, ':') !== false ? explode(':', $value) : [null, null];
-                $values[] = $val;
-                $headers[$type] = implode(',', $values);
+                foreach ((array)$value as $item) {
+                    $item = (string)$item;
+                    [$type, $val] = strstr($item, ':') !== false ? explode(':', $item, 2) : [null, null];
+                    if ($type && $val) {
+                        $values[] = $val;
+                        $headers[$type] = implode(',', $values);
+                    }
+                }
             }
         }
 

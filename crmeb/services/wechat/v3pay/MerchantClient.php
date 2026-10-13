@@ -29,6 +29,28 @@ class MerchantClient extends BaseClient
     }
 
     /**
+     * 获取进件敏感信息加密公钥
+     * @return mixed
+     */
+    protected function getPublicKey()
+    {
+        if ($this->getConfig()->publicKey !== '') {
+            return parent::getPublicKey();
+        }
+
+        $certificate = $this->getCertficatescAttr('certificates');
+        if (!$certificate) {
+            throw new ValidateException('微信支付平台证书获取失败，请检查服务商支付配置');
+        }
+
+        $publicKey = openssl_pkey_get_public($certificate);
+        if ($publicKey === false) {
+            throw new ValidateException('微信支付平台证书解析失败，请检查服务商支付配置');
+        }
+        return $publicKey;
+    }
+
+    /**
      * 二级商户进件成为微信支付商户
      * POST /v3/ecommerce/applyments/
      * @param array $params
@@ -120,7 +142,7 @@ class MerchantClient extends BaseClient
      */
     public function profitsharingAdd(array $params)
     {
-        $params['appid'] = $this->serviceConfig->wechatAppid ?: $this->serviceConfig->routineAppid;
+        $params['appid'] = $this->serviceConfig->appId;
         $res = $this->request('v3/ecommerce/profitsharing/receivers/add', 'POST', [
             'body' => json_encode($params, JSON_UNESCAPED_UNICODE)
         ], true);
@@ -138,7 +160,7 @@ class MerchantClient extends BaseClient
      */
     public function profitsharingDel(array $params)
     {
-        $params['appid'] = $this->serviceConfig->wechatAppid ?: $this->serviceConfig->routineAppid;
+        $params['appid'] = $this->serviceConfig->appId;
         $res = $this->request('v3/ecommerce/profitsharing/receivers/delete', 'POST', [
             'body' => json_encode($params, JSON_UNESCAPED_UNICODE)
         ], true);

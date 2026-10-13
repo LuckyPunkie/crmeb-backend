@@ -274,6 +274,14 @@ class MerchantRepository extends BaseRepository
     }
 
     /**
+     * 获取当前有效店铺总数。
+     */
+    public function totalMerchantNum(): int
+    {
+        return $this->dao->totalMerchantNum();
+    }
+
+    /**
      * 创建或编辑商户的表单
      *
      * @param int|null $id 商户的ID，如果为null则是创建新商户，否则是编辑现有商户
@@ -1409,37 +1417,37 @@ class MerchantRepository extends BaseRepository
             // 显示商户名称
             [
                 'type' => 'span',
-                'title' => '商户名称：',
+                'title' => '店铺名称：',
                 'native' => false,
                 'children' => [(string) $merchant->mer_name]
             ],
             // 显示商户ID
             [
                 'type' => 'span',
-                'title' => '商户ID：',
+                'title' => '店铺ID：',
                 'native' => false,
                 'children' => [(string) $merchant->mer_id]
             ],
             // 显示商户保证金额度
             [
                 'type' => 'span',
-                'title' => '商户保证金额度：',
+                'title' => '保证金额度：',
                 'native' => false,
                 'children' => [(string) $merchant->ot_margin]
             ],
             // 显示商户剩余保证金
             [
                 'type' => 'span',
-                'title' => '商户剩余保证金：',
+                'title' => '剩余保证金：',
                 'native' => false,
                 'children' => [(string) $merchant->margin]
             ],
             // 隐藏字段，存储商户ID
             Elm::hidden('mer_id',  $merchant->mer_id),
             // 输入字段，用于输入保证金扣除金额
-            Elm::number('number', '保证金扣除金额：', 0)->max($merchant->margin)->precision(2)->required('请输入保证金扣除金额'),
+            Elm::number('number', '扣除金额：', 0)->max($merchant->margin)->precision(2)->required('请输入保证金扣除金额'),
             // 输入字段，用于输入保证金扣除原因
-            Elm::text('mark', '保证金扣除原因：')->placeholder('请输入保证金扣除原因')->required('请输入保证金扣除原因'),
+            Elm::text('mark', '扣除原因：')->placeholder('请输入保证金扣除原因')->required('请输入保证金扣除原因'),
         ]);
         // 设置表单标题
         return $form->setTitle('扣除保证金');

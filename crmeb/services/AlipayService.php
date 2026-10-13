@@ -54,11 +54,6 @@ class AliPayService
     protected ?string $authCode = null;
 
     /**
-     * @var static|null
-     */
-    protected static ?self $instance = null;
-
-    /**
      * AliPayService constructor.
      * @param array $config
      */
@@ -84,13 +79,9 @@ class AliPayService
      * @param array $config
      * @return static
      */
-    public static function instance(array $config = [])
+    public static function make(array $config = []): self
     {
-        if (is_null(self::$instance) || $config) {
-            self::$instance = new static($config);
-        }
-        self::$instance->initialize();
-        return self::$instance;
+        return new static($config);
     }
 
     /**
@@ -333,8 +324,8 @@ class AliPayService
     public static function handleNotify()
     {
 
-        return self::instance()->notify(function ($notify) {
-            Log::info('支付宝回调:' . var_export([$notify], true));
+        return self::make()->notify(function ($notify) {
+            Log::info('支付宝回调$notify:' . var_export([$notify], true));
             if (isset($notify['out_trade_no']) && isset($notify['attach']) && $notify['attach']) {
                 event('pay_success_' . $notify['attach'], ['order_sn' => $notify['out_trade_no'], 'data' => $notify]);
                 return true;
@@ -361,7 +352,10 @@ class AliPayService
         //备注
         $postOrder['attach'] = isset($paramInfo['passback_params']) ? urldecode($paramInfo['passback_params']) : '';
 
-        if (in_array($postOrder['trade_status'], ['TRADE_SUCCESS', 'TRADE_FINISHED']) && $this->verifyNotify($paramInfo)) {
+        if (
+            in_array($postOrder['trade_status'], ['TRADE_SUCCESS', 'TRADE_FINISHED'])
+            && $this->verifyNotify($paramInfo)
+        ) {
             try {
                 if ($notifyFn($postOrder)) {
                     return 'success';
@@ -385,6 +379,7 @@ class AliPayService
         } catch (\Exception $e) {
             Log::error('支付宝回调成功,验签发生错误，错误原因:' . $e->getMessage());
         }
+        Log::error('支付宝回调成功,验签发生错误 False:'. $param);
         return false;
     }
 }

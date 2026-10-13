@@ -475,17 +475,9 @@ class WechatUserRepository extends BaseRepository
     public function wechantAuth($code)
     {
         $wechatInfo = $this->getAuthWechatInfo($code);
-        if (!isset($wechatInfo['nickname'])) {
-            $wechatInfo = OfficialAccount::instance()->user()->get($wechatInfo['openid'])->toArray();
-            if (!isset($wechatInfo['nickname']))
-                throw new ValidateException('OfficialAccount 授权失败');
-            if (isset($wechatInfo['tagid_list']))
-                $wechatInfo['tagid_list'] = implode(',', $wechatInfo['tagid_list']);
-        } else {
-            if (isset($wechatInfo['privilege'])) unset($wechatInfo['privilege']);
-            if (!$this->dao->getwhere(['openid' => $wechatInfo['openid']])) {
-                $wechatInfo['subscribe'] = 0;
-            }
+        if (isset($wechatInfo['privilege'])) unset($wechatInfo['privilege']);
+        if (!$this->dao->getwhere(['openid' => $wechatInfo['openid']])) {
+            $wechatInfo['subscribe'] = 0;
         }
         return $wechatInfo;
     }
@@ -498,19 +490,7 @@ class WechatUserRepository extends BaseRepository
     public function getAuthWechatInfo($code)
     {
         try {
-            Log::info('$code:'.$code);
-            $userInfoConfig = OfficialAccount::tokenFromCode($code);
-            //Log::info('$userInfoConfig:'.var_export($userInfoConfig,true));
-            /**
-             * array:6 [
-             * "access_token" => "1_b6hDSiM6ufLX8kecBFQjZbtMvn6Jyxuv2mLOoHB-9Smx1x-r64NC3PP22uwT3RliCpo74XfqJVObB4l4uN7311KaO91pXC26rn2Hm4Qf6sGZ-yIV"
-             * "expires_in" => 7200
-             * "refresh_token" => "1_vfXARkT0wwzEP7hxuDPEj0p6ux7nXlRpHgPnC38pHSGZl6urS6ryTOf2T2Dh7v7UJSxj5q5E4n3mhqzJP3Ep8ld7RSEiQ-9hll6elvS7YQRh5yMr"
-             * "openid" => "oOdvCvjvCG0FnCwcMdDD_xIODRO0"
-             * "scope" => "snsapi_userinfo"
-             * "unionid" => "oZEAhs7WSG2B6OnZVvkOkVbkAcQo"
-             * ]
-             */
+            $userInfoConfig = OfficialAccount::userFromCode($code);
         } catch (\Throwable $e) {
             \think\facade\Log::error(
                 json_encode([

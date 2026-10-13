@@ -24,13 +24,25 @@ class MiniOrderShippingJob implements JobInterface
     public function fire($job, $data)
     {
         try {
-            MiniProgram::shippingByTradeNo($data['out_trade_no'], $data['logistics_type'], $data['shipping_list'], $data['payer_openid'], $data['path'], $data['delivery_mode'], $data['is_all_delivered'], $data['sub_mchid']);
+            MiniProgram::shippingByTradeNo($data['out_trade_no'], $data['logistics_type'], $data['shipping_list'], $data['payer_openid'], $data['path'], $data['delivery_mode'] ?? 1, $data['is_all_delivered'] ?? true, $data['sub_mchid'] ?? '');
         } catch (\Throwable $e) {
-            \think\facade\Log::error('小程序订单处理失败，原因：' . $e->getMessage() . $e->getFile() . $e->getLine());
+            \think\facade\Log::error('小程序订单处理失败：' . json_encode([
+                'message' => $e->getMessage(),
+                'out_trade_no' => (string)($data['out_trade_no'] ?? ''),
+                'logistics_type' => $data['logistics_type'] ?? '',
+                'path' => $data['path'] ?? '',
+                'file' => $e->getFile(),
+                'line' => $e->getLine(),
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
         }
         return $job->delete();
     }
 
+    /**
+     * 队列任务执行失败时回调（预留，当前未实现处理逻辑）
+     * @param $data 任务数据
+     * @return void
+     */
     public function failed($data)
     {
         // TODO: Implement failed() method.

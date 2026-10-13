@@ -31,6 +31,8 @@ use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\system\operate\OperateLogRepository;
 use app\common\repositories\user\UserRelationRepository;
 use app\common\repositories\user\UserVisitRepository;
+use app\common\model\merchant\MerchantMemberProductPrice;
+use app\common\repositories\merchant\MerchantMemberRepository;
 use app\validate\merchant\StoreProductValidate;
 use crmeb\jobs\ChangeSpuStatusJob;
 use crmeb\jobs\DownloadProductCopyImage;
@@ -73,8 +75,11 @@ class ProductRepository extends BaseRepository
         ['type', 0],
         ['svip_price', 0],
         ['svip_price_type', 0],
+        ['member_price_setting', 0],
         ['params', []],
         ['product_type', 0],
+        ['is_price_negotiable', 0],
+        ['price_negotiable_text', []],
         ['good_ids', []],
         'reservation_time_type',
         'reservation_start_time',
@@ -100,8 +105,8 @@ class ProductRepository extends BaseRepository
         ['is_scan_order', 1],
         ['is_blindbox_exclusive', 0],
     ];
-    protected $admin_filed = 'Product.product_id,Product.mer_id,brand_id,spec_type,unit_name,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,U.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,Product.cost,Product.ot_price,Product.stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,star,ficti,integral_total,integral_price_total,sys_labels,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.type';
-    protected $filed = 'Product.product_id,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,spu_id,video_link,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way';
+    protected $admin_filed = 'Product.product_id,Product.mer_id,brand_id,spec_type,unit_name,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,U.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,Product.cost,Product.ot_price,Product.stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,star,ficti,integral_total,integral_price_total,sys_labels,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.member_price_setting,Product.mer_form_id,Product.good_ids,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.type,Product.is_price_negotiable,Product.price_negotiable_text';
+    protected $filed = 'Product.product_id,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.custom_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.member_price_setting,Product.mer_form_id,Product.good_ids,spu_id,video_link,mer_form_id,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.is_price_negotiable,Product.price_negotiable_text';
 
     const  NOTIC_MSG = [
         1 => [
@@ -131,7 +136,7 @@ class ProductRepository extends BaseRepository
     ];
     const AUTO_ON_TIME = 'mer_auto_on_time';
     const AUTO_OFF_TIME = 'mer_auto_off_time';
-    const AUTO_TIME_STATUS = 'mer_auto_on_off_time';
+    const AUTO_TIME_STATUS = 'mer_auto_on_off_time_v2';
     const AUTO_PREFIX_SET = 'auto_set_';
 
     const SECKILL_STOCK_CACHE_KEY = 'seckill_stock_cache_key';
@@ -146,6 +151,21 @@ class ProductRepository extends BaseRepository
     const DEFINE_TYPE_CARD = 3;
     //预约商品
     const DEFINE_TYPE_RESERVATION = 4;
+    //次卡/年卡商品
+    const DEFINE_TYPE_SERVICE_CARD = 5;
+    const DEFINE_TYPES = [
+        self::DEFINE_TYPE_ENTITY,
+        self::DEFINE_TYPE_VIRTUAL,
+        self::DEFINE_TYPE_CLOUD,
+        self::DEFINE_TYPE_CARD,
+        self::DEFINE_TYPE_RESERVATION,
+        self::DEFINE_TYPE_SERVICE_CARD,
+    ];
+
+    const DELIVERY_WAY_PICKUP = 1;
+    const DELIVERY_WAY_EXPRESS = 2;
+    const DELIVERY_WAY_CITY = 3;
+    const DELIVERY_WAY_SERVICE_CARD = self::DELIVERY_WAY_PICKUP;
 
     // 普通商品
     const PRODUCT_TYPE_NORMAL = 0;
@@ -303,8 +323,7 @@ class ProductRepository extends BaseRepository
         event('product.create.before', compact('data', 'productType', 'conType'));
 
         $parameterValueRepository = app()->make(ParameterValueRepository::class);
-        $result =  Db::transaction(function () use ($data, $productType, $conType, $content, $product, $admin_info,
-            $seckillActiveId,$parameterValueRepository) {
+        $result =  Db::transaction(function () use ($data, $productType, $conType, $content, $product, $admin_info, $seckillActiveId,$parameterValueRepository) {
             $result = $this->dao->create($product);//添加商品
 
             if ($productType == 0 && !empty($data['params'] ?? [])) {
@@ -312,8 +331,9 @@ class ProductRepository extends BaseRepository
             }
             app()->make(ProductResultRepository::class)->save($result->product_id,$data, 0);
             //添加定时上架
-            if (!$productType)
+            if (!$productType){
                 $this->autoOnTime($result->product_id,$product['auto_on_time'] ?? null, $product['auto_off_time'] ?? null);
+            }
             //格式商品SKU
             $settleParams = $this->setAttrValue($data, $result->product_id, $productType, 0);
             //格式商品商户分类
@@ -423,7 +443,11 @@ class ProductRepository extends BaseRepository
         }
         $res = $this->dao->get($id);
         if (!$res) throw new ValidateException('商品不存在');
+        // 免审编辑需要沿用商品自身类型，否则云盘商品会按普通商品组装 SKU，
+        // 保存时进入云盘分支却缺少 cdkey 数据。
+        $data['type'] = (int)$res['type'];
         $data['svip_price_type'] = $res['svip_price_type'];
+        $data['member_price_setting'] = $res['member_price_setting'] ?? 0;
         $settleParams = $this->setAttrValue($data, $id, 0, 1);
         $settleParams['cate'] = $this->setMerCate($data['mer_cate_id'], $id, $merId);
         $settleParams['attr'] = $this->setAttr($data['attr'], $id);
@@ -483,6 +507,7 @@ class ProductRepository extends BaseRepository
      */
     public function save($res, $settleParams, $content, $data = [], $productType = 0)
     {
+        $productDefineType = (int)($data['type'] ?? $res->type);
         // 商品规格
 
         if (isset($settleParams['attr'])) {
@@ -502,17 +527,47 @@ class ProductRepository extends BaseRepository
         if (isset($settleParams['attrValue'])) {
             // 商品规格
             $productAttrValueRepository = app()->make(ProductAttrValueRepository::class);
-            $productAttrValueRepository->clearAttr($res->product_id);
+            $isServiceCardEdit = (int)$res->type === self::DEFINE_TYPE_SERVICE_CARD
+                && $productDefineType === self::DEFINE_TYPE_SERVICE_CARD;
 
-            if ($res->type == self::DEFINE_TYPE_CARD) {
+            if ((int)$res->type === self::DEFINE_TYPE_SERVICE_CARD && $productDefineType !== self::DEFINE_TYPE_SERVICE_CARD) {
+                app()->make(StoreProductCardRuleRepository::class)->clearByProduct($res->product_id);
+            }
+
+            if ($productDefineType == self::DEFINE_TYPE_CARD) {
                 app()->make(CdkeyLibraryRepository::class)->cancel($res->product_id);
-            }else if ($res->type == self::DEFINE_TYPE_CLOUD) {
+            }else if ($productDefineType == self::DEFINE_TYPE_CLOUD) {
                 app()->make(ProductCdkeyRepository::class)->clearAttr($res->product_id);
             }
 
-            $arr = array_chunk($settleParams['attrValue'], 30);
-            foreach ($arr as $item) {
-                $productAttrValueRepository->add($item, $res->type);
+            // 次卡/年卡是单规格权益商品，编辑时必须保留原 value_id，避免已保存的规则和已售卡快照失联。
+            if ($isServiceCardEdit) {
+                $this->saveServiceCardAttrValue((int)$res->product_id, $settleParams['attrValue']);
+            } else {
+                $productAttrValueRepository->clearAttr($res->product_id);
+                $arr = array_chunk($settleParams['attrValue'], 30);
+                foreach ($arr as $item) {
+                    $productAttrValueRepository->add($item, $productDefineType);
+                }
+            }
+
+            // SKU 保存后再保存次卡/年卡规则，此时才能拿到稳定的 value_id/unique。
+            if ($productDefineType == self::DEFINE_TYPE_SERVICE_CARD) {
+                app()->make(StoreProductCardRuleRepository::class)->saveProductRules(
+                    (int)($data['mer_id'] ?? $res->mer_id),
+                    (int)$res->product_id,
+                    $settleParams['cardRule'] ?? []
+                );
+            }
+
+            if ($productType === self::PRODUCT_TYPE_NORMAL) {
+                $this->saveMerchantMemberPrices(
+                    (int)($data['mer_id'] ?? $res->mer_id),
+                    (int)$res->product_id,
+                    (int)($data['member_price_setting'] ?? $res->member_price_setting ?? 0),
+                    (int)($data['svip_price_type'] ?? $res->svip_price_type ?? 0),
+                    $settleParams['memberPrices'] ?? []
+                );
             }
         }
 
@@ -550,6 +605,37 @@ class ProductRepository extends BaseRepository
         }
 
         return $res;
+    }
+
+    /**
+     * 保存次卡/年卡商品的单规格 SKU。
+     *
+     * 普通商品编辑会清空并重建 SKU，但次卡/年卡规则和已售用户卡都依赖 value_id。
+     * 因为次卡当前只支持单规格，所以编辑时直接更新原 SKU 记录，保留 value_id 不变；
+     * 仅在历史数据没有 SKU 时才新增一条。
+     *
+     * @param int $productId 商品 ID。
+     * @param array $attrValues 格式化后的 SKU 数据，必须只有一条。
+     */
+    protected function saveServiceCardAttrValue(int $productId, array $attrValues): void
+    {
+        if (count($attrValues) !== 1) {
+            throw new ValidateException('次卡/年卡商品暂只支持单规格');
+        }
+
+        $productAttrValueRepository = app()->make(ProductAttrValueRepository::class);
+        $oldAttrValue = $productAttrValueRepository->search(['product_id' => $productId])
+            ->order('value_id ASC')
+            ->find();
+
+        if (!$oldAttrValue) {
+            $productAttrValueRepository->add($attrValues, self::DEFINE_TYPE_SERVICE_CARD);
+            return;
+        }
+
+        $attrValue = reset($attrValues);
+        unset($attrValue['value_id']);
+        $productAttrValueRepository->update((int)$oldAttrValue['value_id'], $attrValue);
     }
 
     /**
@@ -617,6 +703,10 @@ class ProductRepository extends BaseRepository
             if ($data['integral_rate'] > 100) $integral_rate = 100;
 
         }
+        $isPriceNegotiable = (int)($data['is_price_negotiable'] ?? 0);
+        if ((int)($data['product_type'] ?? 0) !== 0) {
+            $isPriceNegotiable = 0;
+        }
         $result = [
             'store_name' => $data['store_name'],
             'image' => $data['image'],
@@ -641,12 +731,13 @@ class ProductRepository extends BaseRepository
             'guarantee_template_id' => $data['guarantee_template_id'] ?? 0,
             'is_gift_bag' => $data['is_gift_bag'] ?? 0,
             'integral_rate' => $integral_rate ?? 0,
-            'delivery_way' => is_array($data['delivery_way']) && !empty($data['delivery_way']) ? implode(',', $data['delivery_way']) : $data['delivery_way'],
+            'delivery_way' => is_array($data['delivery_way'] ?? []) && !empty($data['delivery_way']) ? implode(',', $data['delivery_way']) : ($data['delivery_way'] ?? ''),
             'delivery_free' => $data['delivery_free'] ?? 0,
             'once_min_count' => $data['once_min_count'] ?? 0,
             'once_max_count' => $data['once_max_count'] ?? 0,
             'pay_limit' => $data['pay_limit'] ?? 0,
             'svip_price_type' => $data['svip_price_type'] ?? 0,
+            'member_price_setting' => (int)($data['member_price_setting'] ?? 0),
             'refund_switch' => $data['refund_switch'] ?? 0,
             'mer_form_id' => $data['mer_form_id'] ?? 0,
             'rate' => $data['rate'] ?? 5.0,
@@ -659,6 +750,10 @@ class ProductRepository extends BaseRepository
             'welfare_commission' => isset($data['welfare_commission']) ? (float)$data['welfare_commission'] : 0,
             'is_scan_order' => isset($data['is_scan_order']) ? ((int)$data['is_scan_order'] ? 1 : 0) : 1,
             'is_blindbox_exclusive' => isset($data['is_blindbox_exclusive']) ? ((int)$data['is_blindbox_exclusive'] ? 1 : 0) : 0,
+            'is_price_negotiable' => $isPriceNegotiable,
+            'price_negotiable_text' => !empty($data['price_negotiable_text'])
+                ? json_encode($data['price_negotiable_text'], JSON_UNESCAPED_UNICODE)
+                : ''
         ];
         if (isset($data['extend']))
             $result['extend'] = $data['extend'] ? json_encode($data['extend'], JSON_UNESCAPED_UNICODE) : '';
@@ -744,7 +839,11 @@ class ProductRepository extends BaseRepository
     public function setAttrValue(array $data, int $productId, int $productType, int $isUpdate = 0)
     {
         $extension_status = systemConfig('extension_status');
-        $result = ['attrValue' => [], 'data' => []];
+        $result = ['attrValue' => [], 'data' => [], 'cardRule' => [], 'memberPrices' => []];
+        $productDefineType = (int)($data['type'] ?? self::DEFINE_TYPE_ENTITY);
+        if ($productDefineType === self::DEFINE_TYPE_SERVICE_CARD && count($data['attrValue']) > 1) {
+            throw new ValidateException('次卡/年卡商品暂只支持单规格');
+        }
         $update_infos = [
             OperateLogRepository::MERCHANT_INC_PRODUCT_PRICE => '',
             OperateLogRepository::MERCHANT_DEC_PRODUCT_PRICE => '',
@@ -765,7 +864,8 @@ class ProductRepository extends BaseRepository
          *  2. 计算商品最低价格
          *  3. 处理卡密商品属性
          */
-        $svip = isset($data['svip_price_type']) && $data['svip_price_type'] == 2 ? true : false;
+        $svip = (int)($data['member_price_setting'] ?? 0) === 1
+            && (int)($data['svip_price_type'] ?? 0) === 2;
         $base_num = [];
 
         foreach ($data['attrValue'] as $value) {
@@ -801,9 +901,15 @@ class ProductRepository extends BaseRepository
                     }
                 }
                 $attrValueItem = [];
-                if(($data['type'] ?? 0) == self::DEFINE_TYPE_RESERVATION) {
+                if($productDefineType == self::DEFINE_TYPE_RESERVATION) {
                     $attrValueItem['reservation'] = $value['reservation'] ?? [];
                     $value['stock'] = array_sum(array_column($value['reservation'],'stock'));
+                }
+                if($productDefineType == self::DEFINE_TYPE_SERVICE_CARD) {
+                    $cardRule = $value['card_rule'] ?? $value['cardRule'] ?? [];
+                    if (!$cardRule) {
+                        throw new ValidateException('次卡/年卡规则必须填写');
+                    }
                 }
                 //新售价
                 $new_price = $value['price'] ? (($value['price'] < 0) ? 0 : $value['price']) : 0;
@@ -833,8 +939,30 @@ class ProductRepository extends BaseRepository
                 $attrValueItem['is_show'] = $value['is_show'] ?? 1;
                 $attrValueItem["settlement_price"] = $value["settlement_price"] ?? 0;
                 $attrValueItem["probability_weight"] = isset($value['probability_weight']) ? max(0, (int)$value['probability_weight']) : 10;
+                $merchantMemberPrices = $value['merchant_member_prices'] ?? [];
+                if (!is_array($merchantMemberPrices)) {
+                    $merchantMemberPrices = [];
+                }
+                if (!$merchantMemberPrices && !empty($value['memberPrices']) && is_array($value['memberPrices'])) {
+                    foreach ($value['memberPrices'] as $memberPrice) {
+                        if (!is_array($memberPrice)) {
+                            continue;
+                        }
+                        foreach ($memberPrice as $level => $price) {
+                            $merchantMemberPrices[(int)$level] = $price;
+                        }
+                    }
+                }
+                $result['memberPrices'][$unique] = $merchantMemberPrices;
                 if (isset($cdkey)) {$attrValueItem['cdkey'] = $cdkey;}
                 $result['attrValue'][] = $attrValueItem;
+                if (isset($cardRule)) {
+                    if (isset($value['value_id']) && $value['value_id']) {
+                        $cardRule['value_id'] = (int)$value['value_id'];
+                    }
+                    $result['cardRule'][$unique] = $cardRule;
+                    unset($cardRule);
+                }
                 // 组合操作日志数据
                 if ($isUpdate && isset($value['unique'])) {
                     if (isset($unique_price[$value['unique']])) {
@@ -957,10 +1085,16 @@ class ProductRepository extends BaseRepository
         //        return $has ? false : $unique;
     }
 
+    /**
+     * 获取商品编辑详情：加载SKU属性值、详情内容、属性结果及商户分类等关联数据，并重组规格属性、配送方式、推荐商品、会员价等字段
+     * @param $id 商品ID
+     * @param $is_copy 是否复制商品
+     * @return array 商品编辑详情数据
+     */
     public function getEdit($id, $is_copy)
     {
         $with = [
-            'attrValue' => function ($query) { $query->with(['productCdkey'])->order('value_id ASC'); },
+            'attrValue' => function ($query) { $query->with(['productCdkey', 'cardRule'])->order('value_id ASC'); },
             'content' => function ($query) { $query->where('type', 0); },
             'attr_result',
             'merCateId'
@@ -987,6 +1121,7 @@ class ProductRepository extends BaseRepository
                 $value['stock'] = $old[$_sku]['stock'] ?? 0;
                 $value['value_id'] = $old[$_sku]['value_id'] ?? 0;
                 $value['productCdkey'] = $old[$_sku]['productCdkey'] ?? [];
+                $value['card_rule'] = $this->formatProductCardRule($old[$_sku]['cardRule'] ?? []);
             }
             $product['params'] = $result['params'];
             $product['attrValue'] = $result['attrValue'];;
@@ -1028,7 +1163,24 @@ class ProductRepository extends BaseRepository
         $product['sys_labels_data'] = $spu['sys_labels_data'] ?? [];
 
         foreach ($product['attrValue'] as $k => $v) {
-            $product['attrValue'][$k]['cdkey'] = $v['productCdkey'];
+            $product['attrValue'][$k]['cdkey'] = $v['productCdkey'] ?? [];
+            $product['attrValue'][$k]['card_rule'] = $this->formatProductCardRule($v['card_rule'] ?? $v['cardRule'] ?? []);
+            unset($product['attrValue'][$k]['cardRule']);
+        }
+        if ((int)($product['product_type'] ?? 0) === self::PRODUCT_TYPE_NORMAL
+            && (int)($product['member_price_setting'] ?? 0) === 2
+        ) {
+            $product['attrValue'] = $this->appendMerchantMemberPrices(
+                (int)$product['mer_id'],
+                (int)$product['product_id'],
+                $product['attrValue']
+            );
+        } else {
+            foreach ($product['attrValue'] as &$value) {
+                $value['merchant_member_prices'] = [];
+                $value['memberPrices'] = [];
+            }
+            unset($value);
         }
 
         return $product;
@@ -1044,9 +1196,9 @@ class ProductRepository extends BaseRepository
      */
     public function getAdminOneProduct(int $id, ?int $activeId, $conType = 0, $is_copy = 0)
     {
-        $appcdkey = $is_copy ? ['productCdkey', 'cdkeyLibrary'] : ['productCdkey', 'reservation'];
+        $appcdkey = $is_copy ? ['productCdkey', 'cdkeyLibrary', 'cardRule'] : ['productCdkey', 'reservation', 'cardRule'];
         $with = [
-            'attr', 'attrValue.productCdkey', 'oldAttrValue', 'merCateId.category', 'storeCategory', 'brand','reservation',
+            'attr', 'attrValue.productCdkey', 'attrValue.cardRule', 'oldAttrValue', 'merCateId.category', 'storeCategory', 'brand','reservation',
             'temp', 'seckillActive','guarantee.templateValue.value', 'getFormName','attr_result',
             'attrValue' => function ($query) use($appcdkey) { $query->with($appcdkey)->order('value_id ASC'); },
             'content' => function ($query) use ($conType) { $query->where('type', $conType); },
@@ -1188,9 +1340,26 @@ class ProductRepository extends BaseRepository
                 $item['cdkey'] = $cdkey;
             }
             unset($item['productCdkey']);
+            $item['card_rule'] = $this->formatProductCardRule($item['cardRule'] ?? []);
+            unset($item['cardRule']);
             foreach ($sku as $k => $v) { $item['value' . $k] = $v; }
             if ($is_copy) {$item['library_id'] = 0;$item['stock'] = 0;}
             $arr[] = $item;
+        }
+        if ((int)$data['product_type'] === self::PRODUCT_TYPE_NORMAL
+            && (int)($data['member_price_setting'] ?? 0) === 2
+        ) {
+            $arr = $this->appendMerchantMemberPrices(
+                (int)$data['mer_id'],
+                (int)$data['product_id'],
+                $arr
+            );
+        } else {
+            foreach ($arr as &$value) {
+                $value['merchant_member_prices'] = [];
+                $value['memberPrices'] = [];
+            }
+            unset($value);
         }
         $data['attrValue'] = $arr;
         $content = $data['content']['content'] ?? '';
@@ -1353,6 +1522,42 @@ class ProductRepository extends BaseRepository
         return $result;
     }
 
+    /**
+     * 获取移动客服商品管理头部统计
+     * @param int $merId 商户ID
+     * @return array
+     */
+    public function getServerStatistics(int $merId): array
+    {
+        $allWhere = $this->switchType('', $merId, 0);
+        unset($allWhere['star']);
+        $allCount = $this->dao->search($merId, $allWhere)
+            ->removeOption('order')
+            ->count();
+
+        $sellingWhere = $this->switchType(1, $merId, 0);
+        unset($sellingWhere['star']);
+        $sellingCount = $this->dao->search($merId, $sellingWhere)
+            ->removeOption('order')
+            ->count();
+
+        return [
+            ['type' => 0, 'name' => '全部', 'count' => $allCount],
+            ['type' => 1, 'name' => '出售中', 'count' => $sellingCount],
+            ['type' => 2, 'name' => '仓库中', 'count' => $this->getFiltercCount(2, $merId, 0, [])],
+            ['type' => 3, 'name' => '已售罄', 'count' => $this->getFiltercCount(3, $merId, 0, [])],
+            ['type' => 4, 'name' => '警戒库存', 'count' => $this->getFiltercCount(4, $merId, 0, [])],
+        ];
+    }
+
+    /**
+     * 按商品状态类型统计商品数量（用于列表状态计数）：秒杀商品先按活动条件筛选活动ID，再合并查询条件统计
+     * @param $type 商品状态类型（如 5 回收站、6 待审核、7 审核未通过）
+     * @param $merId 商户ID
+     * @param $productType 商品类型
+     * @param $searchWhere 附加筛选条件
+     * @return int 符合条件的商品数量
+     */
     protected function getFiltercCount($type, $merId, $productType, $searchWhere)
     {
         if($productType == 1) {
@@ -1681,7 +1886,7 @@ class ProductRepository extends BaseRepository
      */
     public function getApiSeckill(array $where, int $page, int $limit)
     {
-        $field = 'Product.product_id,Product.active_id,Product.sales,Product.mer_id,is_new,U.keyword,brand_id,U.image,U.product_type,U.store_name,U.sort,U.rank,star,rate,reply_count,U.price,cost,Product.ot_price,stock,extension_type,care_count,unit_name,U.create_time,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.product_type,Product.type';
+        $field = 'Product.product_id,Product.active_id,Product.sales,Product.mer_id,is_new,U.keyword,brand_id,U.image,U.product_type,U.store_name,U.sort,U.rank,star,rate,reply_count,U.price,cost,Product.ot_price,stock,extension_type,care_count,unit_name,U.create_time,Product.activity_label_ids,Product.delivery_free,Product.give_coupon_ids,Product.delivery_way,Product.product_type,Product.type,Product.is_price_negotiable,Product.price_negotiable_text';
         $count = 0;
         $list = [];
 
@@ -1806,6 +2011,12 @@ class ProductRepository extends BaseRepository
         return compact('count', 'list');
     }
 
+    /**
+     * 获取代客下单的商品详情：按上架、启用、商户正常等条件组装查询，复用 API 商品详情逻辑
+     * @param int $merId 商户ID
+     * @param int $id 商品ID
+     * @return array 商品详情数据
+     */
     public function getBehalfCustomerOrderDetail(int $merId, int $id)
     {
         $where = [
@@ -1907,7 +2118,7 @@ class ProductRepository extends BaseRepository
         if ($res && $res['content'] && $res['type'] == 1) {
             $res['content'] = json_decode($res['content']);
         }
-        Cache::set($key, json_encode($res), 1500);
+        Cache::set($key, json_encode($res), 60);
         return $res;
     }
 
@@ -1933,7 +2144,7 @@ class ProductRepository extends BaseRepository
         $merchant['care'] = $care;
         $merchant['care_count'] = (int)$merchant['care_ficti'] + (int)$merchant['care_count'];
         $merchant['recommend'] = $this->dao->getGoodList($good_ids, $merId);
-        $merchant['type_name'] = $merchant['merchant_type']['type_name'];
+        $merchant['type_name'] = $merchant['merchant_type']['type_name'] ?? '';
 
         return $merchant;
     }
@@ -1990,10 +2201,28 @@ class ProductRepository extends BaseRepository
         }
 
         [$attr, $sku] = $this->buildApiProductDetailSku($product, $userInfo, $productType, $activityId);
-        $product = $product->append($append);
+        $product = $product->append($append,true);
         $product['attr'] = $attr;
         $product['sku'] = $sku;
         $product = json_decode(json_encode($product,true),true);
+        $product['show_merchant_member_info'] = [
+            'show_merchant_member' => false,
+            'is_merchant_member' => false,
+        ];
+        if ($productType === self::PRODUCT_TYPE_NORMAL && (int)($product['member_price_setting'] ?? 0) === 2) {
+            $product['show_merchant_member_info']['show_merchant_member'] = true;
+            if ($userInfo) {
+                $product['show_merchant_member_info']['is_merchant_member'] = (bool)app()
+                    ->make(MerchantMemberRepository::class)
+                    ->memberDiscount((int)$userInfo['uid'], (int)$product['mer_id']);
+            }
+            if (isset($product['show_svip_info']) && is_array($product['show_svip_info'])) {
+                $product['show_svip_info']['show_svip'] = false;
+                $product['show_svip_info']['is_svip'] = false;
+                $product['show_svip_info']['show_svip_price'] = false;
+            }
+        }
+        $product['service_card'] = $this->buildServiceCardProductDetail((int)$product['type'], $sku);
         $product['seckill_status'] = $seckillStatus;
         $product['promoter'] = $extension;
         $product = $this->mergeReservation($product);
@@ -2009,13 +2238,13 @@ class ProductRepository extends BaseRepository
      */
     protected function buildApiProductDetailOptions(int $productType, $userInfo = null): array
     {
-        $field = 'is_show,product_id,active_id,mer_id,image,slider_image,store_name,store_info,unit_name,price,cost,ot_price,stock,sales,video_link,product_type,extension_type,old_product_id,rate,guarantee_template_id,temp_id,once_max_count,pay_limit,once_min_count,integral_rate,delivery_way,delivery_free,type,cate_id,svip_price_type,svip_price,mer_svip_status,mer_form_id,activity_label_ids,give_coupon_ids';
+        $field = 'is_show,product_id,active_id,mer_id,image,slider_image,store_name,store_info,unit_name,price,cost,ot_price,stock,sales,video_link,product_type,extension_type,old_product_id,rate,guarantee_template_id,temp_id,once_max_count,pay_limit,once_min_count,integral_rate,delivery_way,delivery_free,type,cate_id,svip_price_type,svip_price,member_price_setting,mer_svip_status,mer_form_id,activity_label_ids,give_coupon_ids,is_price_negotiable,price_negotiable_text';
         $with = [
             'attr',
             'merchant',
             'reservation',
             'attrValue' => function ($query) {
-                $query->with(['reservation']);
+                $query->with(['reservation', 'cardRule']);
             },
         ];
         $append = ['topReply','activity_labels'];
@@ -2165,6 +2394,7 @@ class ProductRepository extends BaseRepository
         $attr = $this->detailAttr($product['attr']);
         $attrValue = (in_array($product['product_type'], [3, 4])) ? $product['oldAttrValue'] : $product['attrValue'];
         $sku = $this->detailAttrValue($attrValue, $userInfo, $productType, $activityId);
+        $sku = $this->applyMerchantMemberSkuPrice($sku, $product, $userInfo, $productType);
         $sku = getThumbWaterImage($sku, ['image'], 'small');
         unset($product['attr'], $product['attrValue'], $product['oldAttrValue']);
         if (count($attr) > 1) {
@@ -2290,7 +2520,7 @@ class ProductRepository extends BaseRepository
         $res = Cache::get($cache_unique);
         if ($res) return json_decode($res, true);
 
-        $field = 'mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,create_time';
+        $field = 'mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,create_time,is_price_negotiable,price_negotiable_text';
         $make = app()->make(ProductCateRepository::class);
         $product_id = [];
         if ($productId) {
@@ -2315,7 +2545,7 @@ class ProductRepository extends BaseRepository
                 ->whereNotIn('product_id', $productIds)
                 ->where('is_good', 1)
                 ->where('mer_id', $merId)
-                ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,sort,create_time')
+                ->field('mer_id,product_id,store_name,image,price,is_show,status,is_gift_bag,is_good,sales,sort,create_time,is_price_negotiable,price_negotiable_text')
                 ->order('sort DESC,create_time DESC')
                 ->limit((3 - $count))
                 ->select()->toArray();
@@ -2432,6 +2662,11 @@ class ProductRepository extends BaseRepository
                 'is_show' => $value['is_show'],
                 'is_default_select' => $value['is_default_select'] ?? 0
             ];
+            if (isset($value['cardRule'])) {
+                $_value['card_rule'] = $this->formatProductCardRule($value['cardRule']);
+            } else if (isset($value['card_rule'])) {
+                $_value['card_rule'] = $this->formatProductCardRule($value['card_rule']);
+            }
             if ($productType == 0) {
                 $_value['ot_price'] = $value['ot_price'];
                 $_value['svip_price'] = $value['svip_price'];
@@ -2465,6 +2700,283 @@ class ProductRepository extends BaseRepository
             $sku[$value['sku']] = $_value;
         }
         return $sku;
+    }
+
+    /**
+     * 批量保存商户会员价：先删除该商品已有的会员价记录，仅价格类型为自定义(2)时按SKU与会员等级批量重建
+     * @param int $merId 商户ID
+     * @param int $productId 商品ID
+     * @param int $priceSetting 会员价方案（2 为店铺会员价）
+     * @param int $priceType 方案价格类型（2 为自定义会员价）
+     * @param array $prices 以 SKU unique 为键、会员等级价格为值的价格数据
+     * @return void
+     */
+    protected function saveMerchantMemberPrices(int $merId, int $productId, int $priceSetting, int $priceType, array $prices): void
+    {
+        MerchantMemberProductPrice::getDB()
+            ->where('mer_id', $merId)
+            ->where('product_id', $productId)
+            ->delete();
+        if ($priceSetting !== 2 || $priceType !== 2 || !$prices) {
+            return;
+        }
+
+        $valueMap = Db::name('store_product_attr_value')
+            ->where('product_id', $productId)
+            ->column('value_id', 'unique');
+        $validLevels = array_flip(array_column(
+            app()->make(MerchantMemberRepository::class)->levelList($merId),
+            'level'
+        ));
+        $rows = [];
+        foreach ($prices as $unique => $levelPrices) {
+            $valueId = (int)($valueMap[$unique] ?? 0);
+            if (!$valueId) {
+                continue;
+            }
+            foreach ((array)$levelPrices as $level => $price) {
+                if (is_array($price)) {
+                    $level = (int)($price['level'] ?? $level);
+                    $price = $price['price'] ?? null;
+                }
+                $level = (int)$level;
+                if (!isset($validLevels[$level]) || $price === null || $price === '') {
+                    continue;
+                }
+                $rows[] = [
+                    'mer_id' => $merId,
+                    'product_id' => $productId,
+                    'value_id' => $valueId,
+                    'level' => $level,
+                    'price' => max(0, round((float)$price, 2)),
+                ];
+            }
+        }
+        if ($rows) {
+            MerchantMemberProductPrice::getDB()->insertAll($rows);
+        }
+    }
+
+    /**
+     * 为 SKU 属性值集合追加商户自定义会员价数据：按 value_id 查询已保存的会员价并挂载到每个属性上
+     * @param int $merId 商户ID
+     * @param int $productId 商品ID
+     * @param array $attrValues SKU 属性值集合，需包含 value_id
+     * @return array 追加商户会员价映射及编辑回显字段后的属性值集合
+     */
+    protected function appendMerchantMemberPrices(int $merId, int $productId, array $attrValues): array
+    {
+        $rows = MerchantMemberProductPrice::getDB()
+            ->where('mer_id', $merId)
+            ->where('product_id', $productId)
+            ->select()
+            ->toArray();
+        $priceMap = [];
+        foreach ($rows as $row) {
+            $priceMap[(int)$row['value_id']][(int)$row['level']] = (string)$row['price'];
+        }
+        foreach ($attrValues as &$value) {
+            $prices = $priceMap[(int)($value['value_id'] ?? 0)] ?? [];
+            ksort($prices, SORT_NUMERIC);
+            $value['merchant_member_prices'] = $prices;
+            $value['memberPrices'] = [];
+            foreach ($prices as $level => $price) {
+                $value['memberPrices'][] = [(int)$level => round((float)$price, 2)];
+            }
+        }
+        unset($value);
+        return $attrValues;
+    }
+
+    /**
+     * 为普通商品 SKU 计算并挂载商户会员价：按会员折扣或自定义价格计算会员价，并标记是否低于原价展示
+     * @param array $sku SKU 价格数据集合
+     * @param $product 商品数据，需包含 member_price_setting 和 svip_price_type
+     * @param $userInfo 用户信息
+     * @param int $productType 商品类型，仅普通商品生效
+     * @return array 追加 merchant_member_price、show_merchant_member_price 字段后的 SKU 集合
+     */
+    protected function applyMerchantMemberSkuPrice(array $sku, $product, $userInfo, int $productType): array
+    {
+        if ($productType !== self::PRODUCT_TYPE_NORMAL) {
+            return $sku;
+        }
+        foreach ($sku as &$value) {
+            $value['merchant_member_price'] = null;
+            $value['show_merchant_member_price'] = false;
+        }
+        unset($value);
+        if (!$userInfo || (int)($product['member_price_setting'] ?? 0) !== 2) {
+            return $sku;
+        }
+        $memberRepository = app()->make(MerchantMemberRepository::class);
+        $memberLevel = $memberRepository->memberDiscount(
+            (int)$userInfo['uid'],
+            (int)$product['mer_id']
+        );
+        if (!$memberLevel) {
+            return $sku;
+        }
+
+        $custom = [];
+        $priceType = (int)($product['svip_price_type'] ?? 0);
+        if ($priceType === 2) {
+            $custom = MerchantMemberProductPrice::getDB()
+                ->where('mer_id', $product['mer_id'])
+                ->where('product_id', $product['product_id'])
+                ->where('level', $memberLevel['level'])
+                ->column('price', 'value_id');
+        }
+        foreach ($sku as &$value) {
+            $original = (string)$value['price'];
+            $fixedPrice = isset($custom[$value['value_id']])
+                ? (string)$custom[$value['value_id']]
+                : null;
+            $memberPrice = $memberRepository->calculateProductMemberPrice(
+                $original,
+                $priceType,
+                $memberLevel,
+                $fixedPrice
+            );
+            $value['merchant_member_price'] = $memberPrice;
+            $value['show_merchant_member_price'] = bccomp($memberPrice, $original, 2) < 0;
+        }
+        unset($value);
+        return $sku;
+    }
+
+    /**
+     * 构建商品详情里的次卡/年卡摘要信息。
+     *
+     * 接口详情只需要告诉前端当前商品是否为次卡/年卡、当前 SKU 中有多少条规则。
+     * 具体规则展示仍保留在各 SKU 的 card_rule 字段，便于前端按规格渲染。
+     *
+     * @param int $productDefineType 商品定义类型。
+     * @param array $sku 已格式化 SKU 列表。
+     * @return array
+     */
+    protected function buildServiceCardProductDetail(int $productDefineType, array $sku): array
+    {
+        $ruleCount = 0;
+        foreach ($sku as $item) {
+            if (!empty($item['card_rule'])) {
+                $ruleCount++;
+            }
+        }
+        $isServiceCard = $productDefineType === self::DEFINE_TYPE_SERVICE_CARD;
+
+        return [
+            'is_service_card' => $isServiceCard,
+            'rule_count' => $isServiceCard ? $ruleCount : 0,
+        ];
+    }
+
+    /**
+     * 格式化次卡/年卡规则供接口展示。
+     *
+     * 在原始规则字段基础上补充枚举文案和组合描述，不改变规则本身的业务含义。
+     * 商品详情、编辑回显、下单确认都会复用这份展示结构。
+     *
+     * @param mixed $rule 模型、Arrayable、对象或数组形式的规则。
+     * @return array
+     */
+    public function formatProductCardRule($rule): array
+    {
+        $rule = $this->normalizeProductCardRule($rule);
+        if (!$rule) return [];
+
+        $useLimitType = (int)($rule['use_limit_type'] ?? StoreProductCardRuleRepository::USE_LIMIT_TYPE_FIXED);
+        $validityType = (int)($rule['validity_type'] ?? StoreProductCardRuleRepository::VALIDITY_TYPE_FOREVER);
+        $refundRule = (int)($rule['refund_rule'] ?? StoreProductCardRuleRepository::REFUND_RULE_UNVERIFIED);
+        $serviceType = (int)($rule['service_type'] ?? StoreProductCardRuleRepository::SERVICE_TYPE_STORE);
+        $status = (int)($rule['status'] ?? StoreProductCardRuleRepository::STATUS_ENABLED);
+        $totalCount = (int)($rule['total_count'] ?? StoreProductCardRuleRepository::TOTAL_COUNT_EMPTY);
+        $validDays = (int)($rule['valid_days'] ?? StoreProductCardRuleRepository::VALID_DAYS_EMPTY);
+
+        // 有效期只展示自然日，同时兼容历史 DATETIME 数据。
+        $rule['valid_start_time'] = $this->formatCardRuleDate($rule['valid_start_time'] ?? null);
+        $rule['valid_end_time'] = $this->formatCardRuleDate($rule['valid_end_time'] ?? null);
+
+        $rule['use_limit_type_label'] = StoreProductCardRuleRepository::USE_LIMIT_TYPE_LABELS[$useLimitType] ?? '';
+        $rule['validity_type_label'] = StoreProductCardRuleRepository::VALIDITY_TYPE_LABELS[$validityType] ?? '';
+        $rule['refund_rule_label'] = StoreProductCardRuleRepository::REFUND_RULE_LABELS[$refundRule] ?? '';
+        $rule['service_type'] = $serviceType;
+        $rule['service_type_label'] = StoreProductCardRuleRepository::SERVICE_TYPE_LABELS[$serviceType] ?? '';
+        $rule['status_label'] = StoreProductCardRuleRepository::STATUS_LABELS[$status] ?? '';
+        $rule['use_limit_text'] = $this->buildCardRuleUseLimitText($useLimitType, $totalCount);
+        $rule['validity_text'] = $this->buildCardRuleValidityText($validityType, $validDays, $rule);
+        $rule['service_type_text'] = $this->buildCardRuleServiceTypeText($serviceType);
+        $rule['rule_text'] = implode('，', array_filter([$rule['use_limit_text'], $rule['validity_text'], $rule['service_type_text']]));
+
+        return $rule;
+    }
+
+    /**
+     * 将次卡规则有效期格式化为 Y-m-d。
+     */
+    protected function formatCardRuleDate($value): ?string
+    {
+        if (!$value) {
+            return null;
+        }
+
+        $time = is_numeric($value) ? (int)$value : strtotime((string)$value);
+
+        return $time ? date('Y-m-d', $time) : null;
+    }
+
+    /**
+     * 将不同来源的规则对象转为数组。
+     */
+    protected function normalizeProductCardRule($rule): array
+    {
+        if (!$rule) {
+            return [];
+        }
+        if ($rule instanceof Arrayable) {
+            return $rule->toArray();
+        }
+        if (is_object($rule)) {
+            return (array)$rule;
+        }
+
+        return is_array($rule) ? $rule : [];
+    }
+
+    /**
+     * 生成核销次数展示文案。
+     */
+    protected function buildCardRuleUseLimitText(int $useLimitType, int $totalCount): string
+    {
+        if ($useLimitType === StoreProductCardRuleRepository::USE_LIMIT_TYPE_UNLIMITED) {
+            return '有效期内不限次数';
+        }
+
+        return '可核销' . $totalCount . '次';
+    }
+
+    /**
+     * 生成有效期展示文案。
+     */
+    protected function buildCardRuleValidityText(int $validityType, int $validDays, array $rule): string
+    {
+        if ($validityType === StoreProductCardRuleRepository::VALIDITY_TYPE_AFTER_PAY_DAYS) {
+            return '购买后' . $validDays . '天内有效';
+        }
+
+        if ($validityType === StoreProductCardRuleRepository::VALIDITY_TYPE_DATE_RANGE) {
+            return ($rule['valid_start_time'] ?? '') . ' 至 ' . ($rule['valid_end_time'] ?? '') . '内有效';
+        }
+
+        return '永久有效';
+    }
+
+    /**
+     * 生成服务方式展示文案。
+     */
+    protected function buildCardRuleServiceTypeText(int $serviceType): string
+    {
+        return StoreProductCardRuleRepository::SERVICE_TYPE_LABELS[$serviceType] ?? '';
     }
 
 
@@ -2876,6 +3388,9 @@ class ProductRepository extends BaseRepository
         unset($where['is_gift_bag']);
         $product = $this->dao->search(null, $where)->find();
         if (!$product) throw new ValidateException('商品已下架');
+        if ((int)$product['product_type'] === 0 && (int)$product['is_price_negotiable'] === 1) {
+            throw new ValidateException('该商品价格面议，暂不支持直接购买');
+        }
         if ($product['once_min_count'] > 0 && $product['once_min_count'] > $data['cart_num'])
             throw new ValidateException('[低于起购数:' . $product['once_min_count'] . ']' . mb_substr($product['store_name'], 0, 10) . '...');
         if ($product['pay_limit'] == 1 ){
@@ -2899,7 +3414,9 @@ class ProductRepository extends BaseRepository
         if ($product['type'] && !$data['is_new']) throw new ValidateException('虚拟商品不可加入购物车');
         if ($product['type'] == self::DEFINE_TYPE_CARD && $data['cart_num'] != 1)
             throw new ValidateException('卡密商品只能单个购买');
-
+        if ($product['type'] == self::DEFINE_TYPE_SERVICE_CARD && $data['cart_num'] != 1) {
+            throw new ValidateException('次卡商品只能单个购买');
+        }
         if ($product['type'] == self::DEFINE_TYPE_RESERVATION) {
             //预约商品的话需要检测库存
             $val = app()->make(ProductAttrValueReservationRepository::class)->validateStock($data['product_id'],
@@ -3343,7 +3860,19 @@ class ProductRepository extends BaseRepository
     {
         $data = $this->dao->getWhere(['product_id' => $id, 'mer_id' => $merId]);
         if (!$data) throw new ValidateException('数据不存在');
-        return app()->make(ProductAttrValueRepository::class)->getSearch(['product_id' => $id])->select()->append(['is_svip_price']);
+        $list = app()->make(ProductAttrValueRepository::class)->getSearch(['product_id' => $id])
+            ->with(['cardRule'])
+            ->select()
+            ->append(['is_svip_price'])
+            ->toArray();
+
+        foreach ($list as &$item) {
+            $item['card_rule'] = $this->formatProductCardRule($item['cardRule'] ?? []);
+            unset($item['cardRule']);
+        }
+        unset($item);
+
+        return $list;
     }
 
     /**
@@ -3357,15 +3886,36 @@ class ProductRepository extends BaseRepository
     public function checkParams($data, $merId, $id = null)
     {
         if (!$data['pay_limit']) $data['once_max_count'] = 0;
+        $productDefineType = (int)$data['type'];
         if ($data['brand_id'] > 0 && !$this->merBrandExists($data['brand_id']))
             throw new ValidateException('品牌不存在');
         if (!$data['cate_id'] || !$this->CatExists($data['cate_id']))
             throw new ValidateException('平台分类不存在');
         if (isset($data['mer_cate_id']) && !$this->merCatExists($data['mer_cate_id'], $merId))
             throw new ValidateException('不存在的商户分类');
-        if ($data['type'] !== self::DEFINE_TYPE_RESERVATION && $data['delivery_way'] == 2 && !$this->merShippingExists((int)$merId, (int)
-            $data['temp_id']))
+
+        $deliveryWay = is_array($data['delivery_way'] ?? null)
+            ? $data['delivery_way']
+            : explode(',', (string)($data['delivery_way'] ?? ''));
+        $deliveryWay = array_map('intval', $deliveryWay);
+        $needShippingTemplate = in_array(2, $deliveryWay, true) || in_array(3, $deliveryWay, true);
+
+        // 只有快递或同城配送需要运费模板，到店自提商品不依赖运费模板。
+        if (
+            ! $data['delivery_free']
+            && $needShippingTemplate
+            && ! in_array($productDefineType,[
+                self::DEFINE_TYPE_VIRTUAL,
+                self::DEFINE_TYPE_CLOUD,
+                self::DEFINE_TYPE_CARD,
+                self::DEFINE_TYPE_RESERVATION,
+                self::DEFINE_TYPE_SERVICE_CARD
+            ],true)
+            && ! $this->merShippingExists((int)$merId, (int)$data['temp_id'])
+        ){
             throw new ValidateException('运费模板不存在');
+        }
+
         // 判断是否为礼包商品并且商家礼包数量是否超过限制
         if ($data['is_gift_bag'] && !$this->checkMerchantBagNumber($merId))
             throw new ValidateException('礼包数量超过数量限制');
@@ -3427,6 +3977,13 @@ class ProductRepository extends BaseRepository
             $data['hit_amount'] = 0;
             $data['welfare_commission'] = 0;
         }
+        $data['is_price_negotiable'] = (int)($data['is_price_negotiable'] ?? 0);
+        if ((int)($data['product_type'] ?? 0) !== 0) {
+            $data['is_price_negotiable'] = 0;
+        }
+        $data['price_negotiable_text'] = is_array($data['price_negotiable_text'] ?? null)
+            ? $data['price_negotiable_text']
+            : [];
         // 保存推荐商品
         if (!empty($data['good_ids'])) {
             if (30 < count($data['good_ids'])) throw new ValidateException('关联商品不得超过30个');
@@ -3449,12 +4006,14 @@ class ProductRepository extends BaseRepository
     {
         if ($productId) {
             $make = app()->make(ProductAttrValueRepository::class);
-            $append = ['productCdkey','cdkeyLibrary'];
-            if (!$isCopy)$append = ['productCdkey','cdkeyLibrary'];
+            $append = ['productCdkey','cdkeyLibrary','cardRule'];
+            if (!$isCopy)$append = ['productCdkey','cdkeyLibrary','cardRule'];
             $_sukValue = $make->search(['product_id' => $productId])->with($append)->select()->toArray();
             foreach ($_sukValue as $value) {
                 $value['cdkey'] = $value['productCdkey'] ?? [];
+                $value['card_rule'] = $this->formatProductCardRule($value['cardRule'] ?? []);
                 unset($value['productCdkey']);
+                unset($value['cardRule']);
                 $skuValue[$value['sku']] = $value;
             }
         }
@@ -3568,7 +4127,7 @@ class ProductRepository extends BaseRepository
             if ($activeId) {
                 $oldProductIds = $this->dao->getSearch([])->where(['active_id' => $activeId])->column('old_product_id');
             }
-            $filed = 'Product.type,Product.product_id,Product.temp_id,Product.refund_switch,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.mer_form_id,Product.good_ids,Product.delivery_free,Product.delivery_way';
+            $filed = 'Product.type,Product.product_id,Product.temp_id,Product.refund_switch,Product.mer_id,brand_id,unit_name,spec_type,mer_status,rate,reply_count,store_info,cate_id,Product.image,slider_image,Product.store_name,Product.keyword,Product.sort,Product.rank,Product.is_show,Product.sales,Product.price,extension_type,refusal,cost,Product.ot_price,stock,is_gift_bag,Product.care_count,Product.status,is_used,Product.create_time,Product.product_type,old_product_id,integral_total,integral_price_total,mer_labels,Product.is_good,Product.is_del,Product.type,Product.param_temp_id,Product.mer_svip_status,Product.svip_price,Product.svip_price_type,Product.member_price_setting,Product.mer_form_id,Product.good_ids,Product.delivery_free,Product.delivery_way,Product.is_price_negotiable,Product.price_negotiable_text';
 
             $selfMerchantIds = app()->make(MerchantRepository::class)->search($merWhere)->column('mer_id');
             if ($isSystem && !empty($selfMerchantIds)) {
@@ -3810,30 +4369,32 @@ class ProductRepository extends BaseRepository
         $on_time_key = self::AUTO_ON_TIME;
         $off_time_key = self::AUTO_OFF_TIME;
         $reids = app()->make(RedisCacheService::class);
-        $set = false;
         if ($on_time) {
             $hget = $reids->hGet($on_time_key,$on_time);
             if (!$hget) {
                 $reids->zAdd(self::AUTO_PREFIX_SET.$on_time_key,$on_time,$on_time);
-                $hget = $id;
+                $ids = [];
             } else {
-                $hget = $hget. ','. $id;
+                $ids = explode(',', $hget);
             }
-            $reids->hset($on_time_key,$on_time,$hget);
-            $set = true;
+            $ids[] = $id;
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            $reids->hset($on_time_key,$on_time,implode(',', $ids));
         }
         if ($off_time) {
-            $hget = $reids->hGet($off_time_key,$on_time);
+            $hget = $reids->hGet($off_time_key,$off_time);
             if (!$hget) {
                 $reids->zAdd(self::AUTO_PREFIX_SET.$off_time_key,$off_time,$off_time);
-                $hget = $id;
+                $ids = [];
             } else {
-                $hget = $hget. ','. $id;
+                $ids = explode(',', $hget);
             }
-            $reids->hset($off_time_key,$off_time,$hget);
-            $set = true;
+            $ids[] = $id;
+            $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+            $reids->hset($off_time_key,$off_time,implode(',', $ids));
         }
-        if ($set) Cache::set(self::AUTO_TIME_STATUS,1);
+        // 商品新增、编辑或取消定时设置后，下一轮按数据库重新校准缓存。
+        Cache::delete(self::AUTO_TIME_STATUS);
     }
 
     /**
@@ -3860,9 +4421,15 @@ class ProductRepository extends BaseRepository
         $redis = app()->make(RedisCacheService::class);
         $hset = [];
         $_key = self::AUTO_PREFIX_SET.$key;
+
+        // 数据库是定时上下架的最终数据源，每次同步先清理旧调度，避免编辑时间后残留旧任务。
+        $redis->del($key, $_key);
         foreach ($reversedArray as $k => $v) {
+            if (!$k) {
+                continue;
+            }
             $redis->zAdd($_key, $k, $k);
-            $hset[$k] = implode(',',$v);
+            $hset[$k] = implode(',', array_values(array_unique(array_map('intval', $v))));
         }
         if ($hset) $redis->hMSet($key,$hset);
     }
@@ -3879,7 +4446,14 @@ class ProductRepository extends BaseRepository
     {
         $redis = app()->make(RedisCacheService::class);
         $ids = $redis->hMget($key,$times);
-        $productIds = implode(',',array_values($ids));
+        $productIds = [];
+        foreach ($ids as $id) {
+            if ($id === false || $id === null || $id === '') {
+                continue;
+            }
+            $productIds = array_merge($productIds, explode(',', (string)$id));
+        }
+        $productIds = array_values(array_unique(array_filter(array_map('intval', $productIds))));
         switch ($key) {
             case self::AUTO_ON_TIME :
                 $data = ['is_show' => 1, 'auto_on_time' => '',];
@@ -3890,7 +4464,7 @@ class ProductRepository extends BaseRepository
             default:
                 return '类型错误';
         }
-        $id = array_chunk(array_values($ids), 30);
+        $id = array_chunk($productIds, 30);
         foreach ($id as $i) {
             $this->dao->getSearch([])->whereIn('product_id', $i)->update($data);
             Queue::push(ChangeSpuStatusJob::class, ['id' => $i, 'product_type' => 0]);
@@ -3899,7 +4473,7 @@ class ProductRepository extends BaseRepository
         array_unshift($zrem,ProductRepository::AUTO_PREFIX_SET.$key);
         call_user_func_array(array($redis,'zRem'),$zrem);
         $redis->hDel($key, ...$times);
-        return $productIds;
+        return implode(',', $productIds);
     }
 
     /**
@@ -4117,28 +4691,41 @@ class ProductRepository extends BaseRepository
         //apiProductDetail
         $spuRepository = app()->make(SpuRepository::class);
         $spuData = $spuRepository->dao->get($id);
+        $productInfo = $this->dao->get($spuData['product_id']);
+        $productDefineType = (int)($productInfo['type'] ?? self::DEFINE_TYPE_ENTITY);
         $productAttrValueRepository = app()->make(ProductAttrValueRepository::class);
         $productAttrRepository = app()->make(ProductAttrRepository::class);
         $attr = $productAttrRepository->search(['product_id' => $spuData['product_id']])->select();
         switch ($spuData['product_type']) {
             case 1:
-                $product = $this->dao->get($spuData['product_id']);
-                $result = $this->getSeckillAttrValue($product['attrValue'], $product['old_product_id']);
+                $result = $this->getSeckillAttrValue($productInfo['attrValue'], $productInfo['old_product_id']);
                 $attrValue = $result['item'];
                 break;
             case 4:
-                $product = $this->dao->get($spuData['product_id']);
-                $attrValue = $productAttrValueRepository->search(['product_id' => $product['old_product_id']])->select();
+                $attrValue = $productAttrValueRepository->search(['product_id' => $productInfo['old_product_id']])->select();
                 break;
             default:
-                $attrValue = $productAttrValueRepository->search(['product_id' => $spuData['product_id']])->select();
+                $attrValue = $productAttrValueRepository->search(['product_id' => $spuData['product_id']])
+                    ->with(['cardRule'])
+                    ->select();
                 break;
         }
         $attr = $this->detailAttr($attr);
         $sku = $this->detailAttrValue($attrValue, $user, $spuData['product_type'], $spuData['activity_id']);
-        return compact('attr','sku');
+        $serviceCard = $this->buildServiceCardProductDetail($productDefineType, $sku);
+        return [
+            'attr' => $attr,
+            'sku' => $sku,
+            'service_card' => $serviceCard,
+        ];
     }
 
+    /**
+     * 解除 SKU 与卡密库的绑定：在事务内清空 SKU 的卡密库与库存，并同步扣减商品总库存
+     * @param $valueId SKU 属性值ID
+     * @param $libraryId 卡密库ID
+     * @return void
+     */
     public function unbindCdkeyLibrary($valueId, $libraryId)
     {
         $productAttrValueRepository = app()->make(ProductAttrValueRepository::class);
@@ -4171,6 +4758,9 @@ class ProductRepository extends BaseRepository
         $product = $this->dao->search(null, $where)->find();
 
         if (!$product) throw new ValidateException('商品已下架');
+        if ((int)$product['product_type'] === 0 && (int)$product['is_price_negotiable'] === 1) {
+            throw new ValidateException('该商品价格面议，暂不支持直接购买');
+        }
         if ($product['once_min_count'] > 0 && $product['once_min_count'] > $data['cart_num'])
             throw new ValidateException('[低于起购数:' . $product['once_min_count'] . ']' . mb_substr($product['store_name'], 0, 10) . '...');
         if ($product['pay_limit'] == 1 && $product['once_max_count'] < $data['cart_num'])
@@ -4221,6 +4811,12 @@ class ProductRepository extends BaseRepository
         return compact('product', 'sku', 'cart');
     }
 
+    /**
+     * 校验加购数量是否超过商品限购数：登录用户按购物车累计数量判断，游客按单次加购数量判断
+     * @param $cart 购物车数据，包含 product_id、product_attr_unique、cart_num 及关联商品 once_count
+     * @param $data 本次加购数据，包含 uid、cart_num
+     * @return bool 未超出限购返回 true，超出限购返回 false
+     */
     public function isOverLimit($cart, $data)
     {
         // 非游客
@@ -4240,14 +4836,21 @@ class ProductRepository extends BaseRepository
         return true;
     }
 
+    /**
+     * 获取商品详情页推荐商品列表：按商品配置的好物推荐ID优先查询，数量不足时按上架商品补充
+     * @param array $params 参数，包含 product_id 与可选 recommend_num
+     * @return array 推荐商品列表
+     */
     public function recommendProduct(array $params)
     {
-        $product = $this->dao->get($params['product_id']);
+        $productId = (int)$params['product_id'];
+        $recommendNum = max(1, (int)($params['recommend_num'] ?? 1));
+        $product = $this->dao->get($productId);
         if (!$product) {
             throw new ValidateException('商品数据不存在');
         }
 
-        return $this->dao->recommendProduct($product['good_ids'], $product['mer_id'], $params['recommend_num'], $product['product_id']);
+        return $this->dao->recommendProduct($product['good_ids'], (int)$product['mer_id'], $recommendNum, (int)$product['product_id']);
     }
 
     /**
@@ -4274,6 +4877,13 @@ class ProductRepository extends BaseRepository
         }
     }
 
+    /**
+     * 编辑商品的商户分类：组装商品分类关联数据后，先清空原关联再批量插入新分类
+     * @param $id 商品ID
+     * @param $ids 商户分类ID集合
+     * @param $merId 商户ID
+     * @return void
+     */
     public function editMerCate($id, $ids, $merId)
     {
         $data = $this->setMerCate($ids, $id, $merId);

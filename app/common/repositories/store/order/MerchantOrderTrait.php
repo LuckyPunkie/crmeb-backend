@@ -405,6 +405,11 @@ trait MerchantOrderTrait
         if (count($res['fail'])) {
             throw new ValidateException('存在已失效商品，请检查');
         }
+        foreach ($res['list'] as $cart) {
+            if ((int)$cart['product']['product_type'] === 0 && (int)$cart['product']['is_price_negotiable'] === 1) {
+                throw new ValidateException('该商品价格面议，暂不支持直接购买');
+            }
+        }
 
         return $res['list'];
     }

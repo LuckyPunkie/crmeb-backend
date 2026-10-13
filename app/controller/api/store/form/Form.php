@@ -106,8 +106,8 @@ class Form extends BaseController
             return app('json')->success('报名活动异常');
         }
         $qrcode = $type == 'routine'
-            ? $this->repository->mpQrcode((int)$user['uid'], $activity)
-            : $this->repository->wxQrcode((int)$user['uid'], $activity);
+            ? $this->repository->mpQrcode((int)$user['uid'], $id)
+            : $this->repository->wxQrcode((int)$user['uid'], $id);
         $poster = $activity['images'];
         $nickname = $user['nickname'];
         $mark = '邀您一起参加' . $activity['activity_name'] ?? '活动';

@@ -34,6 +34,7 @@ class AdminAuthMiddleware extends BaseMiddleware
 
         $rules = [];
         $menus = [];
+        $authMenus = [];
         if ($admin->level) {
             if ($admin->is_agent) {
                 $admin->append(['region_name']);
@@ -41,12 +42,14 @@ class AdminAuthMiddleware extends BaseMiddleware
                 foreach ($regions as $region) {
                     $rules[$region['circle_id']] = $role->idsByRules(0, [$region['role_id']]);
                 }
-                foreach($rules as $key => $role) {
-                    $menus[$key] = $menu->idsByRoutes($role);
+                foreach($rules as $key => $regionRules) {
+                    $menus[$key] = $menu->idsByRoutes($regionRules, 0, $admin->is_agent);
+                    $authMenus = array_merge($authMenus, $menus[$key]);
                 }
             } else {
                 $rules = $role->idsByRules(0, $admin->roles);
-                $menus = $menu->idsByRoutes($rules);
+                $menus = $menu->idsByRoutes($rules, 0, 0);
+                $authMenus = $menus;
             }
         }
 
@@ -58,10 +61,10 @@ class AdminAuthMiddleware extends BaseMiddleware
             return $rules;
         });
 
-        $request->macro('checkAuth', function ($name, $vars) use (&$admin, &$menus, &$menu, $request) {
-            if (!$name || !$admin->level || $admin->is_agent) return true;
+        $request->macro('checkAuth', function ($name, $vars) use (&$admin, &$authMenus, &$menu) {
+            if (!$name || !$admin->level) return true;
             $isset = false;
-            foreach ($menus as $_menu) {
+            foreach ($authMenus as $_menu) {
                 $keys = $menu->tidyParams($_menu['params']);
                 if ($_menu['route'] != $name) continue;
                 $isset = true;
@@ -69,7 +72,7 @@ class AdminAuthMiddleware extends BaseMiddleware
                 if ($menu->checkParams($keys, $vars))
                     return true;
             }
-            if ($isset || $menu->routeExists($name))
+            if ($isset || $menu->routeExists($name, 0))
                 return false;
             return true;
         });

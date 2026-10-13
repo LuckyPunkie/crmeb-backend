@@ -204,11 +204,17 @@ class MerchantIntention extends BaseController
     protected function checkParams()
     {
         // 从请求中提取相关参数
-        $data = $this->request->params(['phone', 'mer_name', 'name', 'images', 'merchant_category_id', 'mer_type_id', 'circle_id', 'business_id']);
+        $data = $this->request->params(['phone', 'mer_name', 'name', 'images', 'merchant_category_id', 'mer_type_id', 'circle_id', 'business_id',['platform_category', []],
+            ['mer_product_type', []]]);
         // 执行参数验证
         app()->make(MerchantIntentionValidate::class)->check($data);
-        // 验证短信验证码的正确性
-        // $check = app()->make(SmsService::class)->checkSmsCode($data['phone'], $data['code'], 'intention');
+        $category_number_count = systemConfig('category_number_count');
+        if (
+            $category_number_count &&
+            (count($data['platform_category']) > $category_number_count)
+        ) {
+            return app('json')->fail('分类数量最多为: '.$category_number_count);
+        }
         // 将商户类型ID转换为整数类型
         $data['mer_type_id'] = (int)$data['mer_type_id'];
         // 如果验证码验证失败，则抛出异常

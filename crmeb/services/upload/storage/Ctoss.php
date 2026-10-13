@@ -134,7 +134,7 @@ class Ctoss extends BaseUpload
             $uploadInfo = $this->app()->putObject($key, $body, 'application/octet-stream');
             $this->fileInfo->uploadInfo = $uploadInfo;
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
-            $this->fileInfo->filePath = ($this->cdn ?: $this->uploadUrl) . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
             $isImage = isset($fileHandle) ? $this->isImageFileHandle($fileHandle) : $this->isImageByPath($key);
             return $this->afterUpload($isImage, $this->fileInfo->filePath, $this->fileInfo->fileName);
@@ -489,7 +489,7 @@ class Ctoss extends BaseUpload
         $waterPath = $filePath;
         if ($waterConfig['image_watermark_status'] && $filePath) {
             if (strpos($filePath, '?x-oss-process') === false) {
-                $filePath .= '&x-oss-process=image';
+                $filePath .= '?x-oss-process=image';
             }
             switch ($waterConfig['watermark_type']) {
                 case 1://图片

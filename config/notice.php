@@ -67,7 +67,7 @@ return [
         //商户申请退回保证金未通过
         'REFUND_MARGIN_FAIL' => 710328,
         //管理员id
-        'ADMIN_ORDER_UID' => 1820586
+        'ADMIN_ORDER_UID' => 566101
     ],
     //微信
     'wechat' => [

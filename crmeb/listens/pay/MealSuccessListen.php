@@ -13,6 +13,7 @@
 
 namespace crmeb\listens\pay;
 
+use think\facade\Log;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use crmeb\interfaces\ListenerInterface;
 
@@ -21,6 +22,7 @@ class MealSuccessListen implements ListenerInterface
 
     public function handle($data): void
     {
+        Log::info('MealSuccessListen支付回调'.var_export($data, true));
         app()->make(ServeOrderRepository::class)->paySuccess($data);
     }
 }

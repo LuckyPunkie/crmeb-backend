@@ -198,122 +198,63 @@ class StoreServiceLogRepository extends BaseRepository
      */
     public function getSendData(StoreServiceLog $log)
     {
-        // 根据日志的类型，提取相应的数据对象
-        if ($log->msn_type == 4) {
-            $log->product;
-        } else if ($log->msn_type == 5) {
-            $log->orderInfo;
-        } else if ($log->msn_type == 6) {
-            $log->refundOrder;
-        } else if ($log->msn_type == 7) {
-            $log->presell;
-        } else if ($log->msn_type == 8) {
-            $log->productGroup;
+        $relation = $this->getSendRelation((int)$log->msn_type);
+        if ($relation) {
+            // ThinkORM 3 懒加载的关联不会自动包含在 toArray() 中，需要显式标记关联。
+            $log->setRelation($relation, $log->getRelation($relation, true));
         }
         return $log;
     }
 
     /**
      * 批量预加载关联数据，消除 N+1 查询
+     * （按类型收集 msn 后一次性查询；用 setRelation 赋值，ThinkORM 3 下 toArray() 才会带上关联）
      *
      * @param array $list 日志对象的列表。
      * @return array 处理后的日志对象列表。
      */
     public function getSendDataList($list)
     {
-        $ids = ['product' => [], 'order' => [], 'refund' => [], 'presell' => [], 'group' => []];
-        $cache = [];
-
+        $ids = [];
         foreach ($list as $log) {
-            if (!in_array($log->msn_type, [4, 5, 6, 7, 8])) {
-                continue;
-            }
-
-            $key = $log->msn_type . $log->msn;
-
-            if (isset($cache[$key])) {
-                $this->assignToLog($log, $cache[$key]);
-                continue;
-            }
-
-            switch ($log->msn_type) {
-                case 4: $ids['product'][] = $log->msn; break;
-                case 5: $ids['order'][] = $log->msn; break;
-                case 6: $ids['refund'][] = $log->msn; break;
-                case 7: $ids['presell'][] = $log->msn; break;
-                case 8: $ids['group'][] = $log->msn; break;
+            $relation = $this->getSendRelation((int)$log->msn_type);
+            if ($relation) {
+                $ids[$relation][] = $log->msn;
             }
         }
 
-        $products = $orders = $refunds = $presells = $groups = [];
-
+        $loaded = ['product' => [], 'orderInfo' => [], 'refundOrder' => [], 'presell' => [], 'productGroup' => []];
         if (!empty($ids['product'])) {
-            $products = \app\common\model\store\product\Product::whereIn('product_id', array_unique($ids['product']))
+            $loaded['product'] = \app\common\model\store\product\Product::whereIn('product_id', array_unique($ids['product']))
                 ->column('*', 'product_id');
         }
-        if (!empty($ids['order'])) {
-            $orders = \app\common\model\store\order\StoreOrder::whereIn('order_id', array_unique($ids['order']))
+        if (!empty($ids['orderInfo'])) {
+            $loaded['orderInfo'] = \app\common\model\store\order\StoreOrder::whereIn('order_id', array_unique($ids['orderInfo']))
                 ->with('orderProduct')->select()->column(null, 'order_id');
         }
-        if (!empty($ids['refund'])) {
-            $refunds = \app\common\model\store\order\StoreRefundOrder::whereIn('refund_order_id', array_unique($ids['refund']))
+        if (!empty($ids['refundOrder'])) {
+            $loaded['refundOrder'] = \app\common\model\store\order\StoreRefundOrder::whereIn('refund_order_id', array_unique($ids['refundOrder']))
                 ->with('refundProduct.product')->select()->column(null, 'refund_order_id');
         }
         if (!empty($ids['presell'])) {
-            $presells = \app\common\model\store\product\ProductPresell::whereIn('product_presell_id', array_unique($ids['presell']))
+            $loaded['presell'] = \app\common\model\store\product\ProductPresell::whereIn('product_presell_id', array_unique($ids['presell']))
                 ->append(['product'], true)->select()->column(null, 'product_presell_id');
         }
-        if (!empty($ids['group'])) {
-            $groups = \app\common\model\store\product\ProductGroup::whereIn('product_group_id', array_unique($ids['group']))
+        if (!empty($ids['productGroup'])) {
+            $loaded['productGroup'] = \app\common\model\store\product\ProductGroup::whereIn('product_group_id', array_unique($ids['productGroup']))
                 ->append(['product'], true)->select()->column(null, 'product_group_id');
         }
 
         foreach ($list as $log) {
-            if (!in_array($log->msn_type, [4, 5, 6, 7, 8])) {
-                continue;
-            }
-
-            $key = $log->msn_type . $log->msn;
-            if (isset($cache[$key])) {
-                continue;
-            }
-
-            switch ($log->msn_type) {
-                case 4:
-                    $data = $products[$log->msn] ?? null;
-                    if ($data) { $cache[$key] = $data; $log->set('product', $data); }
-                    break;
-                case 5:
-                    $data = $orders[$log->msn] ?? null;
-                    if ($data) { $cache[$key] = $data; $log->set('orderInfo', $data); }
-                    break;
-                case 6:
-                    $data = $refunds[$log->msn] ?? null;
-                    if ($data) { $cache[$key] = $data; $log->set('refundOrder', $data); }
-                    break;
-                case 7:
-                    $data = $presells[$log->msn] ?? null;
-                    if ($data) { $cache[$key] = $data; $log->set('presell', $data); }
-                    break;
-                case 8:
-                    $data = $groups[$log->msn] ?? null;
-                    if ($data) { $cache[$key] = $data; $log->set('productGroup', $data); }
-                    break;
+            $relation = $this->getSendRelation((int)$log->msn_type);
+            if (!$relation) continue;
+            $data = $loaded[$relation][$log->msn] ?? null;
+            if ($data) {
+                $log->setRelation($relation, $data);
             }
         }
 
         return $list;
-    }
-
-    private function assignToLog(StoreServiceLog $log, $data): void
-    {
-        switch ($log->msn_type) {
-            case 4: $log->set('product', $data); break;
-            case 5: $log->set('orderInfo', $data); break;
-            case 6: $log->set('refundOrder', $data); break;
-            case 7: $log->set('presell', $data); break;
-            case 8: $log->set('productGroup', $data); break;
-        }
     }
 
     /**
@@ -323,6 +264,23 @@ class StoreServiceLogRepository extends BaseRepository
     {
         $deliverStatus = ($status === 'received') ? 1 : 0;
         $this->dao->update($msgId, ['deliver_status' => $deliverStatus]);
+    }
+
+    /**
+     * 获取客服消息携带的业务关联名。
+     *
+     * @param int $type
+     * @return string|null
+     */
+    protected function getSendRelation(int $type): ?string
+    {
+        return [
+            4 => 'product',
+            5 => 'orderInfo',
+            6 => 'refundOrder',
+            7 => 'presell',
+            8 => 'productGroup',
+        ][$type] ?? null;
     }
 
     /**

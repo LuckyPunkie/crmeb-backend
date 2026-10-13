@@ -269,16 +269,24 @@ class StorageRepository extends BaseRepository
         if (!$info) {
             throw new ValidateException('数据不存在');
         }
+        $domain = UploadService::normalizeDomain($domain);
+        $cdn = UploadService::normalizeDomain($data['cdn'] ?? '');
+        if (!UploadService::isValidDomain($domain)) {
+            throw new ValidateException('空间域名输入有误');
+        }
+        if ($cdn && !UploadService::isValidDomain($cdn)) {
+            throw new ValidateException('CDN域名输入有误');
+        }
         if ($info->domain != $domain) {
             $info->domain = $domain;
             $upload = UploadService::create($info->type);
             //是否添加过域名不存在需要绑定域名
-            $domainList = $upload->getDomian($info->name, $info->region);
+            $domainList = (array)$upload->getDomian($info->name, $info->region);
             $domainParse = parse_url($domain);
-            if (false === $domainParse) {
+            if (false === $domainParse || !isset($domainParse['host'])) {
                 throw new ValidateException('域名输入有误');
             }
-            if (!in_array($domainParse['host'], $domainList)) {
+            if (!in_array($domainParse['host'], $domainList, true)) {
                 //绑定域名到云储存桶
                 $res = $upload->bindDomian($info->name, $domain, $info->region);
                 if (false === $res) {
@@ -292,8 +300,8 @@ class StorageRepository extends BaseRepository
             }
             $info->save();
         }
-        if ($info->cdn != $data['cdn']) {
-            $info->cdn = $data['cdn'];
+        if ($info->cdn != $cdn) {
+            $info->cdn = $cdn;
             $info->save();
         }
         return true;
@@ -785,10 +793,24 @@ class StorageRepository extends BaseRepository
         // 如果未指定上传类型，则使用系统配置的默认上传类型
         $type = $type ?: (systemConfig('upload_type') ?: 1);
 
-        // 查询数据库，获取指定类型且未被删除的域名列表
-        $domain = $this->dao->getSearch([])->where(['type' => $type,'is_del' => 0])->where('domain','>',0)->column('domain');
+        // 空间域名和 CDN 域名都可能出现在已保存的附件地址中。
+        $storageList = $this->dao->getSearch([])
+            ->where(['type' => $type, 'is_del' => 0])
+            ->field('domain,cdn')
+            ->select()
+            ->toArray();
 
-        // 返回查询结果，如果结果为空则返回空数组
-        return $domain ?: [];
+        $origins = [];
+        foreach ($storageList as $storage) {
+            foreach (['domain', 'cdn'] as $field) {
+                $origin = UploadService::getUrlOrigin((string)($storage[$field] ?? ''));
+                if ($origin !== '') $origins[] = $origin;
+            }
+        }
+        if ((int)$type === UploadService::STORAGE_LOCAL) {
+            $siteOrigin = UploadService::getUrlOrigin((string)systemConfig('site_url'));
+            if ($siteOrigin !== '') $origins[] = $siteOrigin;
+        }
+        return array_values(array_unique($origins));
     }
 }

@@ -15,181 +15,171 @@ use app\common\middleware\VisitProductMiddleware;
 
 //强制登录
 Route::group(function () {
-    Route::get('pay/config', 'api.store.order.StoreOrder/payConfig');
-    Route::group('v3', function () {
-        //新的下单接口,支持分账
-        Route::group('order', function () {
-            Route::post('check', '/v3CheckOrder');
-            Route::post('create', '/v3CreateOrder');
-        })->prefix('api.store.order.StoreOrder');
-    });
+
     Route::group('v2', function () {
-        //新的下单接口,支持分账
-        Route::group('order', function () {
-            Route::post('check', '/v2CheckOrder');
-            Route::post('create', '/v2CreateOrder');
-        })->prefix('api.store.order.StoreOrder');
+        Route::post('order/check', [app\controller\api\store\order\StoreOrder::class,'v2CheckOrder']);
+        Route::post('order/create', [app\controller\api\store\order\StoreOrder::class,'v2CreateOrder']);
     });
+    Route::get('pay/config', [app\controller\api\store\order\StoreOrder::class,'payConfig']);
 
     //退出登录
-    Route::post('logout', 'api.Auth/logout');
+    Route::post('logout', [app\controller\api\Auth::class,'logout']);
     //用户信息
-    Route::get('user', 'api.Auth/userInfo');
-
+    Route::get('user', [app\controller\api\Auth::class,'userInfo']);
+    //平台配送员入驻申请
+    Route::post('delivery/service/apply', [app\controller\api\delivery\DeliveryServiceApply::class,'apply']);
+    Route::get('delivery/service/apply/detail', [app\controller\api\delivery\DeliveryServiceApply::class,'detail']);
     //绑定推荐人
-    Route::post('user/spread', 'api.Auth/spread');
-
+    Route::post('user/spread', [app\controller\api\Auth::class,'spread']);
     //优惠券
-    Route::group('coupon', function () {
-        Route::post('receive/:id', 'api.store.product.StoreCoupon/receiveCoupon');
-    });
+    Route::post('coupon/receive/:id', [app\controller\api\store\product\StoreCoupon::class,'receiveCoupon']);
 
     //订单
     Route::group('order', function () {
-        Route::post('check', '/checkOrder');
-        Route::post('create', '/createOrder');
-        Route::get('group_order_list', '/groupOrderList');
-        Route::get('group_order_detail/:id', '/groupOrderDetail');
-        Route::post('cancel/:id', '/cancelGroupOrder');
-        Route::get('list', '/lst');
-        Route::get('detail/:id', '/detail');
-        Route::get('number', '/number');
-        Route::post('pay/:id', '/groupOrderPay');
-        Route::post('points/pay/:id', '/groupOrderPay')->append(['is_points' => 1]);
-        Route::post('take/:id', '/take');
-        Route::post('express/:id', '/express');
-        Route::post('del/:id', '/del');
-        Route::get('status/:id', '/groupOrderStatus');
-        Route::get('verify_code/:id', '/verifyCode');
-        Route::post('receipt/:id', '/createReceipt');
-        Route::get('delivery/:id', '/getOrderDelivery');
-        Route::get('cashier_order/:id', '/getCashierOrder');
-        Route::post('self/cancel/:id', '/cancelOrder');
-        Route::get('deliveryStation/list', '/deliveryStationList');
-        Route::get('deliverySetings', '/deliveryConfig');
-        Route::get('deliveryTrack/:id', '/deliveryTrack');
-    })->prefix('api.store.order.StoreOrder');
+        Route::get('group_order_list', [app\controller\api\store\order\StoreOrder::class,'groupOrderList']);
+        Route::get('group_order_detail/:id', [app\controller\api\store\order\StoreOrder::class,'groupOrderDetail']);
+        Route::post('cancel/:id', [app\controller\api\store\order\StoreOrder::class,'cancelGroupOrder']);
+        Route::get('list', [app\controller\api\store\order\StoreOrder::class,'lst']);
+        Route::get('detail/:id', [app\controller\api\store\order\StoreOrder::class,'detail']);
+        Route::get('take_order_list/:id', [app\controller\api\store\order\StoreOrder::class,'takeOrderList']);
+        Route::get('number', [app\controller\api\store\order\StoreOrder::class,'number']);
+        Route::post('pay/:id', [app\controller\api\store\order\StoreOrder::class,'groupOrderPay']);
+        Route::post('points/pay/:id', [app\controller\api\store\order\StoreOrder::class,'groupOrderPay'])->append(['is_points' => 1]);
+        Route::post('take/:id', [app\controller\api\store\order\StoreOrder::class,'take']);
+        Route::post('express/:id', [app\controller\api\store\order\StoreOrder::class,'express']);
+        Route::post('del/:id', [app\controller\api\store\order\StoreOrder::class,'del']);
+        Route::get('status/:id', [app\controller\api\store\order\StoreOrder::class,'groupOrderStatus']);
+        Route::get('verify_code/:id', [app\controller\api\store\order\StoreOrder::class,'verifyCode']);
+        Route::post('receipt/:id', [app\controller\api\store\order\StoreOrder::class,'createReceipt']);
+        Route::get('delivery/:id', [app\controller\api\store\order\StoreOrder::class,'getOrderDelivery']);
+        Route::get('cashier_order/:id', [app\controller\api\store\order\StoreOrder::class,'getCashierOrder']);
+        Route::post('self/cancel/:id', [app\controller\api\store\order\StoreOrder::class,'cancelOrder']);
+        Route::get('deliveryStation/list', [app\controller\api\store\order\StoreOrder::class,'deliveryStationList']);
+        Route::get('deliverySetings', [app\controller\api\store\order\StoreOrder::class,'deliveryConfig']);
+        Route::get('deliveryTrack/:id', [app\controller\api\store\order\StoreOrder::class,'deliveryTrack']);
+        Route::get('card_log/:id', [app\controller\api\store\order\StoreOrder::class,'verifyCardLog']);
+    });
 
     // 预售
     Route::group('presell', function () {
-        Route::post('pay/:id', '/pay');
-    })->prefix('api.store.order.PresellOrder');
+        Route::post('pay/:id', [app\controller\api\store\order\PresellOrder::class,'pay']);
+    });
 
     //退款单
     Route::group('refund', function () {
-        Route::get('batch_product/:id', '/batchProduct');
-        Route::get('express/:id', '/express');
-        Route::get('product/:id', '/product');
-        Route::post('compute', '/compute');
-        Route::post('apply/:id', '/refund');
-        Route::get('list', '/lst');
-        Route::get('detail/:id', '/detail');
-        Route::post('del/:id', '/del');
-        Route::post('back_goods/:id', '/back_goods');
-        Route::post('cancel/:id', '/cancel');
-        Route::post('platform/:id', '/platformIntervene');
-    })->prefix('api.store.order.StoreRefundOrder');
+        Route::get('batch_product/:id', [app\controller\api\store\order\StoreRefundOrder::class,'batchProduct']);
+        Route::get('express/:id', [app\controller\api\store\order\StoreRefundOrder::class,'express']);
+        Route::get('product/:id', [app\controller\api\store\order\StoreRefundOrder::class,'product']);
+        Route::post('compute', [app\controller\api\store\order\StoreRefundOrder::class,'compute']);
+        Route::post('apply/:id', [app\controller\api\store\order\StoreRefundOrder::class,'refund']);
+        Route::get('list', [app\controller\api\store\order\StoreRefundOrder::class,'lst']);
+        Route::get('detail/:id', [app\controller\api\store\order\StoreRefundOrder::class,'detail']);
+        Route::post('del/:id', [app\controller\api\store\order\StoreRefundOrder::class,'del']);
+        Route::post('back_goods/:id', [app\controller\api\store\order\StoreRefundOrder::class,'back_goods']);
+        Route::post('cancel/:id', [app\controller\api\store\order\StoreRefundOrder::class,'cancel']);
+        Route::post('platform/:id', [app\controller\api\store\order\StoreRefundOrder::class,'platformIntervene']);
+    });
 
     //评价
     Route::group('reply', function () {
-        Route::get('product/:id', '/product');
-        Route::post(':id', '/reply');
-    })->prefix('api.store.product.StoreReply');
+        Route::get('product/:id', [app\controller\api\store\product\StoreReply::class,'product']);
+        Route::post(':id', [app\controller\api\store\product\StoreReply::class,'reply']);
+    });
 
     //注销用户
-    Route::post('user/cancel', 'api.Auth/cancel');
+    Route::post('user/cancel', [app\controller\api\Auth::class,'cancel']);
     //用户
     Route::group('user', function () {
         //切换账号
-        Route::get('account', 'User/account');
-        Route::post('switch', 'User/switchUser');
+        Route::get('account', [app\controller\api\user\User::class,'account']);
+        Route::post('switch', [app\controller\api\user\User::class,'switchUser']);
         //修改信息
-        Route::post('change/phone', 'User/changePhone');
-        Route::post('change/info', 'User/updateBaseInfo');
-        Route::post('change/password', 'User/changePassword');
+        Route::post('change/phone', [app\controller\api\user\User::class,'changePhone']);
+        Route::post('change/info', [app\controller\api\user\User::class,'updateBaseInfo']);
+        Route::post('change/password', [app\controller\api\user\User::class,'changePassword']);
         //收藏
-        Route::get('/relation/product/lst', 'UserRelation/productList');
-        Route::get('/relation/merchant/lst', 'UserRelation/merchantList');
-        Route::post('/relation/create', 'UserRelation/create');
-        Route::post('/relation/batch/create', 'UserRelation/batchCreate');
-        Route::post('/relation/delete', 'UserRelation/delete');
-        Route::post('/relation/batch/delete', 'UserRelation/batchDelete');
+        Route::get('/relation/product/lst', [app\controller\api\user\UserRelation::class,'productList']);
+        Route::get('/relation/merchant/lst', [app\controller\api\user\UserRelation::class,'merchantList']);
+        Route::post('/relation/create', [app\controller\api\user\UserRelation::class,'create']);
+        Route::post('/relation/batch/create', [app\controller\api\user\UserRelation::class,'batchCreate']);
+        Route::post('/relation/delete', [app\controller\api\user\UserRelation::class,'delete']);
+        Route::post('/relation/batch/delete', [app\controller\api\user\UserRelation::class,'batchDelete']);
 
         //反馈
-        Route::post('/feedback', 'Feedback/feedback');
-        Route::get('/feedback/list', 'Feedback/feedbackList');
-        Route::get('/feedback/detail/:id', 'Feedback/detail');
+        Route::post('/feedback', [app\controller\api\user\Feedback::class,'feedback']);
+        Route::get('/feedback/list', [app\controller\api\user\Feedback::class,'feedbackList']);
+        Route::get('/feedback/detail/:id', [app\controller\api\user\Feedback::class,'detail']);
         //充值
-        Route::post('/recharge', 'UserRecharge/recharge');
-        Route::post('/recharge/brokerage', 'UserRecharge/brokerage');
+        Route::post('/recharge', [app\controller\api\user\UserRecharge::class,'recharge']);
+        Route::post('/recharge/brokerage', [app\controller\api\user\UserRecharge::class,'brokerage']);
         //地址
-        Route::get('/address/lst', 'UserAddress/lst');
-        Route::post('/address/create', 'UserAddress/create');
-        Route::get('/address/detail/:id', 'UserAddress/detail');
-        Route::post('/address/update/:id', 'UserAddress/editDefault');
-        Route::post('/address/delete/:id', 'UserAddress/delete');
+        Route::get('/address/lst', [app\controller\api\user\UserAddress::class,'lst']);
+        Route::post('/address/create', [app\controller\api\user\UserAddress::class,'create']);
+        Route::get('/address/detail/:id', [app\controller\api\user\UserAddress::class,'detail']);
+        Route::post('/address/update/:id', [app\controller\api\user\UserAddress::class,'editDefault']);
+        Route::post('/address/delete/:id', [app\controller\api\user\UserAddress::class,'delete']);
 
         //分销海报
-        Route::get('/spread_image', 'User/spread_image');
-        Route::get('/v2/spread_image', 'User/spread_image_v2');
+        Route::get('/spread_image', [app\controller\api\user\User::class,'spread_image']);
+        Route::get('/v2/spread_image', [app\controller\api\user\User::class,'spread_image_v2']);
         //推广人列表
-        Route::get('/spread_list', 'User/spread_list');
+        Route::get('/spread_list', [app\controller\api\user\User::class,'spread_list']);
 
         //提现
-        Route::get('/extract/lst', 'UserExtract/lst');
-        Route::get('/extract/detail/:id', 'UserExtract/detail');
-        Route::get('/extract/banklst', 'UserExtract/bankLst');
-        Route::post('/extract/create', 'UserExtract/create');
-        Route::get('/extract/history_bank', 'UserExtract/historyBank');
+        Route::get('/extract/lst', [app\controller\api\user\UserExtract::class,'lst']);
+        Route::get('/extract/detail/:id', [app\controller\api\user\UserExtract::class,'detail']);
+        Route::get('/extract/banklst', [app\controller\api\user\UserExtract::class,'bankLst']);
+        Route::post('/extract/create', [app\controller\api\user\UserExtract::class,'create']);
+        Route::get('/extract/history_bank', [app\controller\api\user\UserExtract::class,'historyBank']);
 
         //绑定手机号
-        Route::post('binding', 'User/binding');
+        Route::post('binding', [app\controller\api\user\User::class,'binding']);
         //小程序获取手机号
-        Route::post('mp/binding', 'User/mpPhone');
+        Route::post('mp/binding', [app\controller\api\user\User::class,'mpPhone']);
 
         //余额记录
-        Route::get('bill', 'User/bill');
+        Route::get('bill', [app\controller\api\user\User::class,'bill']);
         //佣金记录
-        Route::get('brokerage_list', 'User/brokerage_list');
+        Route::get('brokerage_list', [app\controller\api\user\User::class,'brokerage_list']);
         //推广人订单
-        Route::get('spread_order', 'User/spread_order');
+        Route::get('spread_order', [app\controller\api\user\User::class,'spread_order']);
         //推广人排行榜
-        Route::get('spread_top', 'User/spread_top');
+        Route::get('spread_top', [app\controller\api\user\User::class,'spread_top']);
         //佣金排行榜
-        Route::get('brokerage_top', 'User/brokerage_top');
-        Route::get('spread_info', 'User/spread_info');
-        Route::get('spread_level', 'User/spread_info');
+        Route::get('brokerage_top', [app\controller\api\user\User::class,'brokerage_top']);
+        Route::get('spread_info', [app\controller\api\user\User::class,'spread_info']);
+        Route::get('spread_level', [app\controller\api\user\User::class,'spread_info']);
 
-        Route::get('brokerage/info', 'User/brokerage_info');
-        Route::get('brokerage/all', 'User/brokerage_all');
-        Route::get('brokerage/notice', 'User/notice');
+        Route::get('brokerage/info', [app\controller\api\user\User::class,'brokerage_info']);
+        Route::get('brokerage/all', [app\controller\api\user\User::class,'brokerage_all']);
+        Route::get('brokerage/notice', [app\controller\api\user\User::class,'notice']);
 
         //浏览记录
-        Route::get('history', 'UserHistory/lst');
-        Route::post('history/delete/:id', 'UserHistory/deleteHistory');
-        Route::post('history/batch/delete', 'UserHistory/deleteHistoryBatch');
+        Route::get('history', [app\controller\api\user\UserHistory::class,'lst']);
+        Route::post('history/delete/:id', [app\controller\api\user\UserHistory::class,'deleteHistory']);
+        Route::post('history/batch/delete', [app\controller\api\user\UserHistory::class,'deleteHistoryBatch']);
 
         //发票
-        Route::post('receipt/create', 'UserReceipt/create');
-        Route::get('receipt/lst', 'UserReceipt/lst');
-        Route::get('receipt/order', 'UserReceipt/order');
-        Route::get('receipt/order/:id', 'UserReceipt/orderDetail');
-        Route::post('receipt/delete/:id', 'UserReceipt/delete');
-        Route::post('receipt/update/:id', 'UserReceipt/update');
-        Route::post('receipt/is_default/:id', 'UserReceipt/isDefault');
-        Route::get('receipt/detail/:id', 'UserReceipt/detail');
+        Route::post('receipt/create', [app\controller\api\user\UserReceipt::class,'create']);
+        Route::get('receipt/lst', [app\controller\api\user\UserReceipt::class,'lst']);
+        Route::get('receipt/order', [app\controller\api\user\UserReceipt::class,'order']);
+        Route::get('receipt/order/:id', [app\controller\api\user\UserReceipt::class,'orderDetail']);
+        Route::post('receipt/delete/:id', [app\controller\api\user\UserReceipt::class,'delete']);
+        Route::post('receipt/update/:id', [app\controller\api\user\UserReceipt::class,'update']);
+        Route::post('receipt/is_default/:id', [app\controller\api\user\UserReceipt::class,'isDefault']);
+        Route::get('receipt/detail/:id', [app\controller\api\user\UserReceipt::class,'detail']);
 
         //签到
-        Route::get('sign/lst', 'UserSign/lst');
-        Route::post('sign/create', 'UserSign/create');
-        Route::get('sign/month', 'UserSign/month');
+        Route::get('sign/lst', [app\controller\api\user\UserSign::class,'lst']);
+        Route::post('sign/create', [app\controller\api\user\UserSign::class,'create']);
+        Route::get('sign/month', [app\controller\api\user\UserSign::class,'month']);
 
         //积分
-        Route::get('integral/info', 'User/integralInfo');
-        Route::get('integral/lst', 'User/integralList');
+        Route::get('integral/info', [app\controller\api\user\User::class,'integralInfo']);
+        Route::get('integral/lst', [app\controller\api\user\User::class,'integralList']);
 
         //客服列表
-        Route::get('services', 'User/services');
+        Route::get('services', [app\controller\api\user\User::class,'services']);
 
         // APP 推送设备绑定
         Route::post('push_client', 'User/bindPushClient');
@@ -198,9 +188,9 @@ Route::group(function () {
         Route::get('member/log', 'Member/getMemberValue');
 
         // 用户表单数据操作
-        Route::get('fields/info', 'UserFields/info');
-        Route::post('fields/save', 'UserFields/save');
-        Route::delete('fields/delete', 'UserFields/delete');
+        Route::get('fields/info', [app\controller\api\user\UserFields::class,'info']);
+        Route::post('fields/save', [app\controller\api\user\UserFields::class,'save']);
+        Route::delete('fields/delete', [app\controller\api\user\UserFields::class,'delete']);
 
         // 社交档案
         Route::get('profile', 'UserProfile/detail');
@@ -231,28 +221,28 @@ Route::group(function () {
 
     //购物车
     Route::group('user/cart', function () {
-        Route::post('/check/:id', 'StoreCart/checkCerate');
-        Route::get('/lst', 'StoreCart/lst');
-        Route::post('/create', 'StoreCart/create');
-        Route::post('/again', 'StoreCart/again');
-        Route::post('/change/:id', 'StoreCart/change');
-        Route::post('/delete', 'StoreCart/batchDelete');
-        Route::get('/count', 'StoreCart/cartCount');
-        Route::post('/batchCreate', 'StoreCart/batchCreate');
-        Route::post('/clear', 'StoreCart/clear');
-    })->prefix('api.store.order.');
+        Route::post('/check/:id', [app\controller\api\store\order\StoreCart::class,'checkCerate']);
+        Route::get('/lst', [app\controller\api\store\order\StoreCart::class,'lst']);
+        Route::post('/create', [app\controller\api\store\order\StoreCart::class,'create']);
+        Route::post('/again', [app\controller\api\store\order\StoreCart::class,'again']);
+        Route::post('/change/:id', [app\controller\api\store\order\StoreCart::class,'change']);
+        Route::post('/delete', [app\controller\api\store\order\StoreCart::class,'batchDelete']);
+        Route::get('/count', [app\controller\api\store\order\StoreCart::class,'cartCount']);
+        Route::post('/batchCreate', [app\controller\api\store\order\StoreCart::class,'batchCreate']);
+        Route::post('/clear', [app\controller\api\store\order\StoreCart::class,'clear']);
+    });
 
     Route::group('store/product', function () {
-        Route::post('/assist/create/:id', 'StoreProductAssistSet/create');
-        Route::get('/assist/detail/:id', 'StoreProductAssistSet/detail');
-        Route::post('/assist/set/:id', 'StoreProductAssistSet/set');
-        Route::get('/assist/user/:id', 'StoreProductAssistSet/userList');
-        Route::get('/assist/share/:id', 'StoreProductAssistSet/shareNum');
-        Route::get('/assist/set/lst', 'StoreProductAssistSet/lst');
-        Route::post('/assist/set/delete/:id', 'StoreProductAssistSet/delete');
-        Route::post('/increase_take', 'StoreProduct/setIncreaseTake');
-        Route::get('/get_attr_value/:id', 'StoreProduct/getAttrValue');
-    })->prefix('api.store.product.');
+        Route::post('/assist/create/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'create']);
+        Route::get('/assist/detail/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'detail']);
+        Route::post('/assist/set/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'set']);
+        Route::get('/assist/user/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'userList']);
+        Route::get('/assist/share/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'shareNum']);
+        Route::get('/assist/set/lst', [app\controller\api\store\product\StoreProductAssistSet::class,'lst']);
+        Route::post('/assist/set/delete/:id', [app\controller\api\store\product\StoreProductAssistSet::class,'delete']);
+        Route::post('/increase_take', [app\controller\api\store\product\StoreProduct::class,'setIncreaseTake']);
+        Route::get('/get_attr_value/:id', [app\controller\api\store\product\StoreProduct::class,'getAttrValue']);
+    });
 
     //申请商户
     Route::get('intention/lst', 'api.store.merchant.MerchantIntention/lst');
@@ -280,9 +270,9 @@ Route::group(function () {
         // 漫步：清除自己的位置留痕
         Route::post('roam/clear', 'Community/clearRoamTrace');
 
-        Route::post('fans/:id', 'Community/setFocus');
-        Route::get('fans/lst', 'Community/getUserFans');
-        Route::get('focus/lst', 'Community/getUserFocus');
+        Route::post('fans/:id', [app\controller\api\community\Community::class,'setFocus']);
+        Route::get('fans/lst', [app\controller\api\community\Community::class,'getUserFans']);
+        Route::get('focus/lst', [app\controller\api\community\Community::class,'getUserFocus']);
 
         Route::post('like/:id', 'Community/toggleLike');
         Route::get('like_me/lst', 'Community/likeMeList');
@@ -297,7 +287,7 @@ Route::group(function () {
         Route::post('reply/start/:id', 'CommunityReply/start');
         Route::delete('reply/delete/:id', 'CommunityReply/delete');
 
-        Route::get('order/:id', 'Community/getSpuByOrder');
+        Route::get('order/:id', [app\controller\api\community\Community::class,'getSpuByOrder']);
 
 
     })->prefix('api.community.');
@@ -306,38 +296,38 @@ Route::group(function () {
     Route::group(function () {
 
         //付费会员购买
-        Route::post('svip/pay/:id', 'api.user.Svip/createOrder');
+        Route::post('svip/pay/:id', [app\controller\api\user\Svip::class,'createOrder']);
 
         //订单检查
         Route::group('order/v3', function () {
-            Route::post('check', 'PointsOrder/beforCheck');
-            Route::post('create', 'PointsOrder/createOrder');
-            Route::post('pay/:id', 'PointsOrder/orderPay');
-        })->prefix('api.store.order.');
+            Route::post('check', [app\controller\api\store\order\PointsOrder::class,'beforCheck']);
+            Route::post('create', [app\controller\api\store\order\PointsOrder::class,'createOrder']);
+            Route::post('pay/:id', [app\controller\api\store\order\PointsOrder::class,'orderPay']);
+        });
 
     })->middleware(\app\common\middleware\BlockerMiddleware::class);
 
     Route::group('points/order', function () {
-        Route::get('lst', 'PointsOrder/lst');
-        Route::get('detail/:id', 'PointsOrder/detail');
-        Route::post('take/:id', 'PointsOrder/take');
-        Route::post('deleate/:id', 'PointsOrder/del');
-    })->prefix('api.store.order.');
+        Route::get('lst', [app\controller\api\store\order\PointsOrder::class,'lst']);
+        Route::get('detail/:id', [app\controller\api\store\order\PointsOrder::class,'detail']);
+        Route::post('take/:id', [app\controller\api\store\order\PointsOrder::class,'take']);
+        Route::post('deleate/:id', [app\controller\api\store\order\PointsOrder::class,'del']);
+    });
 
     Route::group('user/form', function () {
-        Route::post('/create/:id', '/create');
-        Route::get('/lst', '/lst');
-        Route::get('/detail/:id', '/detail');
-        Route::get('/show/:id', '/show');
-    })->prefix('api.store.form.FormRelated');
+        Route::post('/create/:id', [app\controller\api\store\form\FormRelated::class,'create']);
+        Route::get('/lst', [app\controller\api\store\form\FormRelated::class,'lst']);
+        Route::get('/detail/:id', [app\controller\api\store\form\FormRelated::class,'detail']);
+        Route::get('/show/:id', [app\controller\api\store\form\FormRelated::class,'show']);
+    });
     // 商圈入驻
     Route::group('circleAgent', function () {
-        Route::get('list', '/list');
-        Route::get('detail/:id', '/detail');
-        Route::post('create', '/create');
-        Route::post('update/:id', '/update');
-        Route::post('revoke/:id', '/revoke');
-    })->prefix('api.circle.CircleAgent');
+        Route::get('list', [app\controller\api\circle\CircleAgent::class,'list']);
+        Route::get('detail/:id', [app\controller\api\circle\CircleAgent::class,'detail']);
+        Route::post('create', [app\controller\api\circle\CircleAgent::class,'create']);
+        Route::post('update/:id', [app\controller\api\circle\CircleAgent::class,'update']);
+        Route::post('revoke/:id', [app\controller\api\circle\CircleAgent::class,'revoke']);
+    });
 
     // 获取微信小程序 WebSocket 临时连接 Token
     Route::post('temp-ws-token', 'api.store.service.Service/tempWsToken');
@@ -349,29 +339,29 @@ Route::group(function () {
     // 付费会员
     Route::group('svip', function () {
         //价格列表
-        Route::get('pay_lst', '/getTypeLst');
-        Route::get('user_info', '/svipUserInfo');
-        Route::get('coupon_lst', '/svipCoupon');
-        Route::get('product_lst', '/svipProductList');
-        Route::post('coupon_receive/:id', '/receiveCoupon');
-    })->prefix('api.user.Svip');
+        Route::get('pay_lst', [app\controller\api\user\Svip::class,'getTypeLst']);
+        Route::get('user_info', [app\controller\api\user\Svip::class,'svipUserInfo']);
+        Route::get('coupon_lst', [app\controller\api\user\Svip::class,'svipCoupon']);
+        Route::get('product_lst', [app\controller\api\user\Svip::class,'svipProductList']);
+        Route::post('coupon_receive/:id', [app\controller\api\user\Svip::class,'receiveCoupon']);
+    });
     //社区
     Route::group('community', function () {
         //社区文章列表
-        Route::get('/lst', 'Community/lst');
-        Route::get('/user_lst', 'Community/userList');
-        Route::get('/video_lst', 'Community/videoShow');
+        Route::get('/lst', [app\controller\api\community\Community::class,'lst']);
+        Route::get('/user_lst', [app\controller\api\community\Community::class,'userList']);
+        Route::get('/video_lst', [app\controller\api\community\Community::class,'videoShow']);
         //详情
-        Route::get('/show/:id', 'Community/show');
+        Route::get('/show/:id', [app\controller\api\community\Community::class,'show']);
         //用户页
-        Route::get('/user/info/:id', 'Community/userInfo');
+        Route::get('/user/info/:id', [app\controller\api\community\Community::class,'userInfo']);
         //用户的文章
-        Route::get('/user/community/:id', 'Community/userCommunitylst');
+        Route::get('/user/community/:id', [app\controller\api\community\Community::class,'userCommunitylst']);
         //用户的视频
-        Route::get('/user/community_video/:id', 'Community/userCommunityVideolst');
+        Route::get('/user/community_video/:id', [app\controller\api\community\Community::class,'userCommunityVideolst']);
         //分类&话题
-        Route::get('category/lst', 'CommunityCategory/lst');
-        Route::get('/:id/reply', 'CommunityReply/lst');
+        Route::get('category/lst', [app\controller\api\community\CommunityCategory::class,'lst']);
+        Route::get('/:id/reply', [app\controller\api\community\CommunityReply::class,'lst']);
 
         Route::get('/focuslst', 'Community/focuslst');
         Route::get('qrcode/:id', 'Community/qrcode');
@@ -383,101 +373,101 @@ Route::group(function () {
     Route::get('community/user/review_status/:uid', 'api.user.UserCertification/reviewStatusPublic');
     //专题
     Route::group('activity', function () {
-        Route::get('lst/:id', 'api.Common/activityLst');
-        Route::get('info/:id', 'api.Common/activityInfo');
+        Route::get('lst/:id', [app\controller\api\Common::class,'activityLst']);
+        Route::get('info/:id', [app\controller\api\Common::class,'activityInfo']);
     });
     //商品
     Route::group('store/product', function () {
-        Route::get('seckill/select', 'StoreProductSeckill/select');
-        Route::get('seckill/lst', 'StoreProductSeckill/lst');
-        Route::get('seckill/detail/:id', 'StoreProductSeckill/detail')->middleware(VisitProductMiddleware::class, 1);
-        Route::get('category/lst', 'StoreCategory/lst');
-        Route::get('category', 'StoreCategory/children');
-        Route::get('brand/lst', 'StoreBrand/lst');
-        Route::get('detail/:id', 'StoreProduct/detail')->middleware(VisitProductMiddleware::class, 0);
-        Route::get('show/:id', 'StoreProduct/show');
-        Route::get('good_list/:id', 'StoreProduct/getGoodList');
-        Route::get('/qrcode/:id', 'StoreProduct/qrcode');
-        Route::get('category/hotranking', 'StoreCategory/cateHotRanking');
+        Route::get('seckill/select', [app\controller\api\store\product\StoreProductSeckill::class,'select']);
+        Route::get('seckill/lst', [app\controller\api\store\product\StoreProductSeckill::class,'lst']);
+        Route::get('seckill/detail/:id', [app\controller\api\store\product\StoreProductSeckill::class,'detail'])->middleware(VisitProductMiddleware::class, 1);
+        Route::get('category/lst', [app\controller\api\store\product\StoreCategory::class,'lst']);
+        Route::get('category', [app\controller\api\store\product\StoreCategory::class,'children']);
+        Route::get('brand/lst', [app\controller\api\store\product\StoreBrand::class,'lst']);
+        Route::get('detail/:id', [app\controller\api\store\product\StoreProduct::class,'detail'])->middleware(VisitProductMiddleware::class, 0);
+        Route::get('show/:id', [app\controller\api\store\product\StoreProduct::class,'show']);
+        Route::get('good_list/:id', [app\controller\api\store\product\StoreProduct::class,'getGoodList']);
+        Route::get('/qrcode/:id', [app\controller\api\store\product\StoreProduct::class,'qrcode']);
+        Route::get('category/hotranking', [app\controller\api\store\product\StoreCategory::class,'cateHotRanking']);
 
-        Route::get('bag/explain', 'StoreProduct/getBagExplain');
-        Route::get('/reply/lst/:id', 'StoreReply/lst');
+        Route::get('bag/explain', [app\controller\api\store\product\StoreProduct::class,'getBagExplain']);
+        Route::get('/reply/lst/:id', [app\controller\api\store\product\StoreReply::class,'lst']);
         //预售
-        Route::get('/presell/lst', 'StoreProductPresell/lst');
-        Route::get('/presell/detail/:id', 'StoreProductPresell/detail')->middleware(VisitProductMiddleware::class, 2);
+        Route::get('/presell/lst', [app\controller\api\store\product\StoreProductPresell::class,'lst']);
+        Route::get('/presell/detail/:id', [app\controller\api\store\product\StoreProductPresell::class,'detail'])->middleware(VisitProductMiddleware::class, 2);
         //预售协议
-        Route::get('presell/agree', 'StoreProductPresell/getAgree');
+        Route::get('presell/agree', [app\controller\api\store\product\StoreProductPresell::class,'getAgree']);
         //助力
-        Route::get('/assist/lst', 'StoreProductAssist/lst');
+        Route::get('/assist/lst', [app\controller\api\store\product\StoreProductAssist::class,'lst']);
         //拼团
-        Route::get('group/lst', 'StoreProductGroup/lst');
-        Route::get('group/detail/:id', 'StoreProductGroup/detail')->middleware(VisitProductMiddleware::class, 4);
-        Route::get('group/count', 'StoreProductGroup/userCount');
-        Route::get('group/category', 'StoreProductGroup/category');
-        Route::get('group/get/:id', 'StoreProductGroup/groupBuying');
+        Route::get('group/lst', [app\controller\api\store\product\StoreProductGroup::class,'lst']);
+        Route::get('group/detail/:id', [app\controller\api\store\product\StoreProductGroup::class,'detail'])->middleware(VisitProductMiddleware::class, 4);
+        Route::get('group/count', [app\controller\api\store\product\StoreProductGroup::class,'userCount']);
+        Route::get('group/category', [app\controller\api\store\product\StoreProductGroup::class,'category']);
+        Route::get('group/get/:id', [app\controller\api\store\product\StoreProductGroup::class,'groupBuying']);
 
-        Route::get('/guarantee/:id', 'StoreProduct/guaranteeTemplate');
-        Route::get('/preview', 'StoreProduct/preview');
-        Route::get('/price_rule/:id', 'StoreProduct/priceRule');
-        Route::get('/cate_hot', 'StoreProduct/cateHotList');
+        Route::get('/guarantee/:id', [app\controller\api\store\product\StoreProduct::class,'guaranteeTemplate']);
+        Route::get('/preview', [app\controller\api\store\product\StoreProduct::class,'preview']);
+        Route::get('/price_rule/:id', [app\controller\api\store\product\StoreProduct::class,'priceRule']);
+        Route::get('/cate_hot', [app\controller\api\store\product\StoreProduct::class,'cateHotList']);
         //商品列表获取商品规格
-        Route::get('/get_spec/:id', 'StoreProduct/getSpec');
+        Route::get('/get_spec/:id', [app\controller\api\store\product\StoreProduct::class,'getSpec']);
         // 商品列表获取推荐商品
-        Route::get('/recommendProduct', 'StoreProduct/recommendProduct');
+        Route::get('/recommendProduct', [app\controller\api\store\product\StoreProduct::class,'recommendProduct']);
         /**
          * 预约商品相关
          */
-        Route::get('/reservation/getMonth/:id', 'StorePrdouctReservation/showMonth');
-        Route::get('/reservation/getDay/:id', 'StorePrdouctReservation/showDay');
-        Route::post('/reservation/checkRange', 'StorePrdouctReservation/checkRange');
-    })->prefix('api.store.product.');
+        Route::get('/reservation/getMonth/:id', [app\controller\api\store\product\StorePrdouctReservation::class,'showMonth']);
+        Route::get('/reservation/getDay/:id', [app\controller\api\store\product\StorePrdouctReservation::class,'showDay']);
+        Route::post('/reservation/checkRange', [app\controller\api\store\product\StorePrdouctReservation::class,'checkRange']);
+    });
     //各种商品列表
     Route::group('product/spu', function () {
         //礼包 product/spu/bag
-        Route::get('/bag', 'StoreSpu/bag');
+        Route::get('/bag', [app\controller\api\store\product\StoreSpu::class,'bag']);
         //商品 product/spu/lst
-        Route::get('/lst', 'StoreSpu/lst');
+        Route::get('/lst', [app\controller\api\store\product\StoreSpu::class,'lst']);
         //热门 product/spu/hot/:type
-        Route::get('/hot/:type', 'StoreSpu/hot');
+        Route::get('/hot/:type', [app\controller\api\store\product\StoreSpu::class,'hot']);
         //推荐 product/spu/recommend
-        Route::get('/recommend', 'StoreSpu/recommend');
+        Route::get('/recommend', [app\controller\api\store\product\StoreSpu::class,'recommend']);
         //商户商品  product/spu/merchant/:id
-        Route::get('/merchant/:id', 'StoreSpu/merProductLst');
+        Route::get('/merchant/:id', [app\controller\api\store\product\StoreSpu::class,'merProductLst']);
         //礼包推荐  product/spu/bag/recommend
-        Route::get('/bag/recommend', 'StoreSpu/bagRecommend');
+        Route::get('/bag/recommend', [app\controller\api\store\product\StoreSpu::class,'bagRecommend']);
         //活动分类  product/spu/active/category/:type
-        Route::get('/active/category/:type', 'StoreSpu/activeCategory');
+        Route::get('/active/category/:type', [app\controller\api\store\product\StoreSpu::class,'activeCategory']);
         //标签获取数据
-        Route::get('/labels', 'StoreSpu/labelsLst');
+        Route::get('/labels', [app\controller\api\store\product\StoreSpu::class,'labelsLst']);
         //本地生活商品
-        Route::get('/local/:id', 'StoreSpu/local');
+        Route::get('/local/:id', [app\controller\api\store\product\StoreSpu::class,'local']);
         //复制口令
-        Route::get('/copy', 'StoreSpu/copy');
-        Route::get('/get/:id', 'StoreSpu/get');
+        Route::get('/copy', [app\controller\api\store\product\StoreSpu::class,'copy']);
+        Route::get('/get/:id', [app\controller\api\store\product\StoreSpu::class,'get']);
         //优惠券商品列表
-        Route::get('/coupon_product', 'StoreSpu/getProductByCoupon');
+        Route::get('/coupon_product', [app\controller\api\store\product\StoreSpu::class,'getProductByCoupon']);
         //热卖排行
-        Route::get('/get_hot_ranking', 'StoreSpu/getHotRanking');
+        Route::get('/get_hot_ranking', [app\controller\api\store\product\StoreSpu::class,'getHotRanking']);
         //商品参数
-        Route::get('/params', 'StoreParams/select');
+        Route::get('/params', [app\controller\api\store\product\StoreParams::class,'select']);
         //商品参数值
-        Route::get('/params_value/:id', 'StoreParams/getValue');
+        Route::get('/params_value/:id', [app\controller\api\store\product\StoreParams::class,'getValue']);
         //商品热搜
-        Route::get('/hot_lst', 'StoreProduct/getHotList');
-        Route::get('/hot_top', 'StoreProduct/getHotTop');
-    })->prefix('api.store.product.');
+        Route::get('/hot_lst', [app\controller\api\store\product\StoreProduct::class,'getHotList']);
+        Route::get('/hot_top', [app\controller\api\store\product\StoreProduct::class,'getHotTop']);
+    });
     //直播
     Route::group('broadcast', function () {
-        Route::get('/lst', 'BroadcastRoom/lst');
-        Route::get('/hot', 'BroadcastRoom/hot');
-    })->prefix('api.store.broadcast.');
+        Route::get('/lst', [app\controller\api\store\broadcast\BroadcastRoom::class,'lst']);
+        Route::get('/hot', [app\controller\api\store\broadcast\BroadcastRoom::class,'hot']);
+    });
     //优惠券
     Route::group('coupon', function () {
-        Route::get('product', 'api.store.product.StoreCoupon/coupon');
-        Route::get('store/:id', 'api.store.product.StoreCoupon/merCoupon');
-        Route::get('list', 'api.store.product.StoreCoupon/lst');
-        Route::get('getlst', 'api.store.product.StoreCoupon/getList');
-        Route::get('new_people', 'api.store.product.StoreCoupon/newPeople');
+        Route::get('product', [app\controller\api\store\product\StoreCoupon::class,'coupon']);
+        Route::get('store/:id', [app\controller\api\store\product\StoreCoupon::class,'merCoupon']);
+        Route::get('list', [app\controller\api\store\product\StoreCoupon::class,'lst']);
+        Route::get('getlst', [app\controller\api\store\product\StoreCoupon::class,'getList']);
+        Route::get('new_people', [app\controller\api\store\product\StoreCoupon::class,'newPeople']);
     });
     //商户
     Route::group('store/merchant/', function () {
@@ -494,80 +484,78 @@ Route::group(function () {
     Route::post('store/certificate/:merId', 'api.Auth/getMerCertificate');
     //文章
     Route::group('article', function () {
-        Route::get('/lst/:cid', 'Article/lst');
-        Route::get('/list', 'Article/list');
-        Route::get('detail/:id', 'Article/detail');
-        Route::get('/category/lst', 'ArticleCategory/lst');
-    })->prefix('api.article.');
+        Route::get('/lst/:cid', [app\controller\api\article\Article::class,'lst']);
+        Route::get('/list', [app\controller\api\article\Article::class,'list']);
+        Route::get('detail/:id', [app\controller\api\article\Article::class,'detail']);
+        Route::get('/category/lst', [app\controller\api\article\ArticleCategory::class,'lst']);
+    });
 
     //申请商户
-    Route::post('intention/create', 'api.store.merchant.MerchantIntention/create');
-    Route::get('intention/cate', 'api.store.merchant.MerchantIntention/cateLst');
-    Route::get('intention/type', 'api.store.merchant.MerchantIntention/typeLst');
-    Route::get('intention/circles', 'api.store.merchant.MerchantIntention/circles');
-    Route::get('intention/business', 'api.store.merchant.MerchantIntention/business');
+    Route::post('intention/create', [app\controller\api\store\merchant\MerchantIntention::class,'create']);
+    Route::get('intention/cate', [app\controller\api\store\merchant\MerchantIntention::class,'cateLst']);
+    Route::get('intention/type', [app\controller\api\store\merchant\MerchantIntention::class,'typeLst']);
+    Route::get('intention/circles', [app\controller\api\store\merchant\MerchantIntention::class,'circles']);
+    Route::get('intention/business', [app\controller\api\store\merchant\MerchantIntention::class,'business']);
     //浏览
-    Route::post('common/visit', 'api.Common/visit');
-    Route::get('store/product/assist/count', 'api.store.product.StoreProductAssist/userCount');
-    Route::get('store/expr/temps', 'admin.system.serve.Export/getExportTemp');
+    Route::post('common/visit', [app\controller\api\Common::class,'visit']);
+    Route::get('store/product/assist/count', [app\controller\api\store\product\StoreProductAssist::class,'userCount']);
+    Route::get('store/expr/temps', [app\controller\admin\system\serve\Export::class,'getExportTemp']);
     //复制口令
-    Route::get('command/copy', 'api.Common/getCommand');
+    Route::get('command/copy', [app\controller\api\Common::class,'getCommand']);
     Route::group('discounts', function () {
         Route::get('lst', '/lst');
         Route::get('detail/:id', '/detail');
     })->prefix('api.store.product.Discounts');
-    //test
-    Route::any('store/test', 'api.Test/test');
     Route::get('subscribe', 'api.Common/subscribe');
     Route::group('points', function () {
-        Route::get('home', '/home');
-        Route::get('scope', '/points_mall_scope');
-        Route::get('lst', '/lst');
-        Route::get('detail/:id', '/detail');
-    })->prefix('api.store.product.PointsProduct');
+        Route::get('home', [app\controller\api\store\product\PointsProduct::class,'home']);
+        Route::get('scope', [app\controller\api\store\product\PointsProduct::class,'points_mall_scope']);
+        Route::get('lst', [app\controller\api\store\product\PointsProduct::class,'lst']);
+        Route::get('detail/:id', [app\controller\api\store\product\PointsProduct::class,'detail']);
+    });
     Route::group('diy', function () {
         //普通商品详情
-        Route::get('/product_detail', '/productDetail');
+        Route::get('/product_detail', [app\controller\api\Diy::class,'productDetail']);
         //秒杀
-        Route::get('/seckill', '/seckill');
+        Route::get('/seckill', [app\controller\api\Diy::class,'seckill']);
         //助力
-        Route::get('/assist', '/assist');
+        Route::get('/assist', [app\controller\api\Diy::class,'assist']);
         //预售
-        Route::get('/presell', '/presell');
+        Route::get('/presell', [app\controller\api\Diy::class,'presell']);
         //拼团
-        Route::get('/group', '/group');
+        Route::get('/group', [app\controller\api\Diy::class,'group']);
         //商品列表
-        Route::get('/spu', '/spu');
+        Route::get('/spu', [app\controller\api\Diy::class,'spu']);
         //社区
-        Route::get('/community', '/community');
+        Route::get('/community', [app\controller\api\Diy::class,'community']);
         //优惠券
-        Route::get('/coupon', '/coupon');
+        Route::get('/coupon', [app\controller\api\Diy::class,'coupon']);
         //品牌好店
-        Route::get('/store', '/store');
+        Route::get('/store', [app\controller\api\Diy::class,'store']);
         //二级分类
-        Route::get('/category', '/category');
+        Route::get('/category', [app\controller\api\Diy::class,'category']);
         //直播
-        Route::get('/broadcast', '/broadcast');
+        Route::get('/broadcast', [app\controller\api\Diy::class,'broadcast']);
         //热卖排行
-        Route::get('/hot_top', '/hot_top');
+        Route::get('/hot_top', [app\controller\api\Diy::class,'hot_top']);
         // 悬浮按钮
-        Route::get('/fab', '/fab');
+        Route::get('/fab', [app\controller\api\Diy::class,'fab']);
         // 平台商品分类
         Route::get('/productCategory', '/productCategory');
         // 盲盒店铺
         Route::get('/blindbox', '/blindbox');
     })->prefix('api.Diy');
     Route::group('system/form', function () {
-        Route::get('/lst', '/lst');
-        Route::get('/detail/:id', '/detail');
-        Route::get('/info/:form_id', '/getFormInfo');
-        Route::get('/share_posters/:id', '/getSharePosters');
-    })->prefix('api.store.form.Form');
+        Route::get('/lst', [app\controller\api\store\form\Form::class,'lst']);
+        Route::get('/detail/:id', [app\controller\api\store\form\Form::class,'detail']);
+        Route::get('/info/:form_id', [app\controller\api\store\form\Form::class,'getFormInfo']);
+        Route::get('/share_posters/:id', [app\controller\api\store\form\Form::class,'getSharePosters']);
+    });
     // 分组推荐
     Route::group('store/group', function () {
-        Route::get('/recommend', '/recommendList');
-        Route::get('/options', '/options');
-    })->prefix('api.store.StoreGroup');
+        Route::get('/recommend', [app\controller\api\store\StoreGroup::class,'recommendList']);
+        Route::get('/options', [app\controller\api\store\StoreGroup::class,'options']);
+    });
     // 用户
     Route::group('user', function () {
         // 签到数据信息获取
@@ -591,16 +579,26 @@ Route::group(function () {
     })->prefix('api.user.');
 
     //获取商户基本信息
-    Route::get('service/info/:id', 'api.store.service.Service/merchantInfo');
-    Route::get('has_service/:id', 'api.store.service.Service/hasService');
+    Route::get('service/info/:id', [app\controller\api\store\service\Service::class,'merchantInfo']);
+    Route::get('has_service/:id', [app\controller\api\store\service\Service::class,'hasService']);
+    Route::group('merchant/member', function () {
+        Route::get('level/list/:merId', [app\controller\api\merchant\Member::class,'levels']);
+        Route::get('agreement/open/:merId', [app\controller\api\merchant\Member::class,'openAgreement']);
+        Route::get('diy-page/:merId', [app\controller\api\merchant\Member::class,'diyPage']);
+    });
+    Route::group('merchant/shopping/credits', function () {
+        Route::get('package/list/ids', [app\controller\api\merchant\ShoppingCredits::class,'packagesByIds']);
+        Route::get('package/list/:merId', [app\controller\api\merchant\ShoppingCredits::class,'packages']);
+    });
+    Route::get('coupon/merchant/member/list/ids', [app\controller\api\store\product\StoreCoupon::class,'merchantMemberListByIds']);
     //上传图片
     Route::post('upload/image/:field', 'api.Common/uploadImage');
     Route::post('scan_upload/image/:field/:token', 'api.Common/scanUploadImage');
     //附件上传（pdf/doc/image，最大20MB）
     Route::post('upload/attachment/:field', 'api.Common/uploadAttachment');
     //入住商户上传证件接口
-    Route::post('upload/certificate/:field', 'api.Common/uploadCertificate');
+    Route::post('upload/certificate/:field', [app\controller\api\Common::class,'uploadCertificate']);
     //公共配置
-    Route::get('config', 'api.Common/config');
-    Route::get('navigation', 'api.Common/getNavigation');
+    Route::get('config', [app\controller\api\Common::class,'config']);
+    Route::get('navigation', [app\controller\api\Common::class,'getNavigation']);
 })->middleware(UserTokenMiddleware::class, false);

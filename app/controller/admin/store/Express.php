@@ -196,7 +196,8 @@ class Express extends BaseController
     public function syncAll()
     {
         $config = systemConfig(['serve_account','serve_token']);
-        if (!$config || !$config['serve_account'] || !$config['serve_token']) return app('json')->fail('请先配置一号通账号，再进行物流同步');
+        if (!$config || !$config['serve_account'] || !$config['serve_token'])
+            return app('json')->fail('请先配置一号通账号，再进行物流同步');
         Queue::push(ExpressSyncJob::class, []);
         return app('json')->success('后台同步中，请稍后来查看～');
     }

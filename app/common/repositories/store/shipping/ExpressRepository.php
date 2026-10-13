@@ -18,6 +18,7 @@ use crmeb\services\CrmebServeServices;
 use FormBuilder\Factory\Elm;
 use think\exception\ValidateException;
 use think\facade\Db;
+use think\facade\Log;
 use think\facade\Route;
 
 /**
@@ -242,54 +243,66 @@ class ExpressRepository extends BaseRepository
     {
         $services = app()->make(CrmebServeServices::class);
         $result = $services->express()->express();
-        $has = $this->dao->search([])->find();
-        if (!is_null($has)) {
-            $arr = [];
-            foreach ($result['data'] as $datum) {
-                $res = $this->dao->getWhere(['code' => $datum['code']]);
-                if ($res) {
-                    $res->name = $datum['name'];
-                    $res->mark = $datum['mark'];
-                    $res->partner_id = $datum['partner_id'];
-                    $res->partner_key = $datum['partner_key'];
-                    $res->partner_name = $datum['partner_name'];
-                    $res->check_man = $datum['check_man'];
-                    $res->is_code = $datum['is_code'];
-                    $res->net = $datum['net'];
-                    $res->save();
-                } else {
-                    $arr[] = [
-                        'code' => $datum['code'],
-                        'name' => $datum['name'],
-                        'mark' => $datum['mark'],
-                        'partner_id' => $datum['partner_id'],
-                        'partner_key' => $datum['partner_key'],
-                        'partner_name' => $datum['partner_name'],
-                        'check_man' => $datum['check_man'],
-                        'is_code' => $datum['is_code'],
-                        'net' => $datum['net'],
-                        'sort' => 0,
-                    ];
-                }
-            }
-        } else {
-            $data = $result['data'];
-            $arr = array_map(function ($datum){
-                return [
-                    'code' => $datum['code'],
-                    'name' => $datum['name'],
-                    'mark' => $datum['mark'],
-                    'partner_id' => $datum['partner_id'],
-                    'partner_key' => $datum['partner_key'],
-                    'partner_name' => $datum['partner_name'],
-                    'check_man' => $datum['check_man'],
-                    'is_code' => $datum['is_code'],
-                    'net' => $datum['net'],
-                    'sort' => 0,
-                ];
-            },$data);
+        if (!is_array($result)) {
+            throw new ValidateException('物流公司同步数据格式错误');
         }
-        $this->dao->insertAll($arr);
+
+        // 一号通接口返回的数据通常位于 data 中，兼容直接返回列表的响应。
+        $data = array_key_exists('data', $result) ? $result['data'] : $result;
+        if (!is_array($data)) {
+            throw new ValidateException('物流公司同步数据格式错误');
+        }
+
+        $newExpresses = [];
+        $invalidCount = 0;
+        foreach ($data as $datum) {
+            if (!is_array($datum)) {
+                $invalidCount++;
+                continue;
+            }
+
+            $code = trim((string)($datum['code'] ?? ''));
+            $name = trim((string)($datum['name'] ?? ''));
+            if ($code === '' || $name === '') {
+                $invalidCount++;
+                continue;
+            }
+
+            $expressData = [
+                'code' => $code,
+                'name' => $name,
+                'mark' => $datum['mark'] ?? '',
+                'partner_id' => $datum['partner_id'] ?? 0,
+                'partner_key' => $datum['partner_key'] ?? 0,
+                'partner_name' => $datum['partner_name'] ?? 0,
+                'check_man' => $datum['check_man'] ?? 0,
+                'is_code' => $datum['is_code'] ?? 0,
+                'net' => $datum['net'] ?? 0,
+                'sort' => 0,
+            ];
+            $express = $this->dao->getWhere(['code' => $code]);
+            if ($express) {
+                $express->save([
+                    'name' => $expressData['name'],
+                    'mark' => $expressData['mark'],
+                    'partner_id' => $expressData['partner_id'],
+                    'partner_key' => $expressData['partner_key'],
+                    'partner_name' => $expressData['partner_name'],
+                    'check_man' => $expressData['check_man'],
+                    'is_code' => $expressData['is_code'],
+                    'net' => $expressData['net'],
+                ]);
+            } else {
+                $newExpresses[] = $expressData;
+            }
+        }
+
+        if ($newExpresses) {
+            $this->dao->insertAll($newExpresses);
+        }
+        if ($invalidCount > 0) {
+            Log::warning('物流公司同步跳过无效数据：' . $invalidCount . ' 条');
+        }
     }
 
     /**

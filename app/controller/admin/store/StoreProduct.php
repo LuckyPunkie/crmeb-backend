@@ -54,7 +54,7 @@ class StoreProduct extends BaseController
     {
         [$page, $limit] = $this->getPage();
         $type = $this->request->param('type', 1);
-        $where = $this->request->params(['cate_id', 'keyword', 'mer_cate_id', 'pid', 'store_name', 'is_trader', 'us_status', 'product_id', 'star', 'sys_labels', 'hot_type', 'svip_price_type', 'is_ficti', 'product_ids', 'form_id','cate_hot','brand_id','activity_label_ids']);
+        $where = $this->request->params(['cate_id', 'keyword', 'mer_cate_id', 'pid', 'store_name', 'is_trader', 'us_status', 'product_id', 'star', 'sys_labels', 'hot_type', 'svip_price_type', 'member_price_setting', 'is_ficti', 'product_ids', 'form_id','cate_hot','brand_id','activity_label_ids']);
         $mer_id = $this->request->param('mer_id', '');
         $merId = $mer_id ?: null;
         $where['is_gift_bag'] = 0;
@@ -103,6 +103,7 @@ class StoreProduct extends BaseController
             'sys_labels',
             'hot_type',
             'svip_price_type',
+            'member_price_setting',
             'is_ficti',
             'product_ids',
             'form_id',

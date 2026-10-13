@@ -8,7 +8,7 @@
 // +----------------------------------------------------------------------
 // | Author: CRMEB Team <admin@crmeb.com>
 // +----------------------------------------------------------------------
-namespace  crmeb\services\pay\storage;
+namespace crmeb\services\pay\storage;
 
 use crmeb\services\pay\BasePay;
 use crmeb\services\pay\PayInterface;
@@ -21,7 +21,6 @@ class Combine extends BasePay implements PayInterface
 
     public function pay($type, $order, $openid)
     {
-        $order['openid'] = $openid;
         switch ($type) {
             case 'h5':
                 $config = Payment::instance()->CombineClient()->payH5($order, 'Wap');
@@ -33,7 +32,7 @@ class Combine extends BasePay implements PayInterface
                 $config = Payment::instance()->CombineClient()->payNative($order);
                 break;
             case 'weixinApp':
-                $config = Payment::instance()->CombineClient()->payApp($order);
+                $config = Payment::instance()->setAccessEnd(Payment::APP)->CombineClient()->payApp($order);
                 break;
             case 'weixinBarCode':
                 $config = Payment::microPay(
@@ -56,16 +55,18 @@ class Combine extends BasePay implements PayInterface
         return compact('config');
     }
 
-    public function payOrderRefund(string $outTradeNo, array $options = [])
+    public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $config = Payment::instance()->CombineClient()->payOrderRefund($outTradeNo, $options);
+        $config = Payment::instance()
+            ->setAccessEnd($this->resolvePaymentAccessEnd($channel))
+            ->CombineClient()
+            ->payOrderRefund($outTradeNo, $options);
         return compact('config');
     }
 
-    public function refund(string $outTradeNo, array $options = [])
+    public function refund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $config = Payment::instance()->CombineClient()->payOrderRefund($outTradeNo, $options);
-        return compact('config');
+        return $this->payOrderRefund($outTradeNo, $options, $channel);
     }
 
     public function profitsharingOrder($order, $finish)

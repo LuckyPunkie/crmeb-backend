@@ -57,17 +57,31 @@ class ProductAttrValue extends BaseModel
 
     public function getSvipPriceAttr()
     {
-        if (isset($this->product->product_type) && $this->product->product_type == 0 && $this->product->show_svip_price && $this->product->svip_price_type == 1) {
-            $rate = merchantConfig($this->product->mer_id,'svip_store_rate');
-            $svip_store_rate = $rate > 0 ? bcdiv($rate,100,2) : 0;
-            return bcmul($this->price, $svip_store_rate,2);
+        if (isset($this->product->product_type) && $this->product->product_type == 0) {
+            if ((int)($this->product->member_price_setting ?? 0) !== 1) {
+                return 0;
+            }
+            if ($this->product->show_svip_price && $this->product->svip_price_type == 1) {
+                $rate = merchantConfig($this->product->mer_id,'svip_store_rate');
+                $svip_store_rate = $rate > 0 ? bcdiv($rate,100,2) : 0;
+                return bcmul($this->price, $svip_store_rate,2);
+            }
+            if ($this->product->svip_price_type == 2) {
+                return $this->getData('svip_price');
+            }
+            return 0;
         }
         return $this->getData('svip_price');
     }
 
     public function getIsSvipPriceAttr()
     {
-        if (isset($this->product->product_type) && $this->product->product_type == 0 && $this->product->svip_price_type == 1) {
+        if (
+            isset($this->product->product_type)
+            && $this->product->product_type == 0
+            && (int)($this->product->member_price_setting ?? 0) === 1
+            && $this->product->svip_price_type == 1
+        ) {
             $rate = merchantConfig($this->product->mer_id, 'svip_store_rate');
             $svip_store_rate = $rate > 0 ? bcdiv($rate, 100, 2) : 0;
             return bcmul($this->price, $svip_store_rate, 2);
@@ -97,6 +111,13 @@ class ProductAttrValue extends BaseModel
     {
         return $this->hasOne(ProductCdkey::class,'value_id','value_id');
     }
+
+    public function cardRule()
+    {
+        return $this->hasOne(StoreProductCardRule::class, 'value_id', 'value_id')
+            ->where('is_del', StoreProductCardRule::IS_DEL_NO);
+    }
+
     public function cdkeyLibrary()
     {
         return $this->hasOne(CdkeyLibrary::class,'id','library_id');

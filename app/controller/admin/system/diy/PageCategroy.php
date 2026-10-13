@@ -114,8 +114,8 @@ class PageCategroy extends BaseController
      */
     public function options()
     {
-        $type = $this->request->param('type', 0);
-        return app('json')->success($this->repository->getSonCategoryList($type, 0));
+        $isMer = $this->request->merId() == 0 ? 0 : 1;
+        return app('json')->success($this->repository->getSonCategoryList($isMer,0));
     }
 
     /**

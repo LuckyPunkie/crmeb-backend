@@ -82,13 +82,31 @@ class UserMerchantDao extends BaseDao
      */
     public function search(array $where)
     {
-        return UserMerchant::getDB()->alias('A')->leftJoin('User B', 'A.uid = B.uid AND A.status = 1')
-            ->when(isset($where['mer_id']) && $where['mer_id'] !== '', function ($query) use ($where) {
+        $hasKeyword = isset($where['keyword']) && $where['keyword'] !== '';
+        $query = UserMerchant::getDB()->alias('A');
+
+        if ($hasKeyword) {
+            // 关键词搜索以全局用户表为基准，同时只关联当前商户的用户数据。
+            // mer_id 放在 JOIN 条件中，未关联当前商户的用户也能被查询出来，
+            // 并且不会因为用户关联了多个商户而产生重复记录。
+            $joinCondition = 'A.uid = B.uid AND A.status = 1';
+            if (isset($where['mer_id']) && $where['mer_id'] !== '') {
+                $joinCondition .= ' AND A.mer_id = ' . (int)$where['mer_id'];
+            }
+            $query->rightJoin('User B', $joinCondition);
+        } else {
+            $query->leftJoin('User B', 'A.uid = B.uid AND A.status = 1');
+        }
+
+        return $query
+            ->when(!$hasKeyword && isset($where['mer_id']) && $where['mer_id'] !== '', function ($query) use ($where) {
                 $query->where('A.mer_id', $where['mer_id']);
-            })->when(isset($where['keyword']) && $where['keyword'], function (BaseQuery $query) use ($where) {
-                return $query->where(function($query) use ($where) {
-                    return $query
-                        ->where('B.nickname|B.uid', 'like', '%' . $where['keyword'] . '%')
+            })
+            ->when(isset($where['keyword']) && $where['keyword'] !== '', function (BaseQuery $query) use ($where) {
+                $query->where(function($query) use ($where) {
+                    $query
+                        ->where('B.nickname', 'like', "%{$where['keyword']}%")
+                        ->whereOr('B.uid', 'like', "%{$where['keyword']}%")
                         ->whereOr('B.phone', $where['keyword']);
                 });
             })->when(isset($where['nickname']) && $where['nickname'], function (BaseQuery $query) use ($where) {

@@ -23,6 +23,10 @@ use think\facade\Db;
 use app\common\repositories\store\StoreCategoryRepository;
 class ProductDao extends BaseDao
 {
+    /**
+     * 获取当前 DAO 关联的商品模型类名，供 BaseDao 统一调用
+     * @return string 商品模型类名
+     */
     protected function getModel(): string
     {
         return model::class;
@@ -287,6 +291,13 @@ class ProductDao extends BaseDao
             // 处理VIP价格类型条件
             ->when(isset($where['svip_price_type']) && $where['svip_price_type'] !== '', function ($query) use ($where) {
                 $query->where('Product.svip_price_type', $where['svip_price_type']);
+            })
+            ->when(isset($where['member_price_setting']) && $where['member_price_setting'] !== '', function ($query) use ($where) {
+                $query->where('Product.member_price_setting', $where['member_price_setting']);
+            })
+            ->when(!empty($where['merchant_member_price']), function ($query) {
+                $query->where('Product.member_price_setting', 2)
+                    ->where('Product.product_type', 0);
             })
             // 处理产品类型条件
             ->when(isset($where['product_type']) && $where['product_type'] == 1, function ($query) use ($where) {
@@ -900,7 +911,7 @@ class ProductDao extends BaseDao
     {
         // 使用withTrashed确保可以查询到已删除的数据
         // 精选查询字段，只获取必要信息，提高查询效率
-        return $this->getModel()::withTrashed()->field('product_type,product_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,is_used,mer_form_id')->find($productId);
+        return $this->getModel()::withTrashed()->field('product_type,product_id,image,store_name,is_show,status,is_del,unit_name,price,mer_status,is_used,mer_form_id,is_price_negotiable,price_negotiable_text')->find($productId);
     }
 
     /**
@@ -965,6 +976,11 @@ class ProductDao extends BaseDao
     }
 
 
+    /**
+     * 批量计算各活动类型商品的活动状态并重组数据（供命令任务调用）：根据商品类型及展示、启用、活动状态、结束时间等条件计算状态值
+     * @param $data 商品活动数据集合，包含 product_type、is_show、is_used、status、end_time 等字段
+     * @return array 重组后的商品活动数据集合，含 activity_id、status 等字段
+     */
     public function commandChangeProductStatus($data)
     {
         $ret = [];
@@ -1117,6 +1133,12 @@ class ProductDao extends BaseDao
         return $list;
     }
 
+    /**
+     * 根据表单ID和商户ID解除商品与表单的关联，将商品的 mer_form_id 置为 0
+     * @param int $form_id 商品表单ID
+     * @param int $mer_id 商户ID
+     * @return int 受影响的行数
+     */
     public function deleteProductFormByFormId(int $form_id, int $mer_id)
     {
         return $this->getModel()::getDB()->where('mer_form_id', $form_id)->where('mer_id', $mer_id)->update(['mer_form_id' => 0]);

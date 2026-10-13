@@ -15,17 +15,21 @@ namespace app\common\repositories\store\order;
 
 
 use think\facade\Log;
-use crmeb\services\pay\Pay;
+use crmeb\services\pay\dto\PayRefundDto;
+use crmeb\services\pay\PayServices;
 use app\common\repositories\delivery\DeliveryOrderRepository;
 use app\common\dao\store\order\StoreRefundOrderDao;
 use app\common\model\store\order\StoreOrder;
 use app\common\model\store\order\StoreRefundOrder;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\product\ProductRepository;
+use app\common\repositories\store\product\StoreUserCardRepository;
 use app\common\repositories\system\merchant\FinancialRecordRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\user\UserBillRepository;
 use app\common\repositories\user\UserRepository;
+use app\common\repositories\merchant\ShoppingCreditsRepository;
+use app\common\repositories\merchant\ShoppingCreditsSettlementRepository;
 use crmeb\jobs\SendSmsJob;
 use crmeb\services\ExpressService;
 use crmeb\services\SwooleTaskService;
@@ -177,6 +181,7 @@ class StoreRefundOrderRepository extends BaseRepository
         $products            = $order->orderProduct;
         $ids                 = array_column($products->toArray(), 'order_product_id');
         $productRefundPrices = app()->make(StoreRefundProductRepository::class)->userRefundPrice($ids);
+        app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund(array_column($products->toArray(), 'refund_num', 'order_product_id'));
 
         $totalRefundPrice         = 0;
         $totalRefundNum           = 0;
@@ -187,13 +192,17 @@ class StoreRefundOrderRepository extends BaseRepository
         $totalPostage             = 0;
         $refundProduct            = [];
         $refund_order_id          = 0;
+        $isCityOrder              = (int)$order->order_type === 2;
+        $shouldRefundPostage      = $refund_postage || !$order->status || $order->status == 9;
         foreach ($products as $product) {
             $productRefundPrice = $productRefundPrices[$product['order_product_id']] ?? [];
             if ($product['extension_one'] > 0)
                 $total_extension_one = bcadd($total_extension_one, bcmul($product['refund_num'], $product['extension_one'], 2), 2);
             if ($product['extension_two'] > 0)
                 $total_extension_two = bcadd($total_extension_two, bcmul($product['refund_num'], $product['extension_two'], 2), 2);
-            $postagePrice   = ($refund_postage || !$order->status || $order->status == 9) ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2) : 0;
+            $postagePrice = !$isCityOrder && $shouldRefundPostage
+                ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2)
+                : 0;
             $totalRefundNum += $product['refund_num'];
             $refundPrice    = 0;
             //计算可退金额
@@ -213,7 +222,7 @@ class StoreRefundOrderRepository extends BaseRepository
             $totalPostage             = bcadd($totalPostage, $postagePrice, 2);
             $totalRefundPrice         = bcadd($totalRefundPrice, $refundPrice, 2);
             $totalPlatformRefundPrice = bcadd($totalPlatformRefundPrice, $platform_refund_price, 2);
-            $totalIntegral            = bcadd($totalIntegral, $integral, 2);
+            $totalIntegral            = bcadd($totalIntegral, $integral, 0);
 
             $refundProduct[] = [
                 'refund_order_id'       => &$refund_order_id,
@@ -221,9 +230,21 @@ class StoreRefundOrderRepository extends BaseRepository
                 'order_product_id'      => $product['order_product_id'],
                 'platform_refund_price' => $platform_refund_price,
                 'refund_integral'       => $integral,
-                'refund_price'          => $refundPrice,
+                'refund_price'          => bcadd($refundPrice, $postagePrice, 2),
                 'refund_postage'        => $postagePrice,
             ];
+        }
+        if ($isCityOrder && $shouldRefundPostage) {
+            $totalPostage = $this->remainingOrderPostage($order);
+            $lastIndex = array_key_last($refundProduct);
+            if ($lastIndex !== null) {
+                $refundProduct[$lastIndex]['refund_postage'] = $totalPostage;
+                $refundProduct[$lastIndex]['refund_price'] = bcadd(
+                    $refundProduct[$lastIndex]['refund_price'],
+                    $totalPostage,
+                    2
+                );
+            }
         }
         $data                          = compact('refund_message', 'refund_type');
         $data['order_id']              = $products[0]['order_id'];
@@ -351,6 +372,7 @@ class StoreRefundOrderRepository extends BaseRepository
      */
     public function applyRefundAfter($refund, $order)
     {
+
         // 通过退款订单ID获取退款详情
         $refund = $this->dao->get($refund->refund_order_id);
         // 触发退款创建事件，携带退款和订单信息
@@ -444,6 +466,7 @@ class StoreRefundOrderRepository extends BaseRepository
         }
         $products = app()->make(StoreOrderProductRepository::class)->userRefundProducts($productIds, $uid, $orderId, 0);
         if (empty($products->toArray())) throw new ValidateException('请选择正确的退款商品');
+        app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund($refund);
 
         $productRefundPriceData = app()->make(StoreRefundProductRepository::class)->userRefundPrice($productIds);
         $data['refund_price']   = 0;
@@ -464,11 +487,14 @@ class StoreRefundOrderRepository extends BaseRepository
             foreach($refundInfo as $item) {
                 $refundTotalNum += array_sum(array_column($item['refundProduct'],'refund_num'));
             }
-            // 订单总数量
-            $orderGroupTotalNum = app()->make(StoreGroupOrderRepository::class)->getSearch(['group_order_id' => $order->group_order_id])->sum('total_num');
-            // 如果申请退款的总数量加上当前要退款的数量等于订单分组总数量，说明是全退，同城配送全退才包含运费
-            if(bcadd($refundTotalNum, array_sum(array_values($refund))) == $orderGroupTotalNum) {
-                $totalRefundPrice += $order->total_postage;
+            $orderTotalNum = (int)$order->total_num;
+            // 当前商户订单全部商品都申请退款时，同城配送才退剩余运费。
+            if ((int)$refundTotalNum + array_sum(array_values($refund)) === $orderTotalNum) {
+                $totalRefundPrice = bcadd(
+                    $totalRefundPrice,
+                    $this->remainingOrderPostage($order),
+                    2
+                );
                 $isDisplayPostage = true;
             }
         }
@@ -492,6 +518,7 @@ class StoreRefundOrderRepository extends BaseRepository
         $nums       = array_values($refund);
         $orderId    = $order->order_id;
         $uid        = $order->uid;
+        //app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund($refund);
 
         if (count($productIds) == 1) {
             $res = $this->refund($order, $productIds[0], $nums[0], $uid, $data, 0);
@@ -537,6 +564,7 @@ class StoreRefundOrderRepository extends BaseRepository
         $nums                    = array_values($refund);
         $orderId                 = $order->order_id;
         $uid                     = $order->uid;
+        app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund($refund);
         $productRefundPriceData  = app()->make(StoreRefundProductRepository::class)->userRefundPrice($productIds);
         $data['order_id']        = $orderId;
         $data['uid']             = $uid;
@@ -552,7 +580,11 @@ class StoreRefundOrderRepository extends BaseRepository
             [$refundOrder, $refundProduct, $total] = $this->getRefundData($order, $product, $data, $num, $productRefundPrice);
             $data['refund_postage']           = bcadd($data['refund_postage'] ?? 0, $refundOrder['refund_postage'], TOP_PRECISION);
             $data['platform_refund_price']    = bcadd($data['platform_refund_price'] ?? 0, $refundOrder['platform_refund_price'], TOP_PRECISION);
-            $data['integral']                 = $data['integral'] ?? 0 + $refundOrder['integral'];
+            $data['integral']                 = bcadd(
+                (string)($data['integral'] ?? 0),
+                (string)$refundOrder['integral'],
+                0
+            );
             $data['refund_num']               += $refundOrder['refund_num'];
             $data['extension_one']            = bcadd($data['extension_one'] ?? 0, $refundOrder['extension_one'], TOP_PRECISION);
             $data['extension_two']            = bcadd($data['extension_two'] ?? 0, $refundOrder['extension_two'], TOP_PRECISION);
@@ -562,7 +594,7 @@ class StoreRefundOrderRepository extends BaseRepository
         }
 
         if($order->order_type == 2) {
-            $data['refund_postage'] = 0;
+            $data['refund_postage'] = '0.00';
             // 已经申请退款的总数量
             $refundTotalNum = 0;
             $refundInfo = $this->getSearch(['order_id' => $order->order_id])->whereIn('status',[0,1,2,3])->with('refundProduct')->select()->toArray();
@@ -570,15 +602,39 @@ class StoreRefundOrderRepository extends BaseRepository
                 $refundTotalNum += array_sum(array_column($item['refundProduct'],'refund_num'));
             }
             // 订单总数量
-            $orderGroupTotalNum = app()->make(StoreGroupOrderRepository::class)->getSearch(['group_order_id' => $order->group_order_id])->sum('total_num');
-            // 如果申请退款的总数量加上当前要退款的数量等于订单分组总数量，说明是全退，同城配送全退才包含运费
-            if(bcadd($refundTotalNum, array_sum($nums)) == $orderGroupTotalNum) {
-                $data['refund_postage'] = $order->total_postage;
+            $orderTotalNum = (int)$order->total_num;
+            // 当前商户订单全部商品都申请退款时，同城配送才退剩余运费。
+            if ((int)$refundTotalNum + array_sum($nums) === $orderTotalNum) {
+                $cityPostage = $this->remainingOrderPostage($order);
+                $data['refund_postage'] = $cityPostage;
+                $totalRefundPrice = bcadd($totalRefundPrice, $cityPostage, 2);
+                $lastIndex = array_key_last($refundProducts);
+                if ($lastIndex !== null) {
+                    $refundProducts[$lastIndex]['refund_postage'] = bcadd(
+                        $refundProducts[$lastIndex]['refund_postage'],
+                        $cityPostage,
+                        2
+                    );
+                    $refundProducts[$lastIndex]['refund_price'] = bcadd(
+                        $refundProducts[$lastIndex]['refund_price'],
+                        $cityPostage,
+                        2
+                    );
+                }
             }
         }
 
-        if ($totalRefundPrice < $data['refund_price'])
+        if (bccomp((string)$totalRefundPrice, (string)$data['refund_price'], 2) < 0)
             throw new ValidateException('最高可退款' . floatval($totalRefundPrice) . '元');
+        $refundProducts = $this->allocateRefundProductAmount(
+            $refundProducts,
+            (string)$data['refund_price']
+        );
+        $data['refund_postage'] = array_reduce(
+            $refundProducts,
+            static fn($total, $item) => bcadd($total, (string)$item['refund_postage'], 2),
+            '0.00'
+        );
         $storeRefundProductRepository = app()->make(StoreRefundProductRepository::class);
         return Db::transaction(function () use ($order, $data, $products, $refundProducts, &$refund_order_id, $storeRefundProductRepository, $refund) {
             event('refund.create.before', compact('data'));
@@ -611,7 +667,9 @@ class StoreRefundOrderRepository extends BaseRepository
     public function getRefundData($order, $product, $data, $num, $productRefundPrice)
     {
         //计算可退运费
-        $postagePrice = (!$order->status || $order->status == 9) ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2) : 0;
+        $postagePrice = (int)$order->order_type !== 2 && (!$order->status || $order->status == 9)
+            ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2)
+            : 0;
         $refundPrice  = 0;
         //计算可退金额
         if ($product['product_price'] > 0) {
@@ -625,11 +683,7 @@ class StoreRefundOrderRepository extends BaseRepository
 //        if ($totalRefundPrice < $data['refund_price'])
 //            throw new ValidateException('最高可退款' . floatval($totalRefundPrice) . '元');
 
-        $data['refund_postage'] = 0;
-
-        if($order->order_type !== 2 && $data['refund_price'] > $refundPrice) {
-            $data['refund_postage'] = bcsub($data['refund_price'], $refundPrice, 2);
-        }
+        $data['refund_postage'] = $postagePrice;
 
         $data['order_id'] = $product['order_id'];
 
@@ -673,11 +727,130 @@ class StoreRefundOrderRepository extends BaseRepository
             'refund_num'            => $num,
             'order_product_id'      => $product['order_product_id'],
             'platform_refund_price' => $data['platform_refund_price'],
-            'refund_price'          => bcmul(bcdiv($product['product_price'], $product['product_num'], 2), $num, 2),
+            'refund_price'          => bcadd($refundPrice, $data['refund_postage'], 2),
             'refund_integral'       => $data['integral'],
             'refund_postage'        => $data['refund_postage'],
         ];
         return [$data, $refundProduct, $totalRefundPrice];
+    }
+
+    /**
+     * 将退款单实际金额分摊到商品明细，保证明细合计与退款主单一致。
+     */
+    private function allocateRefundProductAmount(array $refundProducts, string $refundPrice): array
+    {
+        if (!$refundProducts) {
+            return [];
+        }
+
+        $productWeights = [];
+        $postageWeights = [];
+        foreach ($refundProducts as $index => $item) {
+            $postage = (string)($item['refund_postage'] ?? '0.00');
+            $productWeights[$index] = max(
+                bcsub((string)($item['refund_price'] ?? '0.00'), $postage, 2),
+                '0.00'
+            );
+            $postageWeights[$index] = max($postage, '0.00');
+        }
+
+        $totalProduct = array_reduce(
+            $productWeights,
+            static fn($total, $amount) => bcadd($total, (string)$amount, 2),
+            '0.00'
+        );
+        $productTarget = bccomp($refundPrice, $totalProduct, 2) > 0
+            ? $totalProduct
+            : $refundPrice;
+        $postageTarget = max(bcsub($refundPrice, $productTarget, 2), '0.00');
+        $productAmounts = $this->allocateAmountByWeight($productWeights, $productTarget);
+        $postageAmounts = $this->allocateAmountByWeight($postageWeights, $postageTarget);
+
+        foreach ($refundProducts as $index => &$item) {
+            $item['refund_postage'] = $postageAmounts[$index] ?? '0.00';
+            $item['refund_price'] = bcadd(
+                $productAmounts[$index] ?? '0.00',
+                $item['refund_postage'],
+                2
+            );
+        }
+        unset($item);
+
+        return $refundProducts;
+    }
+
+    /**
+     * 按权重分摊金额，最后补齐分摊尾差。
+     */
+    private function allocateAmountByWeight(array $weights, string $target): array
+    {
+        $amounts = array_fill_keys(array_keys($weights), '0.00');
+        if (bccomp($target, '0.00', 2) <= 0) {
+            return $amounts;
+        }
+
+        $totalWeight = array_reduce(
+            $weights,
+            static fn($total, $weight) => bcadd($total, (string)$weight, 2),
+            '0.00'
+        );
+        if (bccomp($target, $totalWeight, 2) > 0) {
+            throw new ValidateException('退款金额分摊失败');
+        }
+        if (bccomp($totalWeight, '0.00', 2) <= 0) {
+            return $amounts;
+        }
+
+        $allocated = '0.00';
+        foreach ($weights as $index => $weight) {
+            if (bccomp((string)$weight, '0.00', 2) <= 0) {
+                continue;
+            }
+            $amount = bcmul(
+                $target,
+                bcdiv((string)$weight, $totalWeight, 8),
+                2
+            );
+            $amounts[$index] = min($amount, (string)$weight);
+            $allocated = bcadd($allocated, $amounts[$index], 2);
+        }
+
+        $remainder = bcsub($target, $allocated, 2);
+        if (bccomp($remainder, '0.00', 2) > 0) {
+            foreach ($weights as $index => $weight) {
+                $capacity = bcsub((string)$weight, $amounts[$index], 2);
+                if (bccomp($capacity, '0.00', 2) <= 0) {
+                    continue;
+                }
+                $addition = bccomp($capacity, $remainder, 2) >= 0 ? $remainder : $capacity;
+                $amounts[$index] = bcadd($amounts[$index], $addition, 2);
+                $remainder = bcsub($remainder, $addition, 2);
+                if (bccomp($remainder, '0.00', 2) <= 0) {
+                    break;
+                }
+            }
+        }
+
+        if (bccomp($remainder, '0.00', 2) > 0) {
+            throw new ValidateException('退款金额分摊失败');
+        }
+
+        return $amounts;
+    }
+
+    /**
+     * 获取订单尚未记录到有效退款单中的运费。
+     */
+    private function remainingOrderPostage(StoreOrder $order): string
+    {
+        $refundedPostage = $this->getSearch(['order_id' => $order->order_id])
+            ->where('status', '>', -1)
+            ->sum('refund_postage');
+
+        return max(
+            bcsub((string)$order->total_postage, (string)($refundedPostage ?: '0.00'), 2),
+            '0.00'
+        );
     }
 
     /**
@@ -699,6 +872,11 @@ class StoreRefundOrderRepository extends BaseRepository
         $products = app()->make(StoreOrderProductRepository::class)->userRefundProducts($ids, $uid, $orderId, $refund_switch);
         if (!$products || count($ids) != count($products))
             throw new ValidateException('请选择正确的退款商品');
+        $refundNums = $nums && count($ids) === count($nums)
+            ? array_combine($ids, $nums)
+            : array_column($products->toArray(), 'refund_num', 'order_product_id');
+        $refundNums = $refundNums ?: [];
+        //app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund($refundNums);
         $productRefundPrices      = app()->make(StoreRefundProductRepository::class)->userRefundPrice($ids);
         $totalRefundPrice         = 0;
         $totalRefundNum           = 0;
@@ -710,40 +888,57 @@ class StoreRefundOrderRepository extends BaseRepository
         $refundProduct            = [];
         $refund_order_id          = 0;
         foreach ($products as $product) {
+            $productId = (int)$product['order_product_id'];
+            $refundNum = (int)($refundNums[$productId] ?? 0);
+            if ($refundNum <= 0 || $refundNum > (int)$product['refund_num']) {
+                throw new ValidateException('可退款商品数量错误');
+            }
             $productRefundPrice = $productRefundPrices[$product['order_product_id']] ?? [];
             if ($product['extension_one'] > 0)
-                $total_extension_one = bcadd($total_extension_one, bcmul($product['refund_num'], $product['extension_one'], 2), 2);
+                $total_extension_one = bcadd($total_extension_one, bcmul($refundNum, $product['extension_one'], 2), 2);
             if ($product['extension_two'] > 0)
-                $total_extension_two = bcadd($total_extension_two, bcmul($product['refund_num'], $product['extension_two'], 2), 2);
-            $postagePrice   = (!$order->status || $order->status == 9) ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2) : 0;
-            $totalRefundNum += $product['refund_num'];
+                $total_extension_two = bcadd($total_extension_two, bcmul($refundNum, $product['extension_two'], 2), 2);
+            $postagePrice = (int)$order->order_type !== 2
+                && $refundNum === (int)$product['refund_num']
+                && (!$order->status || $order->status == 9)
+                ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2)
+                : 0;
+            $totalRefundNum += $refundNum;
             $refundPrice    = 0;
             //计算可退金额
             if ($product['product_price'] > 0) {
-                $refundPrice = bcsub($product['product_price'], bcsub($productRefundPrice['refund_price'] ?? 0, $productRefundPrice['refund_postage'] ?? 0, 2), 2);
+                if ($refundNum === (int)$product['refund_num']) {
+                    $refundPrice = bcsub($product['product_price'], bcsub($productRefundPrice['refund_price'] ?? 0, $productRefundPrice['refund_postage'] ?? 0, 2), 2);
+                } else {
+                    $refundPrice = bcmul(bcdiv($product['product_price'], $product['product_num'], 2), $refundNum, 2);
+                }
             }
             $platform_refund_price = 0;
             //计算退的平台优惠券金额
             if ($product['platform_coupon_price'] > 0) {
-                $platform_refund_price = bcsub($product['platform_coupon_price'], $productRefundPrice['platform_refund_price'] ?? 0, 2);
+                $platform_refund_price = $refundNum === (int)$product['refund_num']
+                    ? bcsub($product['platform_coupon_price'], $productRefundPrice['platform_refund_price'] ?? 0, 2)
+                    : bcmul(bcdiv($product['platform_coupon_price'], $product['product_num'], 2), $refundNum, 2);
             }
             $integral = 0;
             if ($product['integral'] > 0) {
-                $integral = bcsub($product['integral_total'], $productRefundPrice['refund_integral'] ?? 0, 0);
+                $integral = $refundNum === (int)$product['refund_num']
+                    ? bcsub($product['integral_total'], $productRefundPrice['refund_integral'] ?? 0, 0)
+                    : bcmul($product['integral'], $refundNum, 0);
             }
 
             $totalPostage             = bcadd($totalPostage, $postagePrice, 2);
             $totalRefundPrice         = bcadd($totalRefundPrice, $refundPrice, 2);
             $totalPlatformRefundPrice = bcadd($totalPlatformRefundPrice, $platform_refund_price, 2);
-            $totalIntegral            = bcadd($totalIntegral, $integral, 2);
+            $totalIntegral            = bcadd($totalIntegral, $integral, 0);
 
             $refundProduct[] = [
                 'refund_order_id'       => &$refund_order_id,
-                'refund_num'            => $product['refund_num'],
+                'refund_num'            => $refundNum,
                 'order_product_id'      => $product['order_product_id'],
                 'platform_refund_price' => $platform_refund_price,
                 'refund_integral'       => $integral,
-                'refund_price'          => $refundPrice,
+                'refund_price'          => bcadd($refundPrice, $postagePrice, 2),
                 'refund_postage'        => $postagePrice,
             ];
         }
@@ -755,10 +950,24 @@ class StoreRefundOrderRepository extends BaseRepository
                 $refundTotalNum += array_sum(array_column($item['refundProduct'],'refund_num'));
             }
             // 订单总数量
-            $orderGroupTotalNum = app()->make(StoreGroupOrderRepository::class)->getSearch(['group_order_id' => $order->group_order_id])->sum('total_num');
-            // 如果申请退款的总数量加上当前要退款的数量等于订单分组总数量，说明是全退，同城配送全退才包含运费
-            if(bcadd($refundTotalNum, array_sum($nums)) == $orderGroupTotalNum) {
-                $totalPostage = $order->total_postage;
+            $orderTotalNum = (int)$order->total_num;
+            // 当前商户订单全部商品都申请退款时，同城配送才退剩余运费。
+            if ((int)$refundTotalNum + array_sum($refundNums) === $orderTotalNum) {
+                $cityPostage = $this->remainingOrderPostage($order);
+                $totalPostage = $cityPostage;
+                $lastIndex = array_key_last($refundProduct);
+                if ($lastIndex !== null) {
+                    $refundProduct[$lastIndex]['refund_postage'] = bcadd(
+                        $refundProduct[$lastIndex]['refund_postage'],
+                        $cityPostage,
+                        2
+                    );
+                    $refundProduct[$lastIndex]['refund_price'] = bcadd(
+                        $refundProduct[$lastIndex]['refund_price'],
+                        $cityPostage,
+                        2
+                    );
+                }
             }
         }
         $data['order_id']              = $products[0]['order_id'];
@@ -773,12 +982,13 @@ class StoreRefundOrderRepository extends BaseRepository
         $data['platform_refund_price'] = $totalPlatformRefundPrice;
         $data['refund_postage']        = $totalPostage;
 
-        return Db::transaction(function () use ($refundProduct, $data, $products, $order, &$refund_order_id) {
+        return Db::transaction(function () use ($refundProduct, $data, $products, $order, $refundNums, &$refund_order_id) {
             event('refund.creates.before', compact('data'));
             $refund          = $this->dao->create($data);
             $refund_order_id = $refund->refund_order_id;
             foreach ($products as $product) {
-                $product->refund_num = 0;
+                $refundNum = (int)$refundNums[(int)$product['order_product_id']];
+                $product->refund_num -= $refundNum;
                 $product->is_refund  = 1;
                 $product->save();
             }
@@ -807,15 +1017,19 @@ class StoreRefundOrderRepository extends BaseRepository
         $orderId = $order->order_id;
         // 订单状态生成佣金
         $products = app()->make(StoreOrderProductRepository::class)->userRefundProducts([$productId], $uid, $orderId, $refund_switch);
+
         if (empty($products->toArray()))
             throw new ValidateException('请选择正确的退款商品');
         $product = $products[0];
         if ($product['refund_num'] < $num)
             throw new ValidateException('可退款商品不足' . floatval($num) . '件');
+        //app()->make(StoreUserCardRepository::class)->assertOrderProductsCanRefund([(int)$productId => (int)$num]);
         $productRefundPrice = app()->make(StoreRefundProductRepository::class)->userRefundPrice([$productId])[$productId] ?? [];
 
         //计算可退运费
-        $postagePrice = (!$order->status || $order->status == 9) ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2) : 0;
+        $postagePrice = (int)$order->order_type !== 2 && (!$order->status || $order->status == 9)
+            ? bcsub($product['postage_price'], $productRefundPrice['refund_postage'] ?? 0, 2)
+            : 0;
         if($order->order_type == 2) {
             // 已经申请退款的总数量
             $refundTotalNum = 0;
@@ -824,10 +1038,10 @@ class StoreRefundOrderRepository extends BaseRepository
                 $refundTotalNum += array_sum(array_column($item['refundProduct'],'refund_num'));
             }
             // 订单总数量
-            $orderGroupTotalNum = app()->make(StoreGroupOrderRepository::class)->getSearch(['group_order_id' => $order->group_order_id])->sum('total_num');
-            // 如果申请退款的总数量加上当前要退款的数量等于订单分组总数量，说明是全退，同城配送全退才包含运费
-            if(bcadd($refundTotalNum, $num) == $orderGroupTotalNum) {
-                $postagePrice = $order->total_postage;
+            $orderTotalNum = (int)$order->total_num;
+            // 当前商户订单全部商品都申请退款时，同城配送才退剩余运费。
+            if ((int)$refundTotalNum + (int)$num === $orderTotalNum) {
+                $postagePrice = $this->remainingOrderPostage($order);
             }
         }
 
@@ -841,12 +1055,12 @@ class StoreRefundOrderRepository extends BaseRepository
             }
         }
         $totalRefundPrice = bcadd($refundPrice, $postagePrice, 2);
-        if ($totalRefundPrice < $data['refund_price'])
+        if (bccomp((string)$totalRefundPrice, (string)$data['refund_price'], 2) < 0)
             throw new ValidateException('最高可退款' . floatval($totalRefundPrice) . '元');
 
-        $data['refund_postage'] = 0;
+        $data['refund_postage'] = '0.00';
 
-        if ($data['refund_price'] > $refundPrice) {
+        if (bccomp((string)$data['refund_price'], (string)$refundPrice, 2) > 0) {
             $data['refund_postage'] = bcsub($data['refund_price'], $refundPrice, 2);
         }
 
@@ -945,20 +1159,8 @@ class StoreRefundOrderRepository extends BaseRepository
         // 进行分页查询，并追加创建用户的信息
         $list = $query->page($page, $limit)->select()->append(['create_user']);
 
-        // 统计不同状态的数据数量
-        $stat = [
-            'count'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id']]))->count() ?: 0,
-            'audit'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 0]))->count() ?: 0,
-            'refuse'   => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => -1]))->count() ?: 0,
-            'agree'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 1]))->count() ?: 0,
-            'backgood' => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 2]))->count() ?: 0,
-            'end'      => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 3]))->count() ?: 0,
-            'platform' => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 4]))->count() ?: 0,
-            'cancelled'=> $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => -2]))->count() ?: 0,
-        ];
-
         // 返回总数、数据列表和状态统计
-        return compact('count', 'list', 'stat');
+        return compact('count', 'list');
     }
 
     /**
@@ -1031,28 +1233,18 @@ class StoreRefundOrderRepository extends BaseRepository
         // 根据当前页码和每页限制的数量，获取退款订单列表
         $list = $query->page($page, $limit)->select();
 
-        // 统计不同状态的退款订单数量
-        $stat = [
-            'count'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id']]))->count(),
-            'audit'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 0]))->count(),
-            'refuse'   => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => -1]))->count(),
-            'agree'    => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 1]))->count(),
-            'backgood' => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 2]))->count(),
-            'end'      => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 3]))->count(),
-            'platform' => $this->dao->search(array_merge($where, ['is_system_del' => 0, 'mer_id' => $where['mer_id'], 'status' => 4]))->count(),
-        ];
 
         // 返回退款订单总数、列表和状态统计的数组
-        return compact('count', 'list', 'stat');
+        return compact('count', 'list');
     }
 
 
     /**
-     *  总后台所有订单
-     * @param array $where
-     * @param int $page
-     * @param int $limit
-     * @return array
+     * 获取平台退款订单分页列表，不包含状态统计
+     * @param array $where 退款单号、状态、日期、商户及用户等筛选条件
+     * @param int $page 当前页码
+     * @param int $limit 每页数量
+     * @return array 包含 count 和 list 的退款订单列表
      * @author Qinii
      * @day 2020-06-25
      */
@@ -1067,6 +1259,17 @@ class StoreRefundOrderRepository extends BaseRepository
         }]);
         $count = $query->count();
         $list  = $query->page($page, $limit)->select();
+        return compact('count', 'list');
+    }
+
+    /**
+     * 获取平台退款订单各状态数量，忽略当前选中的状态但沿用其余列表筛选
+     * @param array $where 退款单号、日期、商户及用户等筛选条件
+     * @return array 包含 all、audit、refuse、agree、backgood、end、platform 的状态数量
+     */
+    public function getAllStat(array $where): array
+    {
+        unset($where['status']);
         $stat  = [
             'all'      => $this->dao->search($where)->count(),
             'audit'    => $this->dao->search(array_merge($where, ['status' => 0]))->count(),
@@ -1076,7 +1279,7 @@ class StoreRefundOrderRepository extends BaseRepository
             'end'      => $this->dao->search(array_merge($where, ['status' => 3]))->count(),
             'platform' => $this->dao->search(array_merge($where, ['status' => 4]))->count(),
         ];
-        return compact('count', 'list', 'stat');
+        return $stat;
     }
 
     /**
@@ -1683,6 +1886,7 @@ class StoreRefundOrderRepository extends BaseRepository
                     'type'           => 1,
                     'financial_type' => 'refund_brokerage_one',
                     'number'         => $refundOrder['extension_one'],
+                    'pay_type'       => $refundOrder->order->pay_type,
                 ], $refundOrder->mer_id);
             }
         }
@@ -1715,6 +1919,7 @@ class StoreRefundOrderRepository extends BaseRepository
                     'type'           => 1,
                     'financial_type' => 'refund_brokerage_two',
                     'number'         => $refundOrder['extension_two'],
+                    'pay_type'       => $refundOrder->order->pay_type,
                 ], $refundOrder->mer_id);
             }
         }
@@ -1740,6 +1945,7 @@ class StoreRefundOrderRepository extends BaseRepository
                 $productRepository->orderProductIncStock($refundOrder->order, $item->product, $item->refund_num);
             }
         }
+        app()->make(StoreUserCardRepository::class)->markRefundedByRefundOrder($refundOrder);
         $storeOrderRepository = app()->make(StoreOrderRepository::class);
         $refundAll = $storeOrderRepository->checkRefundStatusById($refundOrder['order_id'], $refundOrder['refund_order_id']);
         if ($refundAll) {
@@ -1782,6 +1988,16 @@ class StoreRefundOrderRepository extends BaseRepository
                 $model                          = $refundOrder->order->firstProfitsharing;
                 $model->profitsharing_mer_price = bcsub($model->profitsharing_mer_price, $refundOrder->platform_refund_price, 2);
                 $model->save();
+            } elseif ((int)$refundOrder->order->pay_type === array_search(
+                ShoppingCreditsRepository::PAY_TYPE,
+                StoreOrderRepository::PAY_TYPE,
+                true
+            )) {
+                app()->make(ShoppingCreditsSettlementRepository::class)->refundStoreOrderPlatformCoupon(
+                    (int)$refundOrder->mer_id,
+                    (string)$refundOrder->refund_order_sn,
+                    (string)$refundOrder->platform_refund_price
+                );
             } else {
                 app()->make(MerchantRepository::class)->subLockMoney($refundOrder->mer_id, 'order', $refundOrder->order->order_id, $refundOrder->platform_refund_price);
             }
@@ -2224,10 +2440,9 @@ class StoreRefundOrderRepository extends BaseRepository
         // 获取需要推荐的数据 和 退款需要执行的服务类型
         [$refundData, $serverType] = $this->prepareRefundData($refundOrder, $refundPrice);
 
-        //根据不同的服务类型 找到对应的服务类
-        $refundService = $this->createRefundService($serverType);
+        $payServices = app()->make(PayServices::class);
         //执行退款操作
-        $refundResult = $this->processRefund($refundOrder, $refundData, $refundService, $serverType);
+        $refundResult = $this->processRefund($refundOrder, $refundData, $payServices, $serverType);
 
         //退款后记录等操作
         $this->recordFinancialTransactions($refundOrder, $refundResult);
@@ -2279,7 +2494,9 @@ class StoreRefundOrderRepository extends BaseRepository
         ];
 
         if ($isCombine) {
-            $sub_mchid = $serverType == 10 ? $refundOrder->merchant->sub_mchid : $refundOrder->merchant->applyment_id;
+            $sub_mchid = $isCombine == 1
+                ? $refundOrder->merchant->sub_mchid
+                : $refundOrder->merchant->applyment_id;
             $baseData['presell'] = 1;
             $baseData['data'] = [
                 'sub_mchid' => $sub_mchid,
@@ -2290,7 +2507,7 @@ class StoreRefundOrderRepository extends BaseRepository
             ];
         } else {
             $baseData['data'] = [
-                'refund_id' => $refundOrder->refund_order_sn,
+                'refund_no' => $refundOrder->refund_order_sn,
                 'pay_price' => $refundOrder->order->pay_price,
                 'refund_price' => $refundOrder->refund_price
             ];
@@ -2337,7 +2554,7 @@ class StoreRefundOrderRepository extends BaseRepository
                 'type' => $serverType,
                 'id' => $order->order_id,
                 'sn' => $order->order_sn,
-                'data' => $refundOrder->getCombineRefundParams($serverType)
+                'data' => $refundOrder->getCombineRefundParams($groupOrder->is_combine)
             ];
         }
 
@@ -2346,7 +2563,7 @@ class StoreRefundOrderRepository extends BaseRepository
             'id' => $order->order_id,
             'sn' => $groupOrder->group_order_sn,
             'data' => [
-                'refund_id' => $refundOrder->refund_order_sn,
+                'refund_no' => $refundOrder->refund_order_sn,
                 'pay_price' => $order->pay_price,
                 'refund_price' => $refundOrder->refund_price
             ]
@@ -2363,7 +2580,7 @@ class StoreRefundOrderRepository extends BaseRepository
 
         // 定金部分退款
         if ($order->groupOrder->is_combine) {
-            $data = $refundOrder->getCombineRefundParams($serverType);
+            $data = $refundOrder->getCombineRefundParams($order->groupOrder->is_combine);
             $data['refund_price'] = $remainingDeposit;
             $result[] = [
                 'type' => $serverType,
@@ -2377,7 +2594,7 @@ class StoreRefundOrderRepository extends BaseRepository
                 'sn' => $order->groupOrder->group_order_sn,
                 'id' => $order->order_id,
                 'data' => [
-                    'refund_id' => $refundOrder->refund_order_sn,
+                    'refund_no' => $refundOrder->refund_order_sn,
                     'pay_price' => $order->pay_price,
                     'refund_price' => $remainingDeposit
                 ]
@@ -2418,7 +2635,7 @@ class StoreRefundOrderRepository extends BaseRepository
             ];
         } else {
             $baseData['data'] = [
-                'refund_id' => $finalOrder['presell_order_sn'] . '1',
+                'refund_no' => $finalOrder['presell_order_sn'] . '1',
                 'pay_price' => $finalOrder->pay_price,
                 'refund_price' => $finalRefundAmount
             ];
@@ -2494,7 +2711,7 @@ class StoreRefundOrderRepository extends BaseRepository
             'id' => $order->order_id,
             'sn' => $groupOrder->group_order_sn,
             'data' => [
-                'refund_id' => $refundOrder->refund_order_sn,
+                'refund_no' => $refundOrder->refund_order_sn,
                 'pay_price' => $groupOrder->pay_price,
                 'refund_price' => $refundOrder->refund_price,
                 'refund_message' => $refundOrder->refund_message,
@@ -2505,29 +2722,9 @@ class StoreRefundOrderRepository extends BaseRepository
     }
 
     /**
-     * 创建退款服务
-     */
-    private function createRefundService(int $serverType)
-    {
-        if ($serverType == 0) {
-            return null;
-        } else if ($serverType == self::TYPE_IS_PARTNER) {
-            return new Pay('partner');
-        } elseif ($serverType == self::TYPE_IS_COMBINE) {
-            return new Pay('combine');
-        } elseif ($serverType == 2) {
-            return new Pay('weixin');
-        } elseif (in_array($serverType, [4, 5, 9])) {
-            return new Pay('alipay');
-        } else {
-            return new Pay('weixin');
-        }
-    }
-
-    /**
      * 处理退款流程
      */
-    private function processRefund($refundOrder, $refundData, $refundService, $serverType): array
+    private function processRefund($refundOrder, $refundData, PayServices $payServices, $serverType): array
     {
         $merchantRepository = app()->make(MerchantRepository::class);
         $totalItems = count($refundData);
@@ -2545,7 +2742,7 @@ class StoreRefundOrderRepository extends BaseRepository
                     $totalItems,
                     $totalExtension,
                     $processedExtension,
-                    $refundService,
+                    $payServices,
                     $merchantRepository,
                     $serverType
                 );
@@ -2565,7 +2762,7 @@ class StoreRefundOrderRepository extends BaseRepository
     /**
      * 处理单笔退款
      */
-    private function processSingleRefund($refundOrder, $item, $index, $totalItems, $totalExtension, $processedExtension, $refundService, $merchantRepository, $serverType): array
+    private function processSingleRefund($refundOrder, $item, $index, $totalItems, $totalExtension, $processedExtension, PayServices $payServices, $merchantRepository, $serverType): array
     {
         $refundPrice = $this->getRefundMerPrice($refundOrder, $item['data']['refund_price']);
 
@@ -2583,7 +2780,7 @@ class StoreRefundOrderRepository extends BaseRepository
 
         // 执行退款
         if($item['type'] != 7) {
-            $this->executeRefund($refundOrder, $item, $refundService, $merchantRepository, $serverType, $refundPrice);
+            $this->executeRefund($refundOrder, $item, $payServices, $merchantRepository, $serverType, $refundPrice);
         }
 
         return [
@@ -2628,15 +2825,35 @@ class StoreRefundOrderRepository extends BaseRepository
     /**
      * 执行退款操作
      */
-    private function executeRefund($refundOrder, $item, $refundService, $merchantRepository, $serverType, $refundPrice): void
+    private function executeRefund($refundOrder, $item, PayServices $payServices, $merchantRepository, $serverType, $refundPrice): void
     {
         try {
             $orderType = isset($item['presell']) && $item['presell'] ? 'presell' : 'order';
             if ($item['type'] == 0) {
                 $this->refundBill($item, $refundOrder->uid, $refundOrder->refund_order_id);
                 $merchantRepository->subLockMoney($refundOrder->mer_id, $orderType, $item['id'], $refundPrice);
+            } elseif ($item['type'] == array_search(ShoppingCreditsRepository::PAY_TYPE, StoreOrderRepository::PAY_TYPE, true)) {
+                $shoppingCreditsRepository = app()->make(ShoppingCreditsSettlementRepository::class);
+                $shoppingCreditsRepository->refundStoreOrder(
+                    (int)$refundOrder->uid,
+                    (int)$refundOrder->mer_id,
+                    (string)$refundOrder->order->order_sn,
+                    (string)$item['data']['refund_price'],
+                    (string)$refundOrder->refund_order_sn
+                );
+                $shoppingCreditsRepository->refundStoreOrderMerchantFees(
+                    (int)$refundOrder->mer_id,
+                    (string)$refundOrder->refund_order_sn,
+                    (string)$item['data']['refund_price'],
+                    (string)$refundPrice
+                );
             } else {
-                $refundService->payOrderRefund($item['sn'], $item['data']);
+                $payServices->refund(PayRefundDto::fromServerType(
+                    $item['type'],
+                    $item['sn'],
+                    $item['data'],
+                    $refundOrder->order->pay_type
+                ));
                 if (in_array($item['type'],[self::TYPE_IS_COMBINE,self::TYPE_IS_PARTNER])) {
                     $this->handleCombineRefund($refundOrder, $item, $orderType, $refundPrice);
                 } else {

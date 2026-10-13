@@ -57,7 +57,6 @@ class UserMerchantRepository extends BaseRepository
 
         // 根据条件初始化查询
         $query = $this->dao->search($where);
-
         // 计算总条数
         $count = $query->count();
 
@@ -65,7 +64,7 @@ class UserMerchantRepository extends BaseRepository
         $make = app()->make(UserLabelRepository::class);
 
         // 配置查询字段并进行分页查询，按用户商家ID降序排列
-        $list = $query->setOption('field', [])->field('A.uid,A.user_merchant_id,B.avatar,B.nickname,B.user_type,A.last_pay_time,A.first_pay_time,A.label_id,A.create_time,A.last_time,A.pay_num,A.pay_price,B.phone,B.is_svip,B.svip_endtime,B.sex')
+        $list = $query->setOption('field', [])->field('B.uid,A.user_merchant_id,B.avatar,B.nickname,B.user_type,A.last_pay_time,A.first_pay_time,A.label_id,A.create_time,A.last_time,A.pay_num,A.pay_price,B.phone,B.is_svip,B.svip_endtime,B.sex')
             ->page($page, $limit)->order('A.user_merchant_id DESC')->select()
             ->each(function ($item) use ($where, $make, $user_default_avatar) {
                 // 根据环境变量和用户类型，隐藏或显示电话号码
@@ -223,7 +222,8 @@ class UserMerchantRepository extends BaseRepository
         // 创建表单，表单提交的URL是通过路由名称和参数动态构建的
         return Elm::createForm(Route::buildUrl('merchantUserChangeLabel', compact('id'))->build(), [
             // 创建多选下拉列表，用于选择用户的标签
-            Elm::selectMultiple('label_id', '用户标签：', $userLabelRepository->intersection($user->label_id, $merId, 0))->options(function () use ($data) {
+            Elm::selectMultiple('label_id', '用户标签：', $userLabelRepository->intersection($user->label_id, $merId, 0))
+                ->placeholder('用户标签')->options(function () use ($data) {
                 $options = [];
                 // 遍历标签数据，构建下拉列表的选项
                 foreach ($data as $value => $label) {

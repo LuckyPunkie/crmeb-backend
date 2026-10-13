@@ -303,8 +303,10 @@ if (!function_exists('getModelTime')) {
                 $model = $model->where($prefix, 'between', [date('Y-m-d H:i:s', strtotime("-30 day")), date('Y-m-d H:i:s')]);
                 break;
             default:
+
                 if (strstr($section, $field) !== false) {
                     list($startTime, $endTime) = explode($field, $section);
+
                     if (strlen($startTime) == 4) {
                         $model->whereBetweenTime($prefix, date('Y-m-d H:i:s', strtotime($section)), date('Y-m-d H:i:s', strtotime($section . ' +1day -1second')));
                     } else {
@@ -1452,24 +1454,25 @@ if(!function_exists('getThumbWaterImage')){
             foreach ($list as &$item){
                 foreach ($fields as $field) {
                     $f = $rename ? $rename : $field ;
-                    if(is_array($item[$field]) && !empty($item[$field])){
-                        $imageList = $item[$field];
+                    $fieldValue = $item[$field] ?? '';
+                    if(is_array($fieldValue) && !empty($fieldValue)){
+                        $imageList = $fieldValue;
                         $item[$f] = [];
                         foreach ($imageList as $filePath){
-                            $host = parse_url($filePath);
-                            if (isset($host['scheme']) && in_array($host['scheme'].'://'.$host['host'], $domain) ) {
+                            $origin = UploadService::getUrlOrigin((string)$filePath);
+                            if ($origin !== '' && in_array($origin, $domain, true)) {
                                 $thumbResult = $upload->thumb($filePath,$fileName,$type);
-                                $item[$f][] = $thumbResult[$type] ?: $item[$field];
+                                $item[$f][] = ($thumbResult[$type] ?? '') ?: $filePath;
                             } else {
                                 $item[$f][] = $filePath;
                             }
                         }
                     }else{
-                        $filePath = $item[$field];
-                        $host = parse_url($filePath);
-                        if (isset($host['scheme']) && in_array($host['scheme'].'://'.$host['host'], $domain)) {
+                        $filePath = $fieldValue;
+                        $origin = UploadService::getUrlOrigin((string)$filePath);
+                        if ($origin !== '' && in_array($origin, $domain, true)) {
                             $thumbResult = $upload->thumb($filePath, $fileName, $type);
-                            $item[$f] = $thumbResult[$type] ?: $item[$field];
+                            $item[$f] = ($thumbResult[$type] ?? '') ?: $filePath;
                         } else {
                             $item[$f] = $filePath;
                         }
@@ -1866,6 +1869,7 @@ if (!function_exists('response_log_write')) {
     function response_log_write(mixed $data, string $logType = \think\Log::ERROR, string $type = '', mixed $id = 0)
     {
         $request = app()->make(Request::class);
+        $jsonOptions = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
 
         try {
 
@@ -1895,8 +1899,8 @@ if (!function_exists('response_log_write')) {
                 $request->method(true),//请求类型
                 str_replace("/", "", $request->rootUrl()),//应用
                 $request->baseUrl(),//路由
-                json_encode($request->param(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),//请求参数
-                json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),//报错数据
+                json_encode($request->param(), $jsonOptions),//请求参数
+                json_encode($data, $jsonOptions),//报错数据
             ];
 
             Log::write(implode("|", $log), $logType);
@@ -1908,7 +1912,7 @@ if (!function_exists('response_log_write')) {
                 'trace' => $e->getTrace(),
                 'previous' => $e->getPrevious(),
             ];
-            Log::error(json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            Log::error(json_encode($data, $jsonOptions));
 
         }
     }

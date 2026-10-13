@@ -238,13 +238,16 @@ class SystemStorage extends BaseController
      */
     public function editDomain($id)
     {
-        $domain = $this->request->post('domain', '');
-        $cdn = $this->request->post('cdn', '');
+        $domain = UploadService::normalizeDomain($this->request->post('domain', ''));
+        $cdn = UploadService::normalizeDomain($this->request->post('cdn', ''));
         if (!$domain) {
             return app('json')->fail('空间域名');
         }
-        if (strstr($domain, 'https://') === false && strstr($domain, 'http://') === false) {
+        if (!UploadService::isValidDomain($domain)) {
             return app('json')->fail('请输入正确域名：http/https');
+        }
+        if ($cdn && !UploadService::isValidDomain($cdn)) {
+            return app('json')->fail('请输入正确CDN域名：http/https');
         }
         $this->repository->updateDomain($id, $domain, ['cdn' => $cdn]);
         return app('json')->success('修改成功');

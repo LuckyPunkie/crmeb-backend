@@ -88,7 +88,7 @@ class StoreCouponDao extends BaseDao
     /**
      * 验证查询参数
      * @param int|null $type
-     * @param int $send_type
+     * @param int|array $send_type
      * @return BaseQuery
      * @author xaboy
      * @day 2020/6/18
@@ -97,12 +97,16 @@ class StoreCouponDao extends BaseDao
     {
         $query = StoreCoupon::getDB()
             ->where('status', 1)
-            ->where('send_type', $send_type)
             ->where('is_del', 0)
             ->order('sort DESC,coupon_id DESC')
             ->when(!is_null($type), function ($query) use ($type) {
                 $query->where('type', $type);
             });
+        if (is_array($send_type)) {
+            $query->whereIn('send_type', $send_type);
+        } else {
+            $query->where('send_type', $send_type);
+        }
         $query->where(function (BaseQuery $query) {
             $query->where('is_limited', 0)->whereOr(function (BaseQuery $query) {
                 $query->where('is_limited', 1)->where('remain_count', '>', 0);
@@ -223,13 +227,33 @@ class StoreCouponDao extends BaseDao
             $query->with(['svipIssue' => function (BaseQuery $query) use ($uid) {
                 $query->where('uid', $uid);
             }]);
-        })->where('coupon_id', $id)->find();
+        })->where('mer_id', 0)->where('coupon_id', $id)->find();
+    }
+
+    /**
+     * 查询店铺会员券，并按用户加载历史领取记录。
+     */
+    public function validMerchantMemberCoupon($id, $uid)
+    {
+        return $this->validCouponQueryWithMerchant([
+            'send_type' => StoreCouponRepository::GET_COUPON_TYPE_MERCHANT_MEMBER,
+        ])
+            ->where('C.mer_id', '>', 0)
+            ->when($uid, function (BaseQuery $query, $uid) {
+                $query->with(['issue' => function (BaseQuery $query) use ($uid) {
+                    $query->where('uid', $uid);
+                }]);
+            })
+            ->where('C.coupon_id', $id)
+            ->find();
     }
 
     /**
      * 查询商户的优惠券列表
      * @param $merId
      * @param null $uid
+     * @param int|null $type
+     * @param int|array $sendType
      * @return Collection
      * @throws DbException
      * @throws DataNotFoundException
@@ -237,9 +261,9 @@ class StoreCouponDao extends BaseDao
      * @author xaboy
      * @day 2020/6/1
      */
-    public function validMerCoupon($merId, $uid = null, $type = 0)
+    public function validMerCoupon($merId, $uid = null, $type = 0, $sendType = 0)
     {
-        return $this->validCouponQuery($type)->when($uid, function (BaseQuery $query, $uid) {
+        return $this->validCouponQuery($type, $sendType)->when($uid, function (BaseQuery $query, $uid) {
             $query->with(['issue' => function (BaseQuery $query) use ($uid) {
                 $query->where('uid', $uid);
             }]);

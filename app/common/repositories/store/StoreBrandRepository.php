@@ -189,6 +189,13 @@ class StoreBrandRepository extends BaseRepository
             })->placeholder('请选择上级分类')->props(['props' => ['emitPath' => false]])->appendValidate(Elm::validateInt()->required('请选择上级分类')->message('请选择上级分类')),
             // 品牌名称输入字段，设置占位符和验证规则。
             Elm::input('brand_name', '品牌名称：')->placeholder('请输入品牌名称')->required('请输入品牌名称'),
+            Elm::frameImage('pic', '图标：', '/' . config('admin.admin_prefix') . '/setting/uploadPicture?field=pic&type=1')->value($formData['pic'] ?? '')->icon('el-icon-camera')->modal(['modal' => false])->width('1000px')->height('600px')->required('请选择条款图标')->appendRule('suffix', [
+                'type' => 'div',
+                'style' => ['color' => '#999999'],
+                'domProps' => [
+                    'innerHTML' => '建议尺寸：100*100px',
+                ],
+            ]),
             // 是否显示开关字段，设置活性和非活性值以及文字说明。
             Elm::switches('is_show', '是否显示：', 1)->activeValue(1)->inactiveValue(0)->inactiveText('关闭')->className('switch-width-double')->activeText('开启'),
             // 排序数值输入字段，设置默认值、精度和最大值。

@@ -60,13 +60,24 @@ class StoreOrderSplitRepository extends StoreOrderRepository
      */
     public function execSplitOrder(StoreOrder $order, array $rule, $service_id = 0, $type = null)
     {
-        if ($order['status'] != 0) {
-            throw new ValidateException('订单已发货');
-        }
-        if ($order['activity_type'] == 2 && !$type) {
-            throw new ValidateException('预售订单不能拆单');
-        }
-        return Db::transaction(function () use ($order, $rule,$service_id) {
+        return Db::transaction(function () use ($order, $rule, $service_id, $type) {
+            // 请求进入时的订单对象可能已经过期，必须在事务内重新读取并锁定主订单，
+            // 否则并发核销会基于同一份 refund_num 重复拆单。
+            $order = StoreOrder::getDB()
+                ->with(['orderProduct'])
+                ->where('order_id', $order->order_id)
+                ->lock(true)
+                ->find();
+            if (!$order) {
+                throw new ValidateException('订单不存在');
+            }
+            if ($order['status'] != 0) {
+                throw new ValidateException('订单已发货');
+            }
+            if ($order['activity_type'] == 2 && !$type) {
+                throw new ValidateException('预售订单不能拆单');
+            }
+
             $newOrderId = 0;
             $newOrder = $order->getOrigin();
             $newOrder['total_num'] = 0;
@@ -79,6 +90,7 @@ class StoreOrderSplitRepository extends StoreOrderRepository
             $newOrder['coupon_price'] = 0;
             $newOrder['platform_coupon_price'] = 0;
             $newOrder['svip_discount'] = 0;
+            $newOrder['merchant_member_discount_price'] = 0;
             $newOrder['cost'] = 0;
             $newOrder['integral_price'] = 0;
             $newOrder['integral'] = 0;
@@ -139,15 +151,27 @@ class StoreOrderSplitRepository extends StoreOrderRepository
                     $newProduct['extension_two'] = $product['extension_two'];
                     $newProduct['coupon_price'] = $product['coupon_price'] > 0 ? bcmul(bcdiv($product['coupon_price'], $product['product_num'], 2), $num, 2) : 0;
                     $newProduct['svip_discount'] = $product['svip_discount'] > 0 ? bcmul(bcdiv($product['svip_discount'], $product['product_num'], 2), $num, 2) : 0;
+                    $newProduct['merchant_member_discount_price'] = $product['merchant_member_discount_price'] > 0
+                        ? bcmul(bcdiv($product['merchant_member_discount_price'], $product['product_num'], 2), $num, 2)
+                        : 0;
                     $newProduct['integral_price'] = $product['integral_price'] > 0 ? bcmul(bcdiv($product['integral_price'], $product['product_num'], 2), $num, 2) : 0;
                     $newProduct['platform_coupon_price'] = $product['platform_coupon_price'] > 0 ? bcmul(bcdiv($product['platform_coupon_price'], $product['product_num'], 2), $num, 2) : 0;
                     $newProduct['postage_price'] = $product['postage_price'] > 0 ? bcmul(bcdiv($product['postage_price'], $product['product_num'], 2), $num, 2) : 0;
-                    $newProduct['integral_total'] = $product['integral_total'] > 0 ? floor(bcmul(bcdiv($product['integral_total'], $product['integral_total'], 2), $num, 0)) : 0;
+                    $newProduct['integral_total'] = $product['integral_total'] > 0
+                        ? floor(bcmul(
+                            bcdiv($product['integral_total'], $product['product_num'], 6),
+                            $num,
+                            0
+                        ))
+                        : 0;
 
                     $product['product_price'] = $product['product_price'] > 0 ? bcsub($product['product_price'], $newProduct['product_price'], 2) : 0;
                     $product['total_price'] = $product['total_price'] > 0 ? bcsub($product['total_price'], $newProduct['total_price'], 2) : 0;
                     $product['coupon_price'] = $product['coupon_price'] > 0 ? bcsub($product['coupon_price'], $newProduct['coupon_price'], 2) : 0;
                     $product['svip_discount'] = $product['svip_discount'] > 0 ? bcsub($product['svip_discount'], $newProduct['svip_discount'], 2) : 0;
+                    $product['merchant_member_discount_price'] = $product['merchant_member_discount_price'] > 0
+                        ? bcsub($product['merchant_member_discount_price'], $newProduct['merchant_member_discount_price'], 2)
+                        : 0;
                     $product['integral_price'] = $product['integral_price'] > 0 ? bcsub($product['integral_price'], $newProduct['integral_price'], 2) : 0;
                     $product['platform_coupon_price'] = $product['platform_coupon_price'] > 0 ? bcsub($product['platform_coupon_price'], $newProduct['platform_coupon_price'], 2) : 0;
                     $product['postage_price'] = $product['postage_price'] > 0 ? bcsub($product['postage_price'], $newProduct['postage_price'], 2) : 0;
@@ -169,8 +193,10 @@ class StoreOrderSplitRepository extends StoreOrderRepository
                 $order['extension_one'] = $order['extension_one'] > 0 ? bcsub($order['extension_one'], $extension_one, 2) : 0;
                 $order['extension_two'] = $order['extension_two'] > 0 ? bcsub($order['extension_two'], $extension_two, 2) : 0;
                 $order['svip_discount'] = $order['svip_discount'] > 0 ? bcsub($order['svip_discount'], $newProduct['svip_discount'], 2) : 0;
+                $order['merchant_member_discount_price'] = $order['merchant_member_discount_price'] > 0
+                    ? bcsub($order['merchant_member_discount_price'], $newProduct['merchant_member_discount_price'], 2)
+                    : 0;
                 $order['coupon_price'] = $order['coupon_price'] > 0 ? bcsub($order['coupon_price'], $newProduct['coupon_price'], 2) : 0;
-                $order['coupon_price'] = $order['platform_coupon_price'] > 0 ? bcsub($order['coupon_price'], $newProduct['platform_coupon_price'], 2) : $order['coupon_price'];
                 $order['platform_coupon_price'] = $order['platform_coupon_price'] > 0 ? bcsub($order['platform_coupon_price'], $newProduct['platform_coupon_price'], 2) : 0;
                 $order['cost'] = $order['cost'] > 0 ? bcsub($order['cost'], $newProduct['cost'], 2) : 0;
                 $order['integral_price'] = $order['integral_price'] > 0 ? bcsub($order['integral_price'], $newProduct['integral_price'], 2) : 0;
@@ -185,8 +211,12 @@ class StoreOrderSplitRepository extends StoreOrderRepository
                 $newOrder['extension_one'] = bcadd($newOrder['extension_one'], $extension_one, 2);
                 $newOrder['extension_two'] = bcadd($newOrder['extension_two'], $extension_two, 2);
                 $newOrder['svip_discount'] = bcadd($newOrder['svip_discount'], $newProduct['svip_discount'], 2);
+                $newOrder['merchant_member_discount_price'] = bcadd(
+                    $newOrder['merchant_member_discount_price'],
+                    $newProduct['merchant_member_discount_price'],
+                    2
+                );
                 $newOrder['coupon_price'] = bcadd($newOrder['coupon_price'], $newProduct['coupon_price'], 2);
-                $newOrder['coupon_price'] = bcadd($newOrder['coupon_price'], $newProduct['platform_coupon_price'], 2);
                 $newOrder['platform_coupon_price'] = bcadd($newOrder['platform_coupon_price'], $newProduct['platform_coupon_price'], 2);
                 $newOrder['cost'] = bcadd($newOrder['cost'], $newProduct['cost'], 2);
                 $newOrder['integral_price'] = bcadd($newOrder['integral_price'], $newProduct['integral_price'], 2);

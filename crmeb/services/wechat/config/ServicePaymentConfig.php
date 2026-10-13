@@ -15,6 +15,7 @@ namespace crmeb\services\wechat\config;
 
 
 use crmeb\services\wechat\contract\ConfigHandlerInterface;
+use crmeb\services\wechat\BaseApplication;
 use crmeb\services\wechat\DefaultConfig;
 
 /**
@@ -31,7 +32,7 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
      * appid
      * @var string
      */
-    public string $appId;
+    public string $appId = '';
 
     /**
      * 服务商商户ID
@@ -39,17 +40,17 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
      */
     public string $mchId;
 
-	/**
-	 * 特约子商户商户ID
-	 * @var string
-	 */
-	public string $subMchid = '';
+    /**
+     * 特约子商户商户ID
+     * @var string
+     */
+    public string $subMchid = '';
 
-	/**
-	 * 特约子商户appid（可选）
-	 * @var string
-	 */
-	public string $subAppid = '';
+    /**
+     * 特约子商户appid（可选）
+     * @var string
+     */
+    public string $subAppid = '';
 
     /**
      * API密钥
@@ -88,24 +89,6 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
     public string $refundUrl;
 
     /**
-     * 小程序appid
-     * @var string
-     */
-    public string $routineAppid;
-
-    /**
-     * 应用appid
-     * @var string
-     */
-    public string $appAppid;
-
-    /**
-     * 微信公众号appid
-     * @var string
-     */
-    public string $wechatAppid;
-
-    /**
      * v3支付公钥
      * @var string
      */
@@ -116,12 +99,6 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
      * @var string
      */
     public string $publicPem;
-
-    /**
-     * web appid
-     * @var string
-     */
-    public string $webAppid;
 
     /**
      * 是否服务商支付
@@ -137,6 +114,22 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
     public string $v3_key = '';
 
 
+    protected function loadServiceConfig(): void
+    {
+        $this->isServicePay = false;
+        $this->mchId = $this->httpConfig->getConfig('service_pay.mchid', '');
+        $this->serviceName = $this->httpConfig->getConfig('service_pay.service_name', '');
+        $this->serialNo = $this->httpConfig->getConfig('service_pay.serial_no', '');
+        $this->key = $this->httpConfig->getConfig('service_pay.v3_key', '');
+        $this->v3_key = $this->httpConfig->getConfig('service_pay.v3_key', '');
+        $this->publicKey = $this->httpConfig->getConfig('service_pay.v3_public_id', '');
+        $this->publicPem = $this->publicFilePath($this->httpConfig->getConfig('service_pay.v3_public_pem', ''));
+        $this->certPath = $this->publicFilePath($this->httpConfig->getConfig('service_pay.client_cert', ''));
+        $this->keyPath = $this->publicFilePath($this->httpConfig->getConfig('service_pay.client_key', ''));
+        $this->notifyUrl = trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL)) . DefaultConfig::value('service_pay.notifyUrl');
+        $this->refundUrl = trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL)) . DefaultConfig::value('service_pay.refundUrl');
+    }
+
     /**
      * 初始化
      * @author 等风来
@@ -145,21 +138,15 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
      */
     protected function getWechat()
     {
-        $this->init = true;
-        $this->isServicePay = false;
-        $this->mchId = $this->httpConfig->getConfig('service_pay.mchid', '');
-        $this->serviceName = $this->httpConfig->getConfig('service_pay.service_name', '');
-        $this->serialNo = $this->httpConfig->getConfig('service_pay.serial_no', '');
-        $this->key = $this->httpConfig->getConfig('service_pay.v3_key', '');
-        $this->v3_key = $this->httpConfig->getConfig('service_pay.v3_key', '');
-		$this->publicKey = $this->httpConfig->getConfig('service_pay.v3_public_id', '');
-		$this->publicPem = $this->httpConfig->getConfig('service_pay.v3_public_pem', '');
-        $this->certPath = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('service_pay.client_cert', '');
-        $this->keyPath  = app()->getRootPath() . 'public' .$this->httpConfig->getConfig('service_pay.client_key', '');
-        $this->notifyUrl = trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL)) . DefaultConfig::value('service_pay.notifyUrl');
-        $this->refundUrl = trim($this->httpConfig->getConfig(DefaultConfig::COMMENT_URL)) . DefaultConfig::value('service_pay.refundUrl');
-        $this->wechatAppid = $this->httpConfig->getConfig(DefaultConfig::OFFICIAL_APPID, '');
-        $this->routineAppid = $this->httpConfig->getConfig(DefaultConfig::MINI_APPID, '');
+        $this->loadServiceConfig();
+        $this->appId = $this->httpConfig->getConfig(DefaultConfig::OFFICIAL_APPID, '');
+        // 注意：subMchid 和 subAppid 需要在运行时动态设置，不在这里初始化
+    }
+
+    public function getApp()
+    {
+        $this->loadServiceConfig();
+        $this->appId = $this->httpConfig->getConfig(DefaultConfig::APP_APPID, '');
         // 注意：subMchid 和 subAppid 需要在运行时动态设置，不在这里初始化
     }
 
@@ -172,19 +159,21 @@ class ServicePaymentConfig extends BaseConfig implements ConfigHandlerInterface
     public function all(): array
     {
         return [
-			'mch_id' => $this->mchId,
+            'mch_id' => $this->mchId,
             'serial_no' => $this->serialNo,
+            'secret_key' => $this->key,
             'key' => $this->key,
             'cert_path' => $this->certPath,
             'key_path' => $this->keyPath,
             'notify_url' => $this->notifyUrl,
+            'app_id' => $this->appId,
             'http' => $this->httpConfig->all(''),
             'other' => [
                 'wechat' => [
-                    'appid' => $this->wechatAppid,
+                    'appid' => $this->appId,
                 ],
                 'miniprog' => [
-                    'appid' => $this->routineAppid,
+                    'appid' => $this->appId,
                 ]
             ],
         ];

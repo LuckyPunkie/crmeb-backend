@@ -12,9 +12,6 @@
 
 namespace app\controller\merchant\store\product;
 
-use app\common\repositories\store\product\ProductRepository;
-use app\common\repositories\system\merchant\MerchantRepository;
-use app\validate\merchant\StoreProductValidate as validate;
 use think\App;
 use crmeb\basic\BaseController;
 use app\common\repositories\store\product\ProductCopyRepository as repository;

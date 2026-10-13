@@ -14,11 +14,13 @@
 namespace app\controller\api\server;
 
 
+use app\common\model\store\product\StoreUserCardVerifyLog;
 use app\common\repositories\delivery\DeliveryStationRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\delivery\DeliveryServiceRepository;
 use app\common\repositories\store\order\StoreRefundOrderRepository;
 use app\common\repositories\delivery\DeliveryOrderRepository;
+use app\common\repositories\store\product\StoreUserCardRepository;
 use app\common\repositories\store\staff\StaffsRepository;
 use app\validate\merchant\OrderValidate;
 use app\controller\merchant\Common;
@@ -53,7 +55,7 @@ class StoreOrder extends BaseController
     public function orderStatistics($merId)
     {
         $order = $this->repository->OrderTitleNumber($merId, null);
-        $order['refund'] = app()->make(StoreRefundOrderRepository::class)->getWhereCount(['is_system_del' => 0, 'mer_id' => $merId]);
+        $order['refund'] = app()->make(StoreRefundOrderRepository::class)->getWhereCount(['is_system_del' => 0, 'mer_id' => $merId,'status' => 0]);
         $common = app()->make(Common::class);
         $data = [];
         $data['today'] = $common->mainGroup('today', $merId);
@@ -96,11 +98,13 @@ class StoreOrder extends BaseController
     {
         [$page, $limit] = $this->getPage();
         $where['status'] = $this->request->param('status');
-        $where['is_verify'] = $this->request->param('is_verify');
+        $where['is_verify'] = $this->request->param('is_verify',0);
         $where['search'] = $this->request->param('store_name');
         $where['mer_id'] = $merId;
         $where['is_del'] = 0;
-        if($where['status'] == 2) $where['order_type'] = 0;
+        if($where['status'] == 2) {
+            $where['order_type'] = 0;
+        }
         return app('json')->success($this->repository->merchantGetList($where, $page, $limit));
     }
 
@@ -421,7 +425,30 @@ class StoreOrder extends BaseController
     {
         $order = $this->repository->getWhere(['order_id' => $id,'mer_id' => $merId]);
         if (!$order)  return app('json')->fail('数据不存在');
-        $data = $this->request->params(['verify_code','data']);
+        $data = $this->request->params(['verify_code', 'data', ['verify_count', 1], ['remark', ''], ['service_type', 0]]);
+
+        $cardRepository = app()->make(StoreUserCardRepository::class);
+        $card = $cardRepository->detailByVerifyCode((string)$data['verify_code'], (int)$merId);
+
+        if ($card) {
+            if ((int)$card['order_id'] !== (int)$id) {
+                return app('json')->fail('次卡/年卡不属于当前订单');
+            }
+            $serviceType = (int)($data['service_type'] ?: (is_array($data['data'] ?? null) ? ($data['data']['service_type'] ?? 0) : 0));
+
+            $card = $cardRepository->verifyByCode(
+                (string)$data['verify_code'],
+                (int)$merId,
+                (int)$data['verify_count'],
+                $this->request->serviceInfo()->service_id,
+                0,
+                StoreUserCardVerifyLog::VERIFY_TYPE_SERVICE,
+                (string)$data['remark'],
+                $serviceType
+            );
+
+            return app('json')->success('次卡/年卡核销成功', $card);
+        }
 
         // 根据订单ID、商家ID、验证码和订单类型查询订单，并连带查询订单产品信息
         $order = $this->repository->getWhere(['order_id' => $id, 'mer_id' => $merId, 'verify_code' => $data['verify_code'], 'order_type' => 1], '*', ['orderProduct']);

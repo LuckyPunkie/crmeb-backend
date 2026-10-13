@@ -66,6 +66,7 @@ class Product extends BaseController
             ['order', 'sort'],
             'is_ficti',
             'svip_price_type',
+            'member_price_setting',
             'filters_type',
             'is_action',
             'is_good',
@@ -74,7 +75,8 @@ class Product extends BaseController
             'mer_form_id',
             'cate_hot',
             'brand_id',
-            'activity_label_ids'
+            'activity_label_ids',
+            'order' => '',
         ]);
         // 根据类型和商家ID获取查询条件
         $where = array_merge($where, $this->repository->switchType($type, $this->request->merId(), 0));
@@ -282,6 +284,7 @@ class Product extends BaseController
             ['order', 'sort'],
             'is_ficti',
             'svip_price_type',
+            'member_price_setting',
             'filters_type',
             'is_action',
             'is_good',
@@ -326,6 +329,8 @@ class Product extends BaseController
         // 是否公益店铺（只读，供商品表单展示命中/分销金额）
         $data['is_welfare_shop'] = (int)($this->request->merchant()->is_welfare_shop ?? 0);
         // 返回配置信息
+        $data['mer_product_type'] = $this->request->merchant()->mer_product_type;
+        $data['platform_category'] = $this->request->merchant()->platform_category;
         return app('json')->success($data);
     }
 
@@ -639,7 +644,7 @@ class Product extends BaseController
         // 获取请求参数中的商品ID
         $ids = $this->request->param('ids');
         // 获取请求参数中的SVIP价格类型
-        $data = $this->request->params([['svip_price_type', 0]]);
+        $data = $this->request->params([['svip_price_type', 0], ['member_price_setting', 1]]);
 
         // 如果商品ID为空，则返回错误信息
         if (empty($ids)) return app('json')->fail('请选择商品');

@@ -14,6 +14,7 @@
 namespace app\controller\merchant\system;
 
 
+use app\common\repositories\delivery\DeliveryStationRepository;
 use app\common\repositories\store\MerchantTakeRepository;
 use app\common\repositories\store\product\ProductRepository;
 use app\common\repositories\system\config\ConfigValueRepository;
@@ -28,6 +29,7 @@ use crmeb\jobs\ChangeMerchantStatusJob;
 use crmeb\services\ImageWaterMarkService;
 use crmeb\services\UploadService;
 use think\App;
+use think\facade\Db;
 use think\facade\Queue;
 
 /**
@@ -146,7 +148,40 @@ class Merchant extends BaseController
             //if ($data['mer_state'] && !$merchant->sub_mchid && systemConfig('open_wx_combine'))
             //    return app('json')->fail('开启店铺前请先完成微信子商户入驻');
         }
-        $merchant->save($data);
+        if ($type == 2) {
+            $stationRepository = app()->make(DeliveryStationRepository::class);
+            Db::transaction(function () use ($merchant, $data, $stationRepository) {
+                $merchant->save($data);
+
+                $hasTakeStation = $stationRepository->search([
+                    'mer_id' => $merchant->mer_id,
+                    'switch_take' => 1,
+                ])->where('is_del', 0)->count();
+
+                if (!$hasTakeStation) {
+                    $stationRepository->save([
+                        'station_name' => $merchant->mer_name,
+                        'station_address' => $merchant->mer_address,
+                        'lng' => $merchant->long,
+                        'lat' => $merchant->lat,
+                        'contact_name' => $merchant->real_name,
+                        'phone' => $merchant->mer_phone,
+                        'status' => 1,
+                        'mer_id' => $merchant->mer_id,
+                        'type' => 0,
+                        'switch_city' => 0,
+                        'switch_take' => 1,
+                        'business_date' => '[]',
+                        'region' => '[]',
+                        'fence' => '[]',
+                        'origin_shop_id' => '',
+                        'bind_type' => 1,
+                    ]);
+                }
+            });
+        } else {
+            $merchant->save($data);
+        }
 
         // 商户编辑记录日志
         event('create_operate_log', [
@@ -238,7 +273,7 @@ class Merchant extends BaseController
     {
         // 设置支付类型为1
         $data['pay_type'] = 1;
-        $data['type'] = $this->request->param('type', 10);
+        $data['type'] = $this->request->param('type', 'margin');
         // 调用 ServeOrderRepository 类的 QrCode 方法生成二维码
         $res = app()->make(ServeOrderRepository::class)->QrCode($this->request->merId(), 'margin', $data);
         // 返回生成的二维码
