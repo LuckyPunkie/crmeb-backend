@@ -31,12 +31,13 @@ return [
         'secret' => [
             'key' => 'routine_appsecret'
         ],
-        // 'token' => [
-        //     'key' => 'wechat_token'
-        // ],
-        // 'key' => [
-        //     'key' => 'wechat_encodingaeskey'
-        // ],
+        // 小程序消息推送（内容安全异步审核回调）用，与公众号共用这两项配置
+        'token' => [
+            'key' => 'wechat_token'
+        ],
+        'key' => [
+            'key' => 'wechat_encodingaeskey'
+        ],
         // 'notifyUrl' => [
         //     //必须携带斜杠开头
         //     'value' => '/api/pay/notify/routine'
