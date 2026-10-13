@@ -10,6 +10,7 @@
 // +----------------------------------------------------------------------
 namespace app\common\repositories\store\product;
 
+use app\common\model\merchant\MerchantMemberProductPrice;
 use app\common\repositories\store\order\StoreCartRepository;
 use app\common\repositories\store\coupon\StoreCouponProductRepository;
 use app\common\repositories\store\coupon\StoreCouponRepository;
@@ -29,6 +30,7 @@ use app\common\dao\store\product\SpuDao;
 use app\common\repositories\store\StoreCategoryRepository;
 use app\common\repositories\store\StoreSeckillActiveRepository;
 use app\common\repositories\user\UserVisitRepository;
+use app\common\repositories\merchant\MerchantMemberRepository;
 use think\facade\Queue;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\system\merchant\StoreGroupRepository;
@@ -38,8 +40,12 @@ class SpuRepository extends BaseRepository
 {
     public $dao;
     public $merchantFiled = 'mer_id,mer_name,mer_avatar,is_trader,mer_info,mer_keyword,type_id,long,lat';
-    public $productFiled = 'P.product_id,cate_hot,S.store_name,S.image,activity_id,S.keyword,S.price,S.mer_id,spu_id,S.status,store_info,brand_id,cate_id,unit_name,S.star,S.rank,S.sort,sales,S.product_type,rate,reply_count,extension_type,S.sys_labels,S.mer_labels,P.delivery_way,P.delivery_free,S.ot_price,svip_price_type,stock,mer_svip_status,P.active_id,mer_form_id,P.activity_label_ids,P.delivery_free,P.give_coupon_ids,P.delivery_way';
+    public $productFiled = 'P.product_id,cate_hot,S.store_name,S.image,activity_id,S.keyword,S.price,S.mer_id,spu_id,S.status,store_info,brand_id,cate_id,unit_name,S.star,S.rank,S.sort,sales,S.product_type,rate,reply_count,extension_type,S.sys_labels,S.mer_labels,P.delivery_way,P.delivery_free,S.ot_price,svip_price_type,stock,mer_svip_status,P.active_id,mer_form_id,P.activity_label_ids,P.delivery_free,P.give_coupon_ids,P.delivery_way,P.member_price_setting,P.is_price_negotiable,P.price_negotiable_text';
 
+    /**
+     * 构造函数，注入 SPU 数据访问对象
+     * @param SpuDao $dao SPU DAO 实例
+     */
     public function __construct(SpuDao $dao)
     {
         $this->dao = $dao;
@@ -171,6 +177,11 @@ class SpuRepository extends BaseRepository
         if ($ret) $this->dao->update($ret['spu_id'], $data);
     }
 
+    /**
+     * 根据区域ID获取该区域下关联的商户ID集合：先查区域下启用的门店分组，再查分组关联的店铺ID并去重
+     * @param $regionId 区域ID
+     * @return array 商户ID数组
+     */
     protected function getMerIdsByRegin($regionId)
     {
         // 获取区域下的所有门店分组ID
@@ -241,6 +252,7 @@ class SpuRepository extends BaseRepository
         $list = $query->page((int)$page, (int)$limit)->setOption('field', [])->field($this->productFiled)->select();
         $append = ['stop_time', 'svip_price', 'show_svip_info', 'is_svip_price'];
         $list = $list->append($append)->toArray();
+        $list = $this->appendMerchantMemberListPrice($list, $userInfo);
         foreach ($list as &$item) {
             $activityLabels = $item['product']['activity_labels'];
             foreach ($activityLabels as $key => $val) {
@@ -277,6 +289,107 @@ class SpuRepository extends BaseRepository
         return compact('count', 'list');
     }
 
+    /**
+     * 为商品列表批量追加商户会员价字段：按商户会员折扣或自定义价格计算会员价，并标记是否低于原价展示
+     * @param array $list 商品列表数据
+     * @param $userInfo 用户信息
+     * @return array 追加 merchant_member_price、show_merchant_member_price 字段后的商品列表
+     */
+    protected function appendMerchantMemberListPrice(array $list, $userInfo): array
+    {
+        foreach ($list as &$item) {
+            $item['merchant_member_price'] = '';
+            $item['show_merchant_member_price'] = false;
+        }
+        unset($item);
+
+        if (!$userInfo || !$list) {
+            return $list;
+        }
+
+        $customProductIds = [];
+        $memberLevels = [];
+        $memberRepository = app()->make(MerchantMemberRepository::class);
+        foreach ($list as $item) {
+            $product = $item['product'] ?? [];
+            $merId = (int)($item['mer_id'] ?? $product['mer_id'] ?? 0);
+            $productId = (int)($item['product_id'] ?? 0);
+            $priceSetting = (int)($item['member_price_setting'] ?? $product['member_price_setting'] ?? 0);
+            $priceType = (int)($item['svip_price_type'] ?? $product['svip_price_type'] ?? 0);
+            if (!$merId || !$productId || (int)($item['product_type'] ?? 0) !== 0 || $priceSetting !== 2 || !$priceType) {
+                continue;
+            }
+
+            if (!array_key_exists($merId, $memberLevels)) {
+                $memberLevels[$merId] = $memberRepository->memberDiscount((int)$userInfo['uid'], $merId);
+            }
+            if (!empty($memberLevels[$merId]['level']) && $priceType === 2) {
+                $customProductIds[] = $productId;
+            }
+        }
+
+        $customPrices = [];
+        if ($customProductIds) {
+            $merchantIds = array_keys(array_filter($memberLevels, static function ($level) {
+                return !empty($level['level']);
+            }));
+            $levelNumbers = array_values(array_unique(array_filter(array_map(
+                static fn($level) => (int)($level['level'] ?? 0),
+                $memberLevels
+            ))));
+            $rows = MerchantMemberProductPrice::getDB()
+                ->whereIn('mer_id', array_map('intval', $merchantIds))
+                ->whereIn('product_id', array_unique($customProductIds))
+                ->whereIn('level', $levelNumbers)
+                ->select()
+                ->toArray();
+            foreach ($rows as $row) {
+                $merId = (int)$row['mer_id'];
+                $productId = (int)$row['product_id'];
+                $level = (int)$row['level'];
+                $price = (string)$row['price'];
+                if (!isset($customPrices[$merId][$productId][$level])
+                    || bccomp($price, $customPrices[$merId][$productId][$level], 2) < 0) {
+                    $customPrices[$merId][$productId][$level] = $price;
+                }
+            }
+        }
+
+        foreach ($list as &$item) {
+            $product = $item['product'] ?? [];
+            $merId = (int)($item['mer_id'] ?? $product['mer_id'] ?? 0);
+            $productId = (int)($item['product_id'] ?? 0);
+            $priceSetting = (int)($item['member_price_setting'] ?? $product['member_price_setting'] ?? 0);
+            $priceType = (int)($item['svip_price_type'] ?? $product['svip_price_type'] ?? 0);
+            $level = $memberLevels[$merId] ?? null;
+            if (!$level || $priceSetting !== 2 || !$priceType || (int)($item['product_type'] ?? 0) !== 0) {
+                continue;
+            }
+
+            $originalPrice = (string)($item['price'] ?? 0);
+            $fixedPrice = $customPrices[$merId][$productId][(int)$level['level']] ?? null;
+            $memberPrice = $memberRepository->calculateProductMemberPrice(
+                $originalPrice,
+                $priceType,
+                $level,
+                $fixedPrice === null ? null : (string)$fixedPrice
+            );
+            $item['merchant_member_price'] = $memberPrice;
+            if (bccomp($memberPrice, $originalPrice, 2) < 0) {
+                $item['show_merchant_member_price'] = true;
+            }
+        }
+        unset($item);
+
+        return $list;
+    }
+
+    /**
+     * 为商品列表批量挂载当前用户的购物车数据：一次性查询用户购物车，按商品ID映射到列表项
+     * @param $userInfo 用户信息
+     * @param array $list 商品列表数据，需包含 product_id
+     * @return array 追加 cart 字段后的商品列表
+     */
     protected function spuCart($userInfo, array $list)
     {
         if (!$userInfo || empty($list)) {

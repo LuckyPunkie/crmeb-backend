@@ -276,7 +276,7 @@ class User extends BaseController
     public function update($id, UserValidate $validate, UserLabelRepository $labelRepository, UserGroupRepository $groupRepository)
     {
         $data = $this->request->params(['phone', 'card_id', 'mark', 'group_id', ['label_id', []], ['is_promoter', 0],
-            ['status', 0], ['member_level', ''], ['extend_info', []],'promoter_switch']);
+            ['status', 0], ['member_level', ''], ['extend_info', []],'promoter_switch','sex']);
         $extend_info = $data['extend_info'];
         unset($data['extend_info']);
         $validate->check($data);

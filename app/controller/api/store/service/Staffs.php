@@ -140,7 +140,7 @@ class Staffs extends BaseController
     {
         $params = $this->request->params(['mer_id']);
         if (!$params['mer_id']) {
-            throw new ValidateException('参数错误');
+            return app('json')->fail('参数错误');
         }
 
         $res = $this->repository->reservationVerify($id, $params['mer_id'], 0, $this->request->staffsList()[$params['mer_id']]['staffs_id']);

@@ -185,17 +185,10 @@ class StoreServiceLogRepository extends BaseRepository
      */
     public function getSendData(StoreServiceLog $log)
     {
-        // 根据日志的类型，提取相应的数据对象
-        if ($log->msn_type == 4) {
-            $log->product;
-        } else if ($log->msn_type == 5) {
-            $log->orderInfo;
-        } else if ($log->msn_type == 6) {
-            $log->refundOrder;
-        } else if ($log->msn_type == 7) {
-            $log->presell;
-        } else if ($log->msn_type == 8) {
-            $log->productGroup;
+        $relation = $this->getSendRelation((int)$log->msn_type);
+        if ($relation) {
+            // ThinkORM 3 懒加载的关联不会自动包含在 toArray() 中，需要显式标记关联。
+            $log->setRelation($relation, $log->getRelation($relation, true));
         }
         return $log;
     }
@@ -212,39 +205,36 @@ class StoreServiceLogRepository extends BaseRepository
         // 初始化缓存数组，用于存储按MSN类型和号码组合的唯一数据。
         $cache = [];
         foreach ($list as $log) {
-            // 忽略非指定类型的日志，以减少后续处理的负担。
-            if (!in_array($log->msn_type, [4, 5, 6, 7, 8])) continue;
+            $relation = $this->getSendRelation((int)$log->msn_type);
+            if (!$relation) continue;
 
             // 创建键，用于根据MSN类型和号码查找缓存数据。
-            $key = $log->msn_type . $log->msn;
+            $key = $log->msn_type . ':' . $log->msn;
 
-            // 如果缓存中已存在该键的数据，则直接从缓存中获取数据并设置到日志对象中。
-            if (isset($cache[$key])) {
-                if ($log->msn_type == 4)
-                    $log->set('product', $cache[$key]);
-                else if ($log->msn_type == 5)
-                    $log->set('orderInfo', $cache[$key]);
-                else if ($log->msn_type == 6)
-                    $log->set('refundOrder', $cache[$key]);
-                else if ($log->msn_type == 8)
-                    $log->set('productGroup', $cache[$key]);
-                else
-                    $log->set('presell', $cache[$key]);
-            } else {
-                // 如果缓存中不存在该键的数据，则从日志对象中获取数据并存储到缓存中。
-                if ($log->msn_type == 4)
-                    $cache[$key] = $log->product;
-                else if ($log->msn_type == 5)
-                    $cache[$key] = $log->orderInfo;
-                else if ($log->msn_type == 6)
-                    $cache[$key] = $log->refundOrder;
-                else if ($log->msn_type == 8)
-                    $cache[$key] = $log->productGroup;
-                else
-                    $cache[$key] = $log->presell;
+            if (!array_key_exists($key, $cache)) {
+                $cache[$key] = $log->getRelation($relation, true);
             }
+
+            $log->setRelation($relation, $cache[$key]);
         }
         return $list;
+    }
+
+    /**
+     * 获取客服消息携带的业务关联名。
+     *
+     * @param int $type
+     * @return string|null
+     */
+    protected function getSendRelation(int $type): ?string
+    {
+        return [
+            4 => 'product',
+            5 => 'orderInfo',
+            6 => 'refundOrder',
+            7 => 'presell',
+            8 => 'productGroup',
+        ][$type] ?? null;
     }
 
     /**

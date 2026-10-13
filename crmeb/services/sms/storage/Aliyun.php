@@ -16,10 +16,9 @@ use app\common\repositories\system\notice\SystemNoticeConfigRepository;
 use crmeb\services\BaseSmss;
 use \Exception;
 use AlibabaCloud\Tea\Exception\TeaError;
-use AlibabaCloud\Tea\Utils\Utils;
 use Darabonba\OpenApi\Models\Config as AliConfig;
 use AlibabaCloud\SDK\Dysmsapi\V20170525\Models\SendSmsRequest;
-use AlibabaCloud\Tea\Utils\Utils\RuntimeOptions;
+use AlibabaCloud\Dara\Models\RuntimeOptions;
 use think\exception\ValidateException;
 use think\facade\Config;
 
@@ -93,7 +92,6 @@ class Aliyun extends BaseSmss
             }
             // 如有需要，请打印 error
             throw new ValidateException('【阿里云平台错误提示】：'.$error->message);
-            //$resp = Utils::assertAsString($error->message);
         }
         if (isset($resp) && $resp->body->code !== 'OK') {
             throw new ValidateException('【阿里云平台错误提示】：'.$resp->body->message);

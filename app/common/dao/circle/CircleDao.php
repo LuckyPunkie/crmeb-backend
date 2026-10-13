@@ -36,15 +36,22 @@ class CircleDao extends BaseDao
 
         $query->when(isset($where['circle_agent_id']) && $where['circle_agent_id'] !== '', function ($query) use ($where) {
             $query->where('circle_agent_id', $where['circle_agent_id']);
-        })->when(isset($where['name']) && $where['name'] !== '', function ($query) use ($where) {
+        })
+            ->when(isset($where['name']) && $where['name'] !== '', function ($query) use ($where) {
             $query->whereLike('name', "%{$where['name']}%");
-        })->when(isset($where['create_time']) && !empty($where['create_time']), function ($query) use ($where) {
+        })
+            ->when(isset($where['create_time']) && !empty($where['create_time']), function ($query) use ($where) {
             $query->whereBetween('create_time', $where['create_time']);
-        })->when(isset($where['status']) && $where['status'] !== '', function ($query) use ($where) {
+        })
+            ->when(isset($where['status']) && $where['status'] !== '', function ($query) use ($where) {
             $query->where('status', $where['status']);
-        })->when(isset($where['type']) && $where['type'] !== '', function ($query) use ($where) {
+        })
+            ->when(isset($where['type']) && $where['type'] !== '', function ($query) use ($where) {
             $query->where('type', $where['type']);
-        });
+        })
+            ->when(isset($where['region_ids']) && $where['region_ids'] !== '', function ($query) use ($where) {
+                $query->whereIn('circle_id', $where['region_ids']);
+            });
 
         $query->order('sort DESC, create_time DESC');
 

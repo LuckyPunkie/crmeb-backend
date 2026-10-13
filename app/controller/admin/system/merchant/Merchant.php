@@ -14,7 +14,9 @@
 namespace app\controller\admin\system\merchant;
 
 
+use think\facade\Log;
 use crmeb\services\pay\Pay;
+use think\exception\ValidateException;
 use app\common\repositories\store\coupon\StoreCouponRepository;
 use app\common\repositories\store\product\ProductCopyRepository;
 use app\common\repositories\store\service\StoreServiceRepository;
@@ -64,6 +66,10 @@ class Merchant extends BaseController
     public function count()
     {
         $where = $this->request->params(['keyword', 'date', 'status', 'statusTag', 'is_trader', 'category_id', 'type_id', 'is_best','offline_switch','region_id']);
+        if ($this->request->isAgent() === 2) {
+            $businessIds = array_values(array_filter(array_unique(array_map('intval', (array)$this->request->adminInfo()->region_ids))));
+            $where['business_id'] = $businessIds ?: [-1];
+        }
         return app('json')->success($this->repository->count($where));
     }
 
@@ -76,6 +82,10 @@ class Merchant extends BaseController
     {
         [$page, $limit] = $this->getPage();
         $where = $this->request->params(['keyword', 'date', 'status', 'statusTag', 'is_trader', 'category_id', 'type_id', ['order', 'create_time'], 'is_best','offline_switch','region_id', 'business_id','mer_state']);
+        if ($this->request->isAgent() === 2) {
+            $businessIds = array_values(array_filter(array_unique(array_map('intval', (array)$this->request->adminInfo()->region_ids))));
+            $where['business_id'] = $businessIds ?: [-1];
+        }
         return app('json')->success($this->repository->lst($where, $page, $limit));
     }
 
@@ -177,6 +187,9 @@ class Merchant extends BaseController
                 // 批量新增关联关系
                 $relevanceRepository->insertAll($relevance);
             }
+            $data['platform_category'] = is_array($data['platform_category']) ? json_encode($data['platform_category']) : $data['platform_category'];
+            $data['mer_product_type'] = is_array($data['mer_product_type']) ? json_encode($data['mer_product_type'])
+                : $data['mer_product_type'];
 
             $this->repository->update($id, $data);
         });
@@ -232,12 +245,22 @@ class Merchant extends BaseController
      */
     public function checkParam(MerchantValidate $validate, $isUpdate = false)
     {
-        $data = $this->request->params([['category_id', 0], ['type_id', 0], 'mer_name', 'commission_rate', 'real_name', 'mer_phone', 'mer_keyword', 'mer_address', 'mark', ['sort', 0], ['status', 0], ['is_audit', 0], ['is_best', 0], ['is_bro_goods', 0], ['is_bro_room', 0], ['is_trader', 0], 'sub_mchid', ['commission_switch', 0],['offline_switch',0],['region_id', 0],['business_id', 0],['applyment_id',''],['store_group_ids', []]]);
+        $data = $this->request->params([['category_id', 0], ['type_id', 0], 'mer_name', 'commission_rate', 'real_name', 'mer_phone', 'mer_keyword', 'mer_address', 'mark', ['sort', 0], ['status', 0], ['is_audit', 0], ['is_best', 0], ['is_bro_goods', 0], ['is_bro_room', 0], ['is_trader', 0], 'sub_mchid', ['commission_switch', 0],['offline_switch',0],['region_id', 0],['business_id', 0],['applyment_id',''],['store_group_ids', []], ['platform_category', []], ['mer_product_type', []],['mer_start',3]]);
+
         if (!$isUpdate) {
             $data += $this->request->params(['mer_account', 'mer_password']);
         } else {
             $validate->isUpdate();
         }
+        //$category_number_count = systemConfig('category_number_count');
+        //if (
+        //    $category_number_count &&
+        //    (count($data['platform_category']) > $category_number_count)
+        //) {
+        //    throw new ValidateException(
+        //        '分类数量最多为: ' . $category_number_count
+        //    );
+        //}
         $validate->check($data);
         return $data;
     }
@@ -370,7 +393,7 @@ class Merchant extends BaseController
      */
     public function makeUpMarginLst()
     {
-        [$page, $limit] = $this->getPage();  
+        [$page, $limit] = $this->getPage();
         $where = $this->request->params(['keyword', 'date', 'status', 'statusTag', 'is_trader', 'category_id', 'type_id', ['order', 'create_time'], 'is_best','offline_switch','region_id', 'business_id','mer_state']);
         $where['margin'] = 0;
         $data = $this->repository->lst($where, $page, $limit);

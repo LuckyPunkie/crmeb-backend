@@ -105,6 +105,16 @@ class RefundOrder extends BaseController
     }
 
     /**
+     * 获取平台退款订单各状态数量，筛选条件与列表保持一致
+     * @return \think\response\Json 退款订单各状态统计
+     */
+    public function title()
+    {
+        $where = $this->request->params(['refund_order_sn', 'status', 'refund_type', 'date', 'mer_id', 'order_sn', 'is_trader','uid','phone','real_name','nickname']);
+        return app('json')->success($this->repository->getAllStat($where));
+    }
+
+    /**
      * 根据和解单ID获取和解记录列表
      *
      * 本函数用于根据提供的和解单ID，检索和解记录列表。它首先确定分页信息，然后构建查询条件，

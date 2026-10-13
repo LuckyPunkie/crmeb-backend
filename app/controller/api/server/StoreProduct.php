@@ -52,6 +52,16 @@ class StoreProduct extends BaseController
     }
 
     /**
+     * 商品管理指定状态统计
+     * @param $merId
+     * @return \think\response\Json
+     */
+    public function statistics($merId)
+    {
+        return app('json')->success($this->repository->getServerStatistics((int)$merId));
+    }
+
+    /**
      *  列表
      * @param $merId
      * @return \think\response\Json

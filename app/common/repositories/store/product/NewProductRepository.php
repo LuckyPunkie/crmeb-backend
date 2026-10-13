@@ -171,7 +171,6 @@ class NewProductRepository extends ProductRepository
             'temp',
             'brand',
             'content',
-            'merCateId',
             'attr_result',
             'reservation',
             'oldAttrValue',
@@ -206,7 +205,7 @@ class NewProductRepository extends ProductRepository
         $info['merchant']['mer_integral_status'] = merchantConfig($info['merchant']['mer_id'], 'mer_integral_status');
         $info['storeCategory']['cate_name'] = app()->make(StoreCategoryRepository::class)->getAllFatherName($info['storeCategory']['store_category_id']);
 
-        unset($info['merCateId']);
+        //unset($info['merCateId']);
 
         return $info;
     }

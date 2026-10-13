@@ -97,8 +97,13 @@ class StoreProduct extends BaseController
             app()->make(UserMerchantRepository::class)->updateLastTime($this->request->uid(), $data['mer_id']);
         }
 
+        $now = time();
         foreach ($data['activity_labels'] as $key => $item) {
-            if(!$item['is_show']) unset($data['activity_labels'][$key]);
+            $startTime = empty($item['start_time']) ? 0 : strtotime($item['start_time']);
+            $endTime = empty($item['end_time']) ? 0 : strtotime($item['end_time']);
+            if (!$item['is_show'] || ($startTime && $startTime > $now) || ($endTime && $endTime < $now)) {
+                unset($data['activity_labels'][$key]);
+            }
         }
         $data['activity_labels'] = array_values($data['activity_labels']);
 
@@ -150,7 +155,17 @@ class StoreProduct extends BaseController
         $data['attr'] = $this->repository->detailAttr($attr);
 
         // 查询指定产品ID的所有属性值信息
-        $data['attrValue'] = $productAttrValueRepository->getSearch([])->where('product_id', $id)->select();
+        $attrValue = $productAttrValueRepository->getSearch([])
+            ->where('product_id', $id)
+            ->with(['cardRule'])
+            ->select()
+            ->toArray();
+        foreach ($attrValue as &$value) {
+            $value['card_rule'] = $this->repository->formatProductCardRule($value['cardRule'] ?? []);
+            unset($value['cardRule']);
+        }
+        unset($value);
+        $data['attrValue'] = $attrValue;
 
         // 返回处理后的数据，以JSON格式响应
         return app('json')->success($data);
@@ -572,15 +587,16 @@ class StoreProduct extends BaseController
      */
     public function recommendProduct()
     {
-        $params = $this->request->params([['recommend_num', 1], 'product_id']);
-        if(!$params['product_id']) {
-            return app('json')->fail('商品ID不能为空');
-        }
-        if(!isset($params['recommend_num'])) {
-            return app('json')->fail('推荐数量不能为空');
+        $productId = (int)$this->request->param('product_id/d', 0);
+        $recommendNum = (int)$this->request->param('recommend_num/d', 1);
+        if(!$productId || $recommendNum < 1) {
+            return app('json')->success([]);
         }
 
-        $data = $this->repository->recommendProduct($params);
+        $data = $this->repository->recommendProduct([
+            'product_id' => $productId,
+            'recommend_num' => $recommendNum,
+        ]);
         return app('json')->success($data);
     }
 }

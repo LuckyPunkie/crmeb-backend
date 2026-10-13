@@ -234,6 +234,7 @@ class ProductBatchProcessRepository extends BaseRepository
                 app()->make(ProductAttrValueRepository::class)->updatesExtension($ids, $data);
                 break;
             case 'member':
+                $data['member_price_setting'] = 1;
                 $this->dao->updates($ids, $data);
                 break;
             case 'sys_form':

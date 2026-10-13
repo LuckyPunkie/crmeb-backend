@@ -170,7 +170,7 @@ class Jdoss extends BaseUpload
                 'timeout' => 30,
             ]);
             $this->fileInfo->uploadInfo = $uploadInfo;
-            $this->fileInfo->filePath = ($this->cdn ?: $this->uploadUrl) . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
             $this->fileInfo->fileName = $key;
 
@@ -409,7 +409,7 @@ class Jdoss extends BaseUpload
             return [
                 'upload_url' => $url . '?' . implode('&', $query),
                 'type' => 'JDOSS',
-                'url' => ($this->cdn ?: $this->uploadUrl) . '/' . $key,
+                'url' => $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key),
                 'cdn' => $this->cdn,
                 'bucket' => $this->storageName,
                 'region' => $this->storageRegion ?: 'cn-north-1',

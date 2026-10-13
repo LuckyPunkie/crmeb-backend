@@ -84,6 +84,13 @@ class MerchantServerMiddleware extends BaseMiddleware
             if ($deliveryParams['reqire'] && !$delivery) {
                 throw new HttpResponseException(app('json')->fail('[3]您没有权限操作'));
             }
+            $platformDelivery = array_filter($delivery, function ($item) {
+                return (int)$item['type'] === 0;
+            });
+            $merchantDelivery = array_filter($delivery, function ($item) {
+                return (int)$item['type'] === 1;
+            });
+            $deliveryRole = $platformDelivery ? ($merchantDelivery ? 'both' : 'platform') : 'merchant';
             $request->macro('isDelivery', function () use (&$delivery) {
                 return $delivery ? true : false;
             });
@@ -91,11 +98,25 @@ class MerchantServerMiddleware extends BaseMiddleware
                 return $delivery;
             });
             $request->macro('deliveryIds', function () use (&$delivery) {
-                $delivery_id = array_column($delivery,'service_id');
-                return $delivery_id;
+                return array_map('intval', array_column($delivery, 'service_id'));
             });
             $request->macro('deliveryMerIds', function () use (&$delivery) {
                 return array_keys($delivery);
+            });
+            $request->macro('deliveryRole', function () use ($deliveryRole) {
+                return $deliveryRole;
+            });
+            $request->macro('isPlatformDelivery', function () use ($platformDelivery) {
+                return !empty($platformDelivery);
+            });
+            $request->macro('platformDeliveryIds', function () use ($platformDelivery) {
+                return array_map('intval', array_column($platformDelivery, 'service_id'));
+            });
+            $request->macro('merchantDeliveryIds', function () use ($merchantDelivery) {
+                return array_map('intval', array_column($merchantDelivery, 'service_id'));
+            });
+            $request->macro('deliveryMerchantIds', function () use ($merchantDelivery) {
+                return array_values(array_unique(array_map('intval', array_column($merchantDelivery, 'mer_id'))));
             });
         }
     }
@@ -103,8 +124,8 @@ class MerchantServerMiddleware extends BaseMiddleware
     protected function getDelivery($userInfo)
     {
         $serviceRepository = app()->make(DeliveryServiceRepository::class);
-        $delivery = $serviceRepository->getSearch(['uid' => $userInfo->uid, 'status' => 1])
-            ->column('service_id,mer_id,uid,avatar,name,phone,status','mer_id');
+        $delivery = $serviceRepository->getSearch(['uid' => $userInfo->uid, 'is_del' => 0])
+            ->column('service_id,mer_id,uid,avatar,name,phone,status,type','mer_id');
         return $delivery;
     }
 

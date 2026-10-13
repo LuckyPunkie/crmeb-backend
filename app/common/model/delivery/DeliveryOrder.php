@@ -42,6 +42,26 @@ class DeliveryOrder extends BaseModel
         return $value;
     }
 
+    public function setPickupImagesAttr($value): string
+    {
+        return is_array($value) ? implode(',', array_filter($value, static fn($item) => $item !== null && $item !== '')) : (string)$value;
+    }
+
+    public function getPickupImagesAttr($value): array
+    {
+        return $value ? array_values(array_filter(explode(',', $value), static fn($item) => $item !== '')) : [];
+    }
+
+    public function setConfirmImagesAttr($value): string
+    {
+        return is_array($value) ? implode(',', array_filter($value, static fn($item) => $item !== null && $item !== '')) : (string)$value;
+    }
+
+    public function getConfirmImagesAttr($value): array
+    {
+        return $value ? array_values(array_filter(explode(',', $value), static fn($item) => $item !== '')) : [];
+    }
+
     public function merchant()
     {
         return $this->hasOne(Merchant::class, 'mer_id','mer_id');
@@ -69,7 +89,7 @@ class DeliveryOrder extends BaseModel
 
     public function getDistanceAttr($value, $data)
     {
-        if($data['station_type'] == 0) {
+        if ((int)($data['station_type'] ?? 0) === 0 && (float)$value <= 0) {
             return $this->storeOrder['merchant_take_info'][$data['mer_id']]['distance'] ?? '';
         }
 
@@ -87,7 +107,13 @@ class DeliveryOrder extends BaseModel
 
     public function searchKeywordAttr($query,$value)
     {
-        $query->whereLike('order_sn|from_address',"%{$value}%");
+        $merchantIds = Merchant::whereLike('mer_name', "%{$value}%")->column('mer_id');
+        $query->where(function ($query) use ($value, $merchantIds) {
+            $query->whereLike('order_sn|from_address', "%{$value}%");
+            if ($merchantIds) {
+                $query->whereOr('mer_id', 'in', $merchantIds);
+            }
+        });
     }
 
     public function searchMerIdAttr($query,$value)
@@ -98,6 +124,17 @@ class DeliveryOrder extends BaseModel
     public function searchStationIdAttr($query,$value)
     {
         $query->where('station_id',$value);
+    }
+
+    public function searchStationNameAttr($query, $value)
+    {
+        $ids = DeliveryStation::whereLike('station_name', "%{$value}%")->column('station_id');
+        $query->whereIn('station_id', $ids);
+    }
+
+    public function searchServiceIdAttr($query,$value)
+    {
+        $query->where('service_id',$value);
     }
 
     public function searchStationTypeAttr($query,$value)
@@ -115,6 +152,9 @@ class DeliveryOrder extends BaseModel
     }
     public function searchDateAttr($query,$value)
     {
+        if (preg_match('/^(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})$/', $value, $matches)) {
+            $value = str_replace('-', '/', $matches[1]) . '-' . str_replace('-', '/', $matches[2]);
+        }
         getModelTime($query, $value);
     }
     public function searchOrderSnAttr($query,$value)

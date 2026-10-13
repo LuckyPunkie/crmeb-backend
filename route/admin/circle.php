@@ -40,6 +40,9 @@ Route::group(function () {
             '_alias' => '关联商户列表',
         ]);
         Route::get('options', '/options');
+        Route::get('qrcode/:id', '/qrcode')->name('systemCircleQrcode')->option([
+            '_alias' => '商圈入驻二维码',
+        ]);
     })->prefix('admin.circle.Circle')->option([
         '_path' => ['/business-zones/index', '/merchant/index'],
         '_auth' => true,

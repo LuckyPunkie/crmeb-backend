@@ -11,6 +11,7 @@
 
 namespace crmeb\services\wechat;
 
+use think\facade\Route;
 use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Log;
@@ -32,12 +33,14 @@ use crmeb\services\wechat\config\OpenWebConfig;
 use crmeb\services\wechat\v3pay\PartnerClient;
 use crmeb\services\wechat\config\PaymentConfig;
 use crmeb\services\wechat\config\V3PaymentConfig;
+use crmeb\services\wechat\util\Helper;
 use crmeb\services\wechat\client\pay\OrderClient;
 use EasyWeChat\Kernel\Exceptions\RuntimeException;
 use crmeb\services\wechat\config\MiniProgramConfig;
 use EasyWeChat\Kernel\Exceptions\InvalidConfigException;
 use EasyWeChat\Kernel\Exceptions\InvalidArgumentException;
 use Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface;
+use think\helper\Str;
 
 
 /**
@@ -142,17 +145,37 @@ class Payment extends BaseApplication
         return app()->make(static::class);
     }
 
+    /**
+     * 判断当前支付配置是否为V3版微信支付
+     * @return bool 是否V3支付
+     */
     public function isV3Pay()
     {
         $this->isV3PAy = $this->config->isV3PAy;
         return $this->isV3PAy;
     }
 
+    /**
+     * 设置支付访问渠道（公众号/小程序/APP/PC），并同步V3支付与服务平台配置
+     * @param string $accessEnd 渠道标识：web、mini、app、pc
+     * @return Payment 当前支付实例
+     */
+    public function setAccessEnd(string $accessEnd)
+    {
+        parent::setAccessEnd($accessEnd);
+        $this->v3Config->setAccessEnd($this->accessEnd);
+        $this->serviceConfig->setAccessEnd($this->accessEnd);
+        return $this;
+    }
+
+    /**
+     * 设置支付渠道（等价于设置访问渠道）
+     * @param $channel 渠道标识：web、mini、app、pc
+     * @return Payment 当前支付实例
+     */
     public function setChannel($channel)
     {
-        $this->channel = $channel;
-        $this->config->setChannel($channel);
-        return $this;
+        return $this->setAccessEnd($channel);
     }
 
 
@@ -168,11 +191,19 @@ class Payment extends BaseApplication
         return $this->payClient->setChannel($this->accessEnd);
     }
 
+    /**
+     * 获取服务商支付客户端（按当前渠道配置）
+     * @return PartnerClient 服务商支付客户端
+     */
     public function partnerClient()
     {
         return $this->partnerClient->setChannel($this->accessEnd);
     }
 
+    /**
+     * 获取合单支付客户端（按当前渠道配置）
+     * @return CombineClient 合单支付客户端
+     */
     public function CombineClient()
     {
         return $this->combineClient->setChannel($this->accessEnd);
@@ -207,7 +238,9 @@ class Payment extends BaseApplication
     public function application(): Application
     {
         $request = request();
+
         $config = $this->config->all();
+
         $accessEnd = $this->getAuthAccessEnd($request);
         switch ($accessEnd) {
             case self::APP:
@@ -295,7 +328,8 @@ class Payment extends BaseApplication
      * @throws InvalidConfigException
      * @throws TransportExceptionInterface
      */
-    public static function microPay(string $authCode, string $outTradeNo, string $totalFee, string $attach, string $body, string $detail = '')
+    public static function microPay(string $authCode, string $outTradeNo, string $totalFee, string $attach, string
+    $body, string $detail = '')
     {
 		$self = self::instance();
 		$wechatAppId = $self->config->getConfig('official.appid', '');
@@ -309,8 +343,6 @@ class Payment extends BaseApplication
 				throw new PayException('请先配置公众号或者小程序');
 			}
 		}
-		$self->autoInjectServicePay();
-		$isService = false;
 		$totalFee = bcmul($totalFee, 100, 0);
 		$data = [
 			'auth_code' => $authCode,
@@ -320,13 +352,7 @@ class Payment extends BaseApplication
 			'body' => $body,
 			'detail' => $detail
 		];
-		//开启服务商分账
-		if ($self->serviceConfig->isServicePay && $self->serviceConfig->subMchid) {
-			$data['sub_mch_id'] = $self->serviceConfig->subMchid;//特约子商户商户号
-			$data['profit_sharing'] = "Y";
-			$isService = true;
-		}
-        $response = $self->order($isService)->pay($data);
+        $response = $self->order()->pay($data);
         $response = $response->toArray();
 
         self::logger('付款码支付', compact('authCode', 'outTradeNo', 'totalFee', 'attach', 'body', 'detail'), $response);
@@ -409,20 +435,18 @@ class Payment extends BaseApplication
 
     /**
      * 企业付款到零钱
-     * @param string $openid openid
+     * @param string $channel_type 渠道类型
+     * @param string $openid 收款人的openid
      * @param string $orderId 订单号
      * @param string $amount 金额
      * @param string $desc 说明
-     * @param string $type 类型
      * @return bool
      * @throws InvalidArgumentException
      * @throws TransportExceptionInterface
      * @throws \Psr\SimpleCache\InvalidArgumentException|InvalidConfigException
      */
-    public static function merchantPay(string $channel_type, int $uid, string $orderId, string $amount, string $desc, string $user_name = '', array $transferDetailList = [])
+    public static function merchantPay(string $channel_type, string $openid, string $orderId, string $amount, string $desc, string $user_name = '', array $transferDetailList = [])
     {
-        /** @var WechatUserServices $wechatServices */
-        $wechatServices = app()->make(WechatUserServices::class);
         $typeMap = [
             'routine' => Payment::MINI,
             'wechat' => Payment::WEB,
@@ -430,14 +454,12 @@ class Payment extends BaseApplication
         ];
 
         $channelType = $channel_type;
-        $openid = '';
         $type = null;
 
         if (isset($typeMap[$channelType])) {
-            $openid = $wechatServices->getWechatOpenid($uid, $channelType);
             $type = $typeMap[$channelType];
         }
-        if (!$openid) {
+        if (!$type || !$openid) {
             throw new PayException('该用户暂不支持企业付款到零钱，请手动转账');
         }
         $application = self::instance()->setAccessEnd($type)->application();
@@ -448,44 +470,24 @@ class Payment extends BaseApplication
         if (empty($config['private_key'])) {
             throw new PayException('企业付款到零钱需要支付key证书，检测到您没有上传！');
         }
-        if (self::instance()->isV3PAy) {
-//            if (sys_config('v3_pay_public_key') != '') {
-                $transfer_scene_id = sys_config('pay_weixin_scene_id');
-                if (!$transfer_scene_id) {
-                    throw new PayException('请配置微信v3新支付场景ID！');
-                }
-                $user_name = $user_name ?: app()->make(UserServices::class)->value(['uid' => $uid], 'nickname');
-                //v3新支付
-                $res = self::instance()->payClient()->setType($type)->transferBills(
-                    outBatchNo: $orderId,
-                    amount: $amount,
-                    openid: $openid,
-                    userName: $user_name,
-                    remark: $desc,
-                    perception: $desc,
-                    transferDetailList: $transferDetailList,
-                    transfer_scene_id: $transfer_scene_id
-                );
-                self::logger('商家转账到零钱', compact('orderId', 'amount', 'openid', 'desc', 'user_name', 'transferDetailList', 'transfer_scene_id'), $res);
-//            } else {
-//                //v3支付使用发起商家转账API
-//                $res = self::instance()->payClient()->setType($type)->batches(
-//                    outBatchNo: $orderId,
-//                    amount: $amount,
-//                    batchName: $desc,
-//                    remark: $desc,
-//                    transferDetailList: [
-//                        [
-//                            'out_detail_no' => $orderId,
-//                            'transfer_amount' => $amount,
-//                            'transfer_remark' => $desc,
-//                            'openid' => $openid
-//                        ]
-//                    ]
-//                );
-//            }
+        if (self::instance()->isV3PAy()) {
+            $transfer_scene_id = systemConfig('transfer_scene_id');
+            if (!$transfer_scene_id) {
+                throw new PayException('请配置微信v3新支付场景ID！');
+            }
+            //v3新支付
+            $res = self::instance()->payClient()->setType($type)->transferBills(
+                outBatchNo: $orderId,
+                amount: $amount,
+                openid: $openid,
+                userName: $user_name,
+                remark: $desc,
+                perception: $desc,
+                transferDetailList: $transferDetailList,
+                transfer_scene_id: $transfer_scene_id
+            );
+            self::logger('商家转账到零钱', compact('orderId', 'amount', 'openid', 'desc', 'user_name', 'transferDetailList', 'transfer_scene_id'), $res);
             return $res;
-
         } else {
             $merchantPayData = [
                 'partner_trade_no' => $orderId, //随机字符串作为订单号，跟红包和支付一个概念。
@@ -640,10 +642,27 @@ class Payment extends BaseApplication
      */
     public function appPay($openid, $out_trade_no, $total_fee, $attach, $body, $detail = '', $trade_type = 'APP', $options = [])
     {
-        $paymentPrepare =$this->paymentOrder($openid, $out_trade_no, $total_fee, $attach, $body, $detail,
+        $paymentPrepare = $this->paymentOrder($openid, $out_trade_no, $total_fee, $attach, $body, $detail,
             $trade_type, $options);
-        return $this->application()->getUtils()->buildAppConfig($paymentPrepare['prepay_id'], $this->application()
-            ->getConfig()->get('app_id'));
+        $application = $this->application();
+        $config = $application->getConfig();
+
+        if ($this->isV3PAy()) {
+            return $application->getUtils()->buildAppConfig($paymentPrepare['prepay_id'], $config->get('app_id'));
+        }
+
+        // V2 App 支付调起参数必须使用 V2 API Key 签名，不能使用 V3 RSA 签名。
+        $params = [
+            'appid' => $config->get('app_id'),
+            'partnerid' => $config->get('mch_id'),
+            'prepayid' => $paymentPrepare['prepay_id'],
+            'noncestr' => Str::random(16),
+            'timestamp' => time(),
+            'package' => 'Sign=WXPay',
+        ];
+        $params['sign'] = Helper::generateSign($params, $config->get('v2_secret_key'));
+
+        return $params;
     }
 
 
@@ -666,7 +685,7 @@ class Payment extends BaseApplication
     {
         $instance = self::instance();
 
-        if ($instance->isV3PAy) {
+        if ($instance->isV3PAy()) {
             $data = $instance->payClient()->nativePay($out_trade_no, $total_fee, $body, $attach);
             $res['code_url'] = $data['code_url'];
             $res['invalid'] = time() + 60;
@@ -781,7 +800,8 @@ class Payment extends BaseApplication
             throw new PayException('支付证书key不存在');
         }
 
-        if ($this->isV3PAy) {
+        if ($this->isV3PAy()) {
+            $orderNo = $opt['transaction_id'] ?? $orderNo;
             return $this->payClient()->refund($orderNo, $opt);
         }
 
@@ -792,7 +812,7 @@ class Payment extends BaseApplication
         $opUserId = $opt['open_id'] ?? null;
         $type = $opt['type'] ?? 'out_trade_no';
         if ($type == 'out_trade_no') {
-            $orderNo = $opt['out_trade_no'] ?? $orderNo;
+            $orderNo = $opt['transaction_id'] ?? $orderNo;
         }
         /*
          * 仅针对老资金流商户使用
@@ -861,16 +881,12 @@ class Payment extends BaseApplication
     public function handleMchNotify()
     {
         $response = $this->payClient()->handleNotify(function ($notify, $success) {
-            self::logger('商家转账成功回调接口', [], $notify);
-            if (isset($notify['transfer_bill_no']) && $success) {
-                $res = Event::until('pay.mchNotify', [$notify]);
-                if ($res) {
-                    return $res;
-                } else {
-                    return false;
-                }
+            self::logger($success ? '商家转账成功回调接口' : '商家转账失败回调接口', [], $notify);
+            if (isset($notify['transfer_bill_no'], $notify['out_bill_no'])) {
+                event('company_extract_status', ['data' => $notify]);
+                return true;
             }
-
+            return false;
         });
 
         return response($response->getContent());
@@ -886,16 +902,15 @@ class Payment extends BaseApplication
      */
     public function handleNotify()
     {
-        if ($this->isV3PAy) {
+        if ($this->isV3PAy()) {
             $response = $this->payClient()->handleNotify(function ($notify, $success) {
                 self::logger('微信支付成功回调接口', [], $notify);
                 if (isset($notify['out_trade_no']) && $success) {
-                    $res = Event::until('pay.notify', [$notify, 'wechat']);
-                    if ($res) {
-                        return $res;
-                    } else {
-                        return false;
-                    }
+                    event(
+                        'pay_success_' . $notify['attach'],
+                        ['order_sn' => $notify['out_trade_no'], 'data' => $notify, 'is_combine' => 0]
+                    );
+                    return true;
                 }
             });
             return response($response->getContent());
@@ -910,7 +925,6 @@ class Payment extends BaseApplication
                     'pay_success_' . $message['attach'],
                     ['order_sn' => $message['out_trade_no'], 'data' => $message, 'is_combine' => 0]
                 );
-                //Event::until('pay.notify', [$message, 'wechat']);
                 return response(XML::build(['return_code' => 'success', 'return_message' => 'OK']), 200, [], 'xml');
             } else {
                 return response(XML::build(['return_code' => 'fail', 'return_message' => 'FAIL']), 500, [], 'xml');
@@ -925,7 +939,10 @@ class Payment extends BaseApplication
      */
     public function checkSignV2($message)
     {
-        $sign = $message['sign'];
+        $sign = (string)($message['sign'] ?? '');
+        if ($sign === '') {
+            return false;
+        }
         unset($message['sign']);
         if ($this->generate_sign($message, $this->config->key) !== $sign) {
             return false;
@@ -958,6 +975,27 @@ class Payment extends BaseApplication
      */
     public function handleRefundedNotify()
     {
+        if (!$this->isV3Pay()) {
+            $outerMessage = XML::parse((string)request()->getContent());
+            if (!is_array($outerMessage) || strtoupper((string)($outerMessage['return_code'] ?? '')) !== 'SUCCESS') {
+                return response(XML::build([
+                    'return_code' => 'SUCCESS',
+                    'return_msg' => 'OK',
+                ]), 200, [], 'xml');
+            }
+
+            // V2 退款通知的退款明细在 req_info 中，需要通过 EasyWeChat 解密后再派发事件。
+            $message = $this->application()->getServer()->getRequestMessage()->toArray();
+            self::logger('退款结果通知', [], compact('message'));
+            if (strtoupper((string)($message['refund_status'] ?? '')) === 'SUCCESS') {
+                Event::until('pay.refunded.notify', [$message]);
+            }
+            return response(XML::build([
+                'return_code' => 'SUCCESS',
+                'return_msg' => 'OK',
+            ]), 200, [], 'xml');
+        }
+
         $response = $this->application()->getServer()->handleRefunded(function ($message, \Closure $next) {
 
             self::logger('退款结果通知', [], compact('message'));

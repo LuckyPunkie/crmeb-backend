@@ -47,5 +47,9 @@ return [
         'product:import' => 'app\command\ProductImport',
         //导入SQL文件
         'sql:import' => 'app\command\ImportSql',
+        //查询退款中的支付宝购物金退款单
+        'merchant:shopping-credits-refund-query' => 'app\command\QueryShoppingCreditsRefund',
+        //补发店铺会员入会和升级优惠券
+        'merchant:member-level-reward-retry' => 'app\command\RetryMerchantMemberLevelReward',
     ],
 ];

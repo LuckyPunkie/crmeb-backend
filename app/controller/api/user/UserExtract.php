@@ -129,4 +129,10 @@ class UserExtract extends BaseController
     }
 
 
+    public function confrim($id)
+    {
+        $res = $this->repository->confrim($id);
+        return app('json')->success('ok');
+    }
+
 }

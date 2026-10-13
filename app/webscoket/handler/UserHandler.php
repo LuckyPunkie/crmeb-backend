@@ -284,7 +284,8 @@ class UserHandler
         }
         app()->make(StoreServiceUserRepository::class)->updateInfo($log, true);
         $storeServiceLogRepository->getSendData($log);
-        $log->user;
+        // ThinkORM 3 懒加载关联不会自动包含在 toArray() 中，客服端实时消息需要用户资料。
+        $log->setRelation('user', $log->getRelation('user', true));
         $log = $log->toArray();
         $log['send_time'] = strtotime($log['create_time']);
         $log['send_date'] = date('H:i',strtotime($log['create_time']));

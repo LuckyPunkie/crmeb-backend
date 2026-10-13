@@ -110,6 +110,9 @@ Route::group(function () {
         Route::get('refund/lst', 'RefundOrder/getAllList')->name('systemRefundOrderLst')->option([
             '_alias' => '列表',
         ]);
+        Route::get('refund/title', 'RefundOrder/title')->name('systemRefundOrderTitle')->option([
+            '_alias' => '退款单状态统计',
+        ]);
         Route::get('refund/detail/:id', 'RefundOrder/detail')->name('systemRefundOrderDetail')->option([
             '_alias' => '详情',
         ]);

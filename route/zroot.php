@@ -13,14 +13,16 @@ use app\common\middleware\CheckSiteOpenMiddleware;
 use app\common\middleware\InstallMiddleware;
 use think\facade\Route;
 
+// 客服入口
 Route::group(config('admin.service_prefix'), function () {
     Route::miss(function () {
         $DB = DIRECTORY_SEPARATOR;
-        return __view(app()->getRootPath() . 'public' . $DB . 'ser.html');
+        return __view(app()->getRootPath() . 'public' . $DB . 'kefu.html');
     });
 })->middleware(InstallMiddleware::class)
     ->middleware(CheckSiteOpenMiddleware::class);
 
+// 商户入口
 Route::group(config('admin.merchant_prefix'), function () {
     Route::miss(function () {
         $DB = DIRECTORY_SEPARATOR;
@@ -29,7 +31,24 @@ Route::group(config('admin.merchant_prefix'), function () {
 })->middleware(InstallMiddleware::class)
     ->middleware(CheckSiteOpenMiddleware::class);
 
+// 平台入口
 Route::group(config('admin.admin_prefix'), function () {
+    Route::miss(function () {
+        $DB = DIRECTORY_SEPARATOR;
+        return __view(app()->getRootPath() . 'public' . $DB . 'system.html');
+    });
+})->middleware(InstallMiddleware::class);
+
+// 代理入口
+Route::group(config('admin.agent_prefix'), function () {
+    Route::miss(function () {
+        $DB = DIRECTORY_SEPARATOR;
+        return __view(app()->getRootPath() . 'public' . $DB . 'system.html');
+    });
+})->middleware(InstallMiddleware::class);
+
+// 商户入口
+Route::group(config('admin.circle_prefix'), function () {
     Route::miss(function () {
         $DB = DIRECTORY_SEPARATOR;
         return __view(app()->getRootPath() . 'public' . $DB . 'system.html');

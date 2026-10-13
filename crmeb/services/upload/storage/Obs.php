@@ -102,7 +102,7 @@ class Obs extends BaseUpload
             $uploadInfo = $this->app()->putObject($key, $body, 'application/octet-stream');
             $this->fileInfo->uploadInfo = $uploadInfo;
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
-            $this->fileInfo->filePath = ($this->cdn ?: $this->uploadUrl) . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
             $isImage = isset($fileHandle) ? $this->isImageFileHandle($fileHandle) : $this->isImageByPath($key);
             return $this->afterUpload($isImage, $this->fileInfo->filePath, $this->fileInfo->fileName);

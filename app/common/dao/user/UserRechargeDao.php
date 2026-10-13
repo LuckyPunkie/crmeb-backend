@@ -90,7 +90,7 @@ class UserRechargeDao extends BaseDao
             // 加入用户表b，根据uid进行关联
             ->join('User b', 'a.uid = b.uid')
             // 指定查询的字段，包括充值相关字段和用户相关字段
-            ->field('a.paid,a.order_id,a.recharge_id,b.nickname,b.avatar,a.price,a.give_price,a.recharge_type,a.pay_time,a.recharge_type')
+            ->field('a.paid,a.order_id,a.recharge_id,b.nickname,b.avatar,a.price,a.give_price,a.refund_price,a.status,a.recharge_type,a.pay_time,a.recharge_type')
             // 当keyword条件存在且不为空时，添加模糊搜索条件，搜索昵称或订单号
             ->when(isset($where['keyword']) && $where['keyword'] !== '', function ($query) use ($where) {
                 $query->whereLike('b.nickname|a.order_id', "%{$where['keyword']}%");

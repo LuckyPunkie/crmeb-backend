@@ -12,24 +12,19 @@
 
 namespace app\controller\api\store\order;
 
-use app\common\repositories\store\order\StoreOrderRepository;
+use think\App;
+use crmeb\basic\BaseController;
+use think\exception\ValidateException;
+use app\common\repositories\user\UserRepository;
+use app\validate\api\StoreCartValidate as validate;
 use app\common\repositories\store\pionts\PointsProductRepository;
-use app\common\repositories\store\product\ProductAssistRepository;
 use app\common\repositories\store\product\ProductAssistSetRepository;
 use app\common\repositories\store\product\ProductAttrValueRepository;
 use app\common\repositories\store\product\ProductGroupRepository;
 use app\common\repositories\store\product\ProductPresellRepository;
 use app\common\repositories\store\product\ProductRepository;
-use app\common\repositories\store\product\StoreDiscountProductRepository;
 use app\common\repositories\store\product\StoreDiscountRepository;
-use app\common\repositories\store\StoreSeckillActiveRepository;
-use app\common\repositories\user\UserRepository;
-use MongoDB\BSON\MaxKey;
-use think\App;
-use crmeb\basic\BaseController;
-use app\validate\api\StoreCartValidate as validate;
 use app\common\repositories\store\order\StoreCartRepository as repository;
-use think\exception\ValidateException;
 
 class StoreCart extends BaseController
 {
@@ -102,7 +97,7 @@ class StoreCart extends BaseController
             case 0:  // 普通商品
                 $result = app()->make(ProductRepository::class)->cartCheck($data,$this->request->userInfo());
                 // 处理商品来源，如果请求参数中包含有效的来源信息，则更新商品来源和来源ID
-                [$source, $sourceId, $pid] = explode(':', $this->request->param('source/d', '0'), 3) + ['', '', ''];
+                [$source, $sourceId, $pid] = explode(':', $this->request->param('source', '0'), 3) + ['', '', ''];
                 $data['source'] = (in_array($source, [0, 1]) && $pid == $data['product_id']) ? $source : 0;
                 if ($data['source'] > 0) $data['source_id'] = intval($sourceId);
                 break;
@@ -350,6 +345,16 @@ class StoreCart extends BaseController
                 // 如果传播者ID等于当前用户ID，为了防止自传播，将传播者ID设为0。
                 $data['spread_id'] = 0;
             }
+        }
+
+        // 预售、助力和拼团提交的是活动ID，SKU归属由各活动仓库校验。
+        if (in_array((int)$data['product_type'], [0, 1, 20], true)) {
+            $res = app()->make(ProductAttrValueRepository::class)->getSearch([
+                'product_id' => $data['product_id'],
+                'unique' => $data['product_attr_unique']
+            ])->find();
+            if (!$res)
+                throw new ValidateException('商品信息错误');
         }
 
         // 返回处理后的参数数据。

@@ -12,7 +12,12 @@
 
 namespace app\controller\merchant\store\delivery;
 
+use app\common\model\delivery\DeliveryService as DeliveryServiceModel;
+use app\common\model\delivery\DeliveryServiceWithdraw;
+use app\common\model\delivery\DeliveryStation;
+use app\common\repositories\delivery\DeliveryOrderRepository;
 use app\common\repositories\delivery\DeliveryServiceRepository;
+use app\common\repositories\delivery\DeliveryServiceWithdrawRepository;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use app\validate\merchant\DeliveryServiceValidate;
 use crmeb\services\DeliverySevices;
@@ -41,6 +46,8 @@ class DeliveryService extends BaseController
         [$page, $limit] = $this->getPage();
         $where = $this->request->params(['keyword','name','status','type','date','uid','phone','nickname']);
         $where['mer_id'] = $this->request->merId();
+        $where['type'] = 1;
+        $where['is_del'] = 0;
         $data = $this->repository->getList($where, $page, $limit);
         return app('json')->success($data);
     }
@@ -53,8 +60,55 @@ class DeliveryService extends BaseController
      */
     public function detail($id)
     {
-        $data = $this->repository->detail($id,$this->request->merId());
+        $data = $this->repository->getWhere([
+            'service_id' => $id,
+            'mer_id' => $this->request->merId(),
+            'type' => 1,
+            'is_del' => 0,
+        ], '*', ['apply']);
+        if (!$data) {
+            return app('json')->fail('数据不存在');
+        }
         return app('json')->success($data);
+    }
+
+    public function orderList($id, DeliveryOrderRepository $repository)
+    {
+        $merId = $this->request->merId();
+        if (!$this->repository->getWhere([
+            'service_id' => (int)$id,
+            'mer_id' => $merId,
+            'type' => DeliveryServiceModel::TYPE_MERCHANT,
+            'is_del' => 0,
+        ])) {
+            return app('json')->fail('数据不存在');
+        }
+        [$page, $limit] = $this->getPage();
+        $where = $this->request->params(['status', 'date', 'order_sn']);
+        $where['service_id'] = (int)$id;
+        $where['mer_id'] = $merId;
+        $where['station_type'] = DeliveryStation::TYPE_MERCHANT;
+        return app('json')->success($repository->merList($where, $page, $limit));
+    }
+
+    public function withdrawSuccessList($id, DeliveryServiceWithdrawRepository $repository)
+    {
+        $merId = $this->request->merId();
+        if (!$this->repository->getWhere([
+            'service_id' => (int)$id,
+            'mer_id' => $merId,
+            'type' => DeliveryServiceModel::TYPE_MERCHANT,
+            'is_del' => 0,
+        ])) {
+            return app('json')->fail('数据不存在');
+        }
+        [$page, $limit] = $this->getPage();
+        $where = $this->request->params(['payment_method', ['create_time', []]]);
+        $where['service_id'] = (int)$id;
+        $where['service_type'] = DeliveryServiceModel::TYPE_MERCHANT;
+        $where['mer_id'] = $merId;
+        $where['status'] = DeliveryServiceWithdraw::STATUS_PAID;
+        return app('json')->success($repository->getList($where, $page, $limit));
     }
 
     /**
@@ -64,7 +118,7 @@ class DeliveryService extends BaseController
      */
     public function createForm()
     {
-        $form = $this->repository->form(null);
+        $form = $this->repository->form(null, 1, $this->request->merId());
         return app('json')->success(formToData($form));
     }
 
@@ -76,7 +130,7 @@ class DeliveryService extends BaseController
      */
     public function updateForm($id)
     {
-        $form = $this->repository->form($id);
+        $form = $this->repository->form((int)$id, 1, $this->request->merId());
         return app('json')->success(formToData($form));
     }
 
@@ -88,11 +142,17 @@ class DeliveryService extends BaseController
     public function create()
     {
         $data = $this->checkParams();
-        $isExist = $this->repository->getWhere(['uid' => $data['uid'], 'mer_id' => $this->request->merId()]);
+        $isExist = $this->repository->getWhere([
+            'uid' => $data['uid'],
+            'mer_id' => $this->request->merId(),
+            'type' => 1,
+            'is_del' => 0,
+        ]);
         if($isExist) {
             throw new ValidateException('该配送员已存在,请勿重复创建');
         }
         $data['mer_id'] = $this->request->merId();
+        $data['type'] = 1;
 
         $this->repository->create($data);
         return app('json')->success('添加成功');
@@ -107,6 +167,24 @@ class DeliveryService extends BaseController
     public function update($id)
     {
         $data = $this->checkParams();
+        $where = [
+            'service_id' => $id,
+            'mer_id' => $this->request->merId(),
+            'type' => 1,
+            'is_del' => 0,
+        ];
+        if (!$this->repository->getWhere($where)) {
+            return app('json')->fail('数据不存在');
+        }
+        $isExist = $this->repository->getSearch([
+            'uid' => $data['uid'],
+            'mer_id' => $this->request->merId(),
+            'type' => 1,
+            'is_del' => 0,
+        ])->where('service_id', '<>', $id)->find();
+        if ($isExist) {
+            throw new ValidateException('该配送员已存在,请勿重复创建');
+        }
         $this->repository->update($id, $data);
         return app('json')->success('编辑成功');
     }
@@ -119,7 +197,7 @@ class DeliveryService extends BaseController
      */
     public function delete($id)
     {
-        $getOne = $this->repository->getWhere(['service_id' => $id, 'mer_id' => $this->request->merId()]);
+        $getOne = $this->repository->getWhere(['service_id' => $id, 'mer_id' => $this->request->merId(), 'type' => 1, 'is_del' => 0]);
         if (!$getOne){
             return app('json')->fail('该配送员不存在或不属于您的商户，无法删除');
         }
@@ -137,11 +215,25 @@ class DeliveryService extends BaseController
         // 获取请求参数中的状态值，如果没有则默认为0
         $status = $this->request->param('status') == 1 ? 1 : 0;
         // 根据条件查询服务信息
-        $getOne = $this->repository->getWhere(['service_id' => $id, 'mer_id' => $this->request->merId()]);
+        $getOne = $this->repository->getWhere(['service_id' => $id, 'mer_id' => $this->request->merId(), 'type' => 1, 'is_del' => 0]);
         // 如果查询结果为空，则返回错误信息
         if (!$getOne) return app('json')->fail('数据不存在');
         // 更新服务状态
         $this->repository->update($id, ['status' => $status]);
+        // 返回成功信息
+        return app('json')->success('修改成功');
+    }
+
+    public function changeStatus($id)
+    {
+        // 获取请求参数中的状态值，如果没有则默认为0
+        $status = $this->request->param('status') == 1 ? 1 : 0;
+        // 根据条件查询服务信息
+        $getOne = $this->repository->getWhere(['service_id' => $id, 'mer_id' => $this->request->merId(), 'type' => 1, 'is_del' => 0]);
+        // 如果查询结果为空，则返回错误信息
+        if (!$getOne) return app('json')->fail('数据不存在');
+        // 更新服务状态
+        $this->repository->update($id, ['is_open' => $status]);
         // 返回成功信息
         return app('json')->success('修改成功');
     }
@@ -157,8 +249,11 @@ class DeliveryService extends BaseController
         $data = $this->request->params([['uid', []],'avatar', 'name', 'phone', 'remark', 'status', 'sort']);
         // 使用DeliveryServiceValidate类对数据进行校验
         app()->make(DeliveryServiceValidate::class)->check($data);
+        if (empty($data['uid']['id'])) {
+            throw new ValidateException('请选择关联用户');
+        }
         // 如果没有上传头像，则将其设置为uid的src属性值
-        if (!$data['avatar']) $data['avatar'] = $data['uid']['src'];
+        if (!$data['avatar']) $data['avatar'] = $data['uid']['src'] ?? '';
         // 将uid设置为uid的id属性值
         $data['uid'] = $data['uid']['id'];
         // 返回校验后的数据
@@ -176,6 +271,8 @@ class DeliveryService extends BaseController
         $where = [
             'status' => 1,
             'mer_id' => $this->request->merId(),
+            'type' => 1,
+            'is_del' => 0,
         ];
         return app('json')->success($this->repository->getOptions($where));
     }
@@ -192,6 +289,8 @@ class DeliveryService extends BaseController
         [$page, $limit] = $this->getPage();
         // 设置商家ID
         $where['mer_id'] = $this->request->merId();
+        $where['type'] = 1;
+        $where['is_del'] = 0;
         // 调用 repository 层获取列表数据
         $data = $this->repository->getStatisticsList($where, $page, $limit);
         // 返回 JSON 格式的成功响应
@@ -208,7 +307,12 @@ class DeliveryService extends BaseController
         // 获取当前商家ID
         $merId = $this->request->merId();
         // 判断数据是否存在
-        if (!$this->repository->exists($id))
+        if (!$this->repository->getWhere([
+            'service_id' => $id,
+            'mer_id' => $merId,
+            'type' => 1,
+            'is_del' => 0,
+        ]))
             return app('json')->fail('数据不存在');
         // 获取统计详情
         $data = $this->repository->getStatisticsDetail($id);

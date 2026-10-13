@@ -139,6 +139,15 @@ class StoreOrderDao extends BaseDao
                     });
                 });
             })
+            ->when(isset($where['is_city_delivery']) && $where['is_city_delivery'] !== '', function ($query) use ($where) {
+                if (is_array($where['is_city_delivery'])) {
+                    $query->whereIn('StoreOrder.city_delivery_type', $where['is_city_delivery']);
+                } else if ((int)$where['is_city_delivery'] === 1) {
+                    $query->whereIn('StoreOrder.city_delivery_type', [0, 3]);
+                } else {
+                    $query->where('StoreOrder.city_delivery_type', (int)$where['is_city_delivery']);
+                }
+            })
             //待核销订单
             ->when(isset($where['is_verify']) && $where['is_verify'], function ($query) use ($where) {
                 $query->where('paid', 1);
@@ -170,7 +179,8 @@ class StoreOrderDao extends BaseDao
                 $query->where('StoreOrder.order_id', $where['order_id']);
             })
             ->when(isset($where['take_order']) && $where['take_order'] != '', function ($query) use ($where) {
-                $query->whereNotNull('verify_time');
+                // 核销列表仅包含到店核销订单；普通订单收货时也会写入 verify_time，不能仅凭该字段判断。
+                $query->where('StoreOrder.order_type', 1)->whereNotNull('verify_time');
             })
             ->when(isset($where['mer_id']) && $where['mer_id'] !== '', function ($query) use ($where) {
                 $query->where('StoreOrder.mer_id', $where['mer_id']);
@@ -218,7 +228,7 @@ class StoreOrderDao extends BaseDao
             })
             ->when(isset($where['spread_name']) && $where['spread_name'] !== '', function ($query) use ($where) {
                 $uid = User::where('nickname', 'like', "%{$where['spread_name']}%")->column('uid');
-                $query->whereIn('StoreOrder.uid', $uid);
+                $query->whereIn('StoreOrder.spread_uid', $uid);
             })
             ->when(isset($where['phone']) && $where['phone'] !== '', function ($query) use ($where) {
                 $uid = User::where('phone', 'like', "%{$where['phone']}%")->column('uid');
@@ -238,6 +248,11 @@ class StoreOrderDao extends BaseDao
             })
             ->when(isset($where['enable_assigned']) && $where['enable_assigned'] !== '', function ($query) use ($where) {
                 $query->where('enable_assigned', $where['enable_assigned']);
+            })
+            ->when(isset($where['delivery_grab_status']) && $where['delivery_grab_status'] !== '', function ($query) use ($where) {
+                // 拼团中的订单会在成团后才转为待配送，不能提前进入抢单列表。
+                $query->where('StoreOrder.delivery_grab_status', $where['delivery_grab_status'])
+                    ->where('StoreOrder.status', self::ORDER_STATUS_BE_SHIPPED);
             })
             ->when(isset($where['reservation_date']) && $where['reservation_date'] !== '', function ($query) use ($where) {
                 $query->join('StoreOrderProduct op', 'op.order_id = StoreOrder.order_id');
@@ -283,7 +298,7 @@ class StoreOrderDao extends BaseDao
             })
             ->when(isset($where['keywords']) && $where['keywords'] !== '', function ($query) use ($where) {
                 $query->where(function ($query) use ($where) {
-                    $query->whereLike('StoreOrder.real_name|StoreOrder.user_phone|order_sn', "%" . $where['keywords'] . "%");
+                    $query->whereLike('StoreOrder.real_name|StoreOrder.user_phone|StoreOrder.order_sn', "%" . $where['keywords'] . "%");
                 });
             })
             ->when(isset($where['delivery_keywords']) && $where['delivery_keywords'] !== '', function ($query) use ($where) {
@@ -323,7 +338,7 @@ class StoreOrderDao extends BaseDao
                 }
             })
             ->when(isset($where['filter_product']) && $where['filter_product'] !== '', function ($query) use ($where) {
-                // 1 实物商品、2虚拟商品、3卡密/云盘商品、4预约商品
+                // 1 实物商品、2虚拟商品、3卡密/云盘商品、4预约商品 5 次卡
                 switch ($where['filter_product']) {
                     case 1:
                         $query->where('is_virtual', 0);
@@ -338,6 +353,7 @@ class StoreOrderDao extends BaseDao
                         $query->where('is_virtual', 4);
                         break;
                     default:
+                        $query->where('is_virtual', $where['filter_product']);
                         break;
                 }
             })

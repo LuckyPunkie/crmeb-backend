@@ -49,4 +49,21 @@ abstract class BasePay extends BaseStorage
         return $this;
     }
 
+    /**
+     * 将业务支付方式转换为微信支付配置端。
+     *
+     * 兼容历史退款调用传入的数字 pay_type，其中 2 表示小程序。
+     */
+    protected function resolvePaymentAccessEnd($channel): string
+    {
+        $channel = (string)$channel;
+        if (in_array($channel, ['2', 'routine', 'mini'], true)) {
+            return 'mini';
+        }
+        if (in_array($channel, ['weixinApp', 'app'], true)) {
+            return 'app';
+        }
+        return 'web';
+    }
+
 }

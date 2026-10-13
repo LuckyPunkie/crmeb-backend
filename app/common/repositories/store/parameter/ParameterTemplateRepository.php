@@ -95,7 +95,7 @@ class ParameterTemplateRepository extends BaseRepository
         // 通过DAO层的getSearch方法查询数据，根据$where条件进行筛选
         // 使用field方法指定只返回template_name和template_id字段，分别作为标签和值
         // 最后调用select方法执行查询并返回结果
-        return $this->dao->getSearch($where)->field('template_name label,template_id value')->select();
+        return $this->dao->getSearch($where)->field('template_name label,template_id value, required')->select();
     }
 
     /**
@@ -199,19 +199,32 @@ class ParameterTemplateRepository extends BaseRepository
     {
         // 提取参数信息
         $params = $data['params'];
-        // 去除重复的类别ID
-        $cate = array_unique($data['cate_ids']);
+        // 商户模板不关联商品分类
+        $cate = $merId ? [] : array_unique($data['cate_ids']);
         // 构建模板的基础信息
         $tem = [
             'template_name' => $data['template_name'],
             'sort' => $data['sort'],
-            'mer_id' => $merId
+            'mer_id' => $merId,
+            'required' => $data['required'],
         ];
         // 实例化参数仓库和关联仓库
         $paramMake = app()->make(ParameterRepository::class);
         $releMake = app()->make(RelevanceRepository::class);
+        if (!$merId && $cate) {
+            $platformTemplateIds = $this->dao->getSearch(['mer_id' => 0])->column('template_id');
+            if ($platformTemplateIds) {
+                $has = $releMake->getSearch([
+                    'right_id' => $cate,
+                    'type' => RelevanceRepository::PRODUCT_PARAMES_CATE,
+                ])->whereIn('left_id', $platformTemplateIds)->find();
+                if ($has) {
+                    throw new ValidateException('分类已经存在其他模板:' . $has->right_id);
+                }
+            }
+        }
         // 使用数据库事务来确保操作的一致性
-        //Db::transaction(function () use ($params, $tem, $cate, $merId, $paramMake, $releMake) {
+        Db::transaction(function () use ($params, $tem, $cate, $merId, $paramMake, $releMake) {
             // 创建模板
             $temp = $this->dao->create($tem);
             // 创建或更新模板参数
@@ -220,7 +233,7 @@ class ParameterTemplateRepository extends BaseRepository
             if (!empty($cate)) {
                 $releMake->createMany($temp->template_id, $cate, RelevanceRepository::PRODUCT_PARAMES_CATE);
             }
-        //});
+        });
     }
 
     /**
@@ -237,27 +250,43 @@ class ParameterTemplateRepository extends BaseRepository
     {
         // 提取参数数据
         $params = $data['params'];
-        // 去重处理类别ID数组
-        $cate = array_unique($data['cate_ids']);
+        // 商户模板不关联商品分类
+        $cate = $merId ? [] : array_unique($data['cate_ids']);
         // 构建要更新的模板名称和排序信息
         $tem = [
             'template_name' => $data['template_name'],
             'sort' => $data['sort'],
+            'required' => $data['required'],
         ];
         if ($data['delete_params'] ?? []) {
             app()->make(ParameterValueRepository::class)->dostory($data['delete_params'], $merId);
         }
 
+
         // 实例化参数仓库和关联仓库
         $paramMake = app()->make(ParameterRepository::class);
         $releMake = app()->make(RelevanceRepository::class);
+
+        if (!$merId && $cate) {
+            $platformTemplateIds = $this->dao->getSearch(['mer_id' => 0])->column('template_id');
+            $platformTemplateIds = array_values(array_diff($platformTemplateIds, [$id]));
+            if ($platformTemplateIds) {
+                $has = $releMake->getSearch([
+                    'right_id' => $cate,
+                    'type' => RelevanceRepository::PRODUCT_PARAMES_CATE,
+                ])->whereIn('left_id', $platformTemplateIds)->find();
+                if ($has) {
+                    throw new ValidateException('分类已经存在其他模板:' . $has->right_id);
+                }
+            }
+        }
 
         // 使用事务处理数据库操作
         Db::transaction(function () use ($id, $params, $tem, $cate, $paramMake, $releMake, $merId) {
             // 更新产品的基本模板和排序信息
             $this->dao->update($id, $tem);
             $paramMake->createOrUpdate($id, $merId, $params);
-            // 删除旧的类别关联，创建新的类别关联
+            // 平台模板重建分类关联，商户模板清理历史分类关联
             $releMake->batchDelete($id, RelevanceRepository::PRODUCT_PARAMES_CATE);
             if (!empty($cate)) {
                 $releMake->createMany($id, $cate, RelevanceRepository::PRODUCT_PARAMES_CATE);
@@ -354,4 +383,3 @@ class ParameterTemplateRepository extends BaseRepository
         return $data;
     }
 }
-

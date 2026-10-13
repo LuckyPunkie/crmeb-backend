@@ -81,11 +81,20 @@ class Common extends BaseController
         return app('json')->success($keyword);
     }
 
+    /**
+     * C端-获取快递公司列表
+     * @param ExpressRepository $repository 快递公司仓储
+     * @return mixed
+     */
     public function express(ExpressRepository $repository)
     {
         return app('json')->success($repository->options());
     }
 
+    /**
+     * C端-获取个人中心页主题、横幅与菜单配置
+     * @return mixed
+     */
     public function menus()
     {
         return app('json')->success([
@@ -95,20 +104,33 @@ class Common extends BaseController
         ]);
     }
 
+    /**
+     * C端-获取退款说明文案（按行拆分返回）
+     * @return mixed
+     */
     public function refundMessage()
     {
         return app('json')->success(explode("\n", systemConfig('refund_message')));
     }
 
+    /**
+     * 获取指定类型的主题变量
+     * @param $type 主题类型
+     * @return mixed
+     */
     private function getThemeVar($type)
     {
         return app()->make(DiyRepository::class)->getThemeVar($type);
     }
 
+    /**
+     * C端-获取系统配置信息（缓存10分钟）
+     * @return mixed
+     */
     public function config()
     {
         $config = Cache::remember('get_api_config',function(){
-            $config = systemConfig(['open_update_info', 'store_street_theme', 'is_phone_login', 'global_theme', 'integral_status', 'mer_location', 'alipay_open', 'hide_mer_status', 'mer_intention_open', 'share_info', 'share_title', 'share_pic', 'store_user_min_recharge', 'recharge_switch', 'balance_func_status', 'yue_pay_status', 'site_logo', 'routine_logo', 'site_name', 'login_logo', 'procudt_increase_status',  'member_status', 'copy_command_status', 'community_status', 'community_reply_status', 'community_app_switch',  'recommend_switch','member_interests_status', 'beian_sn', 'community_reply_auth', 'hot_ranking_switch', 'svip_switch_status', 'margin_ico', 'margin_ico_switch', 'first_avatar_switch', 'wechat_phone_switch', 'community_auth', 'promoter_type', 'register_popup_url','register_popup_pic','offline_switch','pay_weixin_open','integral_clear_time','integral_community_give','integral_community_give_limit','integral_freeze','integral_money','integral_order_rate','integral_status','integral_user_give','agent_application_form','business_application_form', 'business_background_image']);
+            $config = systemConfig(['open_update_info', 'store_street_theme', 'is_phone_login', 'global_theme', 'integral_status', 'mer_location', 'alipay_open', 'hide_mer_status', 'mer_intention_open', 'share_info', 'share_title', 'share_pic', 'store_user_min_recharge', 'recharge_switch', 'balance_func_status', 'yue_pay_status', 'site_logo', 'routine_logo', 'site_name', 'login_logo', 'procudt_increase_status',  'member_status', 'copy_command_status', 'community_status', 'community_reply_status', 'community_app_switch',  'recommend_switch','member_interests_status', 'beian_sn', 'community_reply_auth', 'hot_ranking_switch', 'svip_switch_status', 'margin_ico', 'margin_ico_switch', 'first_avatar_switch', 'wechat_phone_switch', 'community_auth', 'promoter_type', 'register_popup_url','register_popup_pic','offline_switch','pay_weixin_open','integral_clear_time','integral_community_give','integral_community_give_limit','integral_freeze','integral_money','integral_order_rate','integral_status','integral_user_give','agent_application_form','business_application_form', 'business_background_image','category_number_count','platform_delivery_form','platform_delivery_status','platform_delivery_background']);
             $cache = app()->make(CacheRepository::class)->search(['copyright_status', 'copyright_context', 'copyright_image', 'sys_intention_agree']);
             if (!isset($cache['sys_intention_agree'])) {
                 $cache['sys_intention_agree'] = systemConfig('sys_intention_agree');
@@ -121,14 +143,12 @@ class Common extends BaseController
             $config['global_theme'] = $this->getThemeVar($config['global_theme']);
             $config['wechat_config_appid'] = systemConfig('wechat_appid') ? true : false;
             $config = array_merge($config, $cache);
-            $config['ajcaptcha'] = 'clickWord'; //blockPuzzle
+            $config['ajcaptcha'] = 'blockPuzzle';
             $config['service_type'] = systemConfig(['sys_service_switch','customer_url','customer_corpId',
                 'sys_phone','customer_link']);
             $config['yue_pay_status'] = ($config['yue_pay_status'] && $config['balance_func_status']) ? 1: 0;
             $config['extract_switch'] = systemConfig(['withdraw_type','extract_switch','sys_extension_type']);
             if (empty($config['extract_switch']['withdraw_type'])) $config['extract_switch']['withdraw_type'] = ['4'];
-
-
             return $config;
         }, 600);
         return app('json')->success($config);
@@ -183,6 +203,13 @@ class Common extends BaseController
         return app('json')->success('上传成功', ['path' => $res['dir']]);
     }
 
+    /**
+     * C端-扫码上传图片（校验扫码商户后上传，并记录附件信息）
+     * @param $field 上传文件字段名
+     * @param $token 扫码上传令牌
+     * @param AttachmentCategoryRepository $repository 附件分类仓储
+     * @return mixed
+     */
     public function scanUploadImage($field, $token, AttachmentCategoryRepository $repository)
     {
         $id = $this->request->param('pid/d');
@@ -242,6 +269,11 @@ class Common extends BaseController
         return app('json')->success(['src' => $data['attachment_src']]);
     }
 
+    /**
+     * 微信支付回调入口（按渠道分发小程序/公众号/APP/服务商/合单支付回调处理）
+     * @param $type 支付渠道类型
+     * @return mixed
+     */
     public function notify($type)
     {
         Log::info('微信支付回调类型:$type:' . var_export([$type], true));
@@ -251,11 +283,30 @@ class Common extends BaseController
             case 'wechat':
                 return Payment::instance()->setAccessEnd(Payment::WEB)->handleNotify();
             case 'app':
-                return Payment::instance()->handleNotify();
+                return Payment::instance()->setAccessEnd(Payment::APP)->handleNotify();
             case 'partner':
                 return (new Pay('partner'))->handleNotify();
             case 'combine':
                 return $this->wechatCombinePayNotify();
+            default:
+                throw new ValidateException('参数错误');
+        }
+    }
+
+    /**
+     * 微信退款回调入口（按渠道分发小程序/公众号/APP退款回调处理）
+     * @param $type 退款渠道类型
+     * @return mixed
+     */
+    public function refundNotify($type)
+    {
+        switch (urldecode($type)) {
+            case 'routine':
+                return Payment::instance()->setAccessEnd(Payment::MINI)->handleRefundedNotify();
+            case 'wechat':
+                return Payment::instance()->setAccessEnd(Payment::WEB)->handleRefundedNotify();
+            case 'app':
+                return Payment::instance()->setAccessEnd(Payment::APP)->handleRefundedNotify();
             default:
                 throw new ValidateException('参数错误');
         }
@@ -294,6 +345,11 @@ class Common extends BaseController
     }
 
 
+    /**
+     * 商户转账回调（企业付款到零钱等转账结果通知）
+     * @param $type 转账回调类型
+     * @return mixed
+     */
     public function mchNotify($type)
     {
         try {
@@ -316,6 +372,7 @@ class Common extends BaseController
         $get = $_GET;
         $_POST = $this->request->post();
         $_GET = $this->request->get();
+        Log::info('支付宝回调开始'.var_export([$this->request->param()],true));
         try {
             return AlipayService::handleNotify();
         } catch (Exception $e) {
@@ -326,6 +383,10 @@ class Common extends BaseController
         }
     }
 
+    /**
+     * C端-获取系统版本及运行环境信息
+     * @return mixed
+     */
     public function getVersion()
     {
         return app('json')->success(['version' => get_code_version(), 'host' => request()->host(), 'system' => PHP_OS, 'php' => @phpversion()]);
@@ -362,6 +423,10 @@ class Common extends BaseController
         }
     }
 
+    /**
+     * C端-获取首页数据（横幅、菜单、热销、活动、广告、分类）
+     * @return mixed
+     */
     public function home()
     {
         $banner = systemGroupData('home_banner', 1, 10);
@@ -374,6 +439,11 @@ class Common extends BaseController
         return app('json')->success(compact('banner', 'menu', 'hot', 'ad','activity', 'activity_lst','category'));
     }
 
+    /**
+     * C端-获取活动列表（按商户或平台活动分组数据）
+     * @param $id 商户ID，为0时获取平台活动
+     * @return mixed
+     */
     public function activityLst($id)
     {
         $merId = (int)$id;
@@ -381,6 +451,11 @@ class Common extends BaseController
         return app('json')->success($merId ? merchantGroupData($merId, 'mer_activity', $page, $limit) : systemGroupData('sys_activity', $page, $limit));
     }
 
+    /**
+     * C端-获取活动详情（附带商户信息）
+     * @param $id 活动数据ID
+     * @return mixed
+     */
     public function activityInfo($id)
     {
         $activity = app()->make(GroupDataRepository::class)->getData((int)$id,1);
@@ -391,6 +466,10 @@ class Common extends BaseController
         return app('json')->success($activity);
     }
 
+    /**
+     * C端-记录用户页面访问（区分小程序与其他页面）
+     * @return mixed
+     */
     public function visit()
     {
         if (!$this->request->isLogin()) return app('json')->success();
@@ -402,6 +481,11 @@ class Common extends BaseController
         return app('json')->success();
     }
 
+    /**
+     * C端-获取首页分类横幅（new/hot/best/good）
+     * @param $type 分类类型：new、hot、best、good
+     * @return mixed
+     */
     public function hotBanner($type)
     {
         if (!in_array($type, ['new', 'hot', 'best', 'good']))
@@ -411,6 +495,11 @@ class Common extends BaseController
         return app('json')->success($data);
     }
 
+    /**
+     * C端-获取支付链接（从缓存中读取）
+     * @param $key 支付链接缓存键
+     * @return mixed
+     */
     public function pay_key($key)
     {
         $cache = Cache::store();
@@ -420,6 +509,10 @@ class Common extends BaseController
         return app('json')->success($cache->get('pay_key' . $key));
     }
 
+    /**
+     * C端-腾讯地图坐标解析（经纬度逆地理编码获取地址信息）
+     * @return mixed
+     */
     public function lbs_geocoder()
     {
         $data = explode(',', $this->request->param('location/s', ''));
@@ -439,6 +532,10 @@ class Common extends BaseController
         return app('json')->success($res->result);
     }
 
+    /**
+     * C端-获取指定区域与地址的定位信息
+     * @return mixed
+     */
     public function lbs_address()
     {
         $region = $this->request->param('region/s');
@@ -448,6 +545,10 @@ class Common extends BaseController
     }
 
 
+    /**
+     * C端-解析分享口令获取商品/活动信息，并绑定上下级推广关系
+     * @return mixed
+     */
     public function getCommand()
     {
         $key = $this->request->param('key/s');
@@ -500,12 +601,20 @@ class Common extends BaseController
         return app('json')->success($ret);
     }
 
+    /**
+     * C端-获取静态脚本配置
+     * @return mixed
+     */
     public function script()
     {
         return app('json')->success([]);
         return \response(systemConfig('static_script'));
     }
 
+    /**
+     * C端-获取APP版本更新信息
+     * @return mixed
+     */
     public function appVersion()
     {
         return app('json')->success(systemConfig([
@@ -516,6 +625,10 @@ class Common extends BaseController
         ]));
     }
 
+    /**
+     * 同城配送订单回调（更新配送订单状态）
+     * @return void
+     */
     public function deliveryNotify()
     {
         try {
@@ -526,6 +639,10 @@ class Common extends BaseController
         }
     }
 
+    /**
+     * 商家寄件回调（解密数据后处理发货通知）
+     * @return mixed
+     */
     public function callBackNotify()
     {
         $data = $this->request->params([
@@ -553,14 +670,23 @@ class Common extends BaseController
         return json_decode($decrypted, true);
     }
 
+    /**
+     * C端-获取DIY页面装修数据
+     * @return mixed
+     */
     public function diy()
     {
-        $merId = $this->request->param('id/d', 0);
-        $id = $this->request->param('did/d', 0);
+        $params = $this->request->params(['id','did']);
+        $merId = $params['id'] ?: 0;
+        $id = $params['did'] ?: 0;
         $data = app()->make(DiyRepository::class)->show((int)$merId, (int)$id, 1);
         return app('json')->encode($data);
     }
 
+    /**
+     * C端-获取底部导航配置（登录用户同时绑定推广关系）
+     * @return mixed
+     */
     public function getNavigation()
     {
         $userInfo = $this->request->isLogin() ? $this->request->userInfo() : null;
@@ -569,6 +695,10 @@ class Common extends BaseController
         return app('json')->success(app()->make(DiyRepository::class)->getNavigation());
     }
 
+    /**
+     * C端-获取小程序微页面（DIY）数据（带缓存）
+     * @return mixed
+     */
     public function micro()
     {
         $version = $this->request->param('version/s', 0);
@@ -606,6 +736,10 @@ class Common extends BaseController
         return app('json')->success(['subscribe' => false, 'qrcode' => systemConfig('wechat_qrcode')]);
     }
 
+    /**
+     * C端-获取开屏广告数据及配置
+     * @return mixed
+     */
     public function open_screen()
     {
         $key = ['open_screen_advertising'];
@@ -615,6 +749,11 @@ class Common extends BaseController
         return app('json')->success($data);
     }
 
+    /**
+     * C端-上传资质证书图片（上传后添加水印）
+     * @param $field 上传文件字段名
+     * @return mixed
+     */
     public function uploadCertificate($field)
     {
         $file = $this->request->file($field);

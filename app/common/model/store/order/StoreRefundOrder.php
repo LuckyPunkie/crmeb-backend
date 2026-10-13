@@ -121,6 +121,8 @@ class StoreRefundOrder extends BaseModel
             case 4:
                 return $this->services->nickname ?? '无';
                 break;
+            default:
+                return '无';
         }
         return '无';
     }

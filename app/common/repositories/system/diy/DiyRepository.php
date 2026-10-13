@@ -301,7 +301,7 @@ class DiyRepository extends BaseRepository
         $where['id'] = $id;
         ksort($where);
         $cache_unique = 'get_sys_diy_' . md5(json_encode($where));
-        
+
         $data = Cache::remember($cache_unique,function()use($merId,$id,$where){
             $diyInfo = $this->dao->getWhere($where);
             if ($diyInfo) {
@@ -517,7 +517,8 @@ class DiyRepository extends BaseRepository
     public function getProductDetail()
     {
         $diyInfo = $this->dao->getWhere(['is_diy' => self::IS_DIY_PRODUCT,'is_del' => 0,'mer_id' => 0]);
-        $data['product_detail_diy'] = json_decode($diyInfo['value'], true);
+        $value = json_decode((string)$diyInfo['value'], true) ;
+        $data['product_detail_diy'] = is_array($value) ? $value : [];
         return $data;
     }
 

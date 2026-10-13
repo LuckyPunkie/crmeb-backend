@@ -369,7 +369,7 @@ class Us3 extends BaseUpload
             }
 
             if ($this->cdn) {
-                $src = $this->cdn . $path . $key;
+                $src = $this->buildFileUrl($this->cdn, $path . $key);
             } else {
                 $src = 'https://' . $uploadMgr->MakePublicUrl($this->storageName, $path . $key);
             }
@@ -392,10 +392,13 @@ class Us3 extends BaseUpload
      */
     public function stream($fileContent, string $key = null)
     {
-        $file = sys_get_temp_dir() . $key;
-        file_put_contents($file, $fileContent, true);
         if (!$key) {
             $key = $this->saveFileName();
+        }
+        $file = tempnam(sys_get_temp_dir(), 'us3_');
+        if ($file === false || file_put_contents($file, $fileContent) === false) {
+            if ($file && is_file($file)) @unlink($file);
+            return $this->setError('创建上传临时文件失败');
         }
         $path = ($this->path ? trim($this->path, '/') . '/' : '');
 
@@ -403,13 +406,11 @@ class Us3 extends BaseUpload
         try {
             $uploadMgr = new UcloudUploadManager($this->app());
             list($result, $err) = $uploadMgr->MultipartForm($this->storageName, $path . $key, $file);
-            unlink($file);
             if ($err !== null) {
-                // return array(null, $err);
                 return $this->setError($err->ErrMsg);
             }
             if ($this->cdn) {
-                $src = $this->cdn . '/' . $path . $key;
+                $src = $this->buildFileUrl($this->cdn, $path . $key);
             } else {
                 $src = 'https://' . $uploadMgr->MakePublicUrl($this->storageName, $path . $key);
             }
@@ -421,6 +422,8 @@ class Us3 extends BaseUpload
             return $this->afterUpload($this->isImageByPath($key), $this->fileInfo->filePath, $this->fileInfo->fileName);
         } catch (UploadException $e) {
             return $this->setError($e->getMessage());
+        } finally {
+            if (is_file($file)) @unlink($file);
         }
     }
 
@@ -481,8 +484,8 @@ class Us3 extends BaseUpload
                     $waterPath = $filePath .= '&type=1&text=' . base64_encode($this->waterConfig['watermark_text']) . '&fill=' . base64_encode($this->waterConfig['watermark_text_color']) . '&fontsize=' . $this->waterConfig['watermark_text_size'] . '&gravity=' . ($this->position[$this->waterConfig['watermark_position']] ?? 'SouthWest') . '&ax=' . $this->waterConfig['watermark_x'] . '&ay=' . $this->waterConfig['watermark_y'];
                     break;
             }
-            return $waterPath;
         }
+        return $waterPath;
     }
 
 

@@ -21,7 +21,9 @@ use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\user\UserBillRepository;
 use app\common\repositories\user\UserRepository;
 use crmeb\services\merchant\MerchantCoreService;
-use crmeb\services\pay\Pay;
+use crmeb\services\pay\factory\ServeOrderPayFactory;
+use crmeb\services\pay\PayAttach;
+use crmeb\services\pay\PayServices;
 use think\exception\ValidateException;
 use think\facade\Cache;
 use think\facade\Db;
@@ -78,7 +80,7 @@ class ServeOrderRepository extends BaseRepository
             'type'   => $ret['type'],
             'meal_id'=> $ret['meal_id'],
             'pay_type' => $data['pay_type'],
-            'attach' => 'meal',
+            'attach' => PayAttach::SERVE_ORDER,
             'order_info' => json_encode($arr,JSON_UNESCAPED_UNICODE),
             'pay_price' => $ret['price'],
         ];
@@ -116,7 +118,7 @@ class ServeOrderRepository extends BaseRepository
             'type'   => self::TYPE_MARGIN,
             'meal_id'=> $ret['type_id'],
             'pay_type' => $data['pay_type'],
-            'attach' => 'meal',
+            'attach' => PayAttach::SERVE_ORDER,
             'order_info' => json_encode($arr,JSON_UNESCAPED_UNICODE),
             'pay_price' => $margin
         ];
@@ -150,7 +152,7 @@ class ServeOrderRepository extends BaseRepository
             'type'   => 20, // 订单类型，这里假设为20表示配送订单
             'meal_id'=> 0, // 餐品ID，初始为0，可能根据实际业务进行修改
             'pay_type' => $data['pay_type'], // 支付方式，从$data中获取
-            'attach' => 'meal', // 订单附加信息，这里标识为meal
+            'attach' => PayAttach::SERVE_ORDER, // 订单附加信息，这里标识为服务订单
             'order_info' => json_encode($arr,JSON_UNESCAPED_UNICODE), // 将订单详细信息编码为JSON格式
             'pay_price' => $data['price'], // 订单支付价格，从$data中获取
         ];
@@ -186,14 +188,8 @@ class ServeOrderRepository extends BaseRepository
             // 使用订单号作为订单描述和支付body
             $param['order_sn'] = $order_sn;
             $param['body'] = $order_sn;
-            // 根据支付类型直接调用 Pay 驱动
-            $payType = $data['pay_type'] == 1 ? 'weixinQr' : 'alipayQr';
-            if ($payType === 'weixinQr') {
-                $code =  (new Pay('weixin'))->pay('weixinQr', $param, '');
-            } else {
-                $param['attach'] = 'meal';
-                $code = (new Pay('alipay'))->pay('alipayQr', $param, '');
-            }
+            $dto = ServeOrderPayFactory::makeQrCode($param, (int)$data['pay_type']);
+            $code = app()->make(PayServices::class)->pay($dto);
 
             // 设置二维码过期时间，并生成包含配置、过期时间和价格的数组
             $endtime = time() + 1800 ;
@@ -389,7 +385,7 @@ class ServeOrderRepository extends BaseRepository
                     $query->field('mer_id,mer_name,is_trader,mer_avatar,type_id,mer_phone,mer_address,is_margin,margin,real_name,ot_margin');
                 }
             ])
-            ->order('ServeOrder.create_time DESC');
+            ->order('create_time DESC');
 
         // 计算满足条件的订单总数
         $count = $query->count();

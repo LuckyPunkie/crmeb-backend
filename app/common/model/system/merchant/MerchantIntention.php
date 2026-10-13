@@ -47,6 +47,26 @@ class MerchantIntention extends BaseModel
         return $value ? explode(',', $value) : [];
     }
 
+    public function setMerProductTypeAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getMerProductTypeAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
+    public function setPlatformCategoryAttr($value)
+    {
+        return is_array($value) ? json_encode($value) : $value;
+    }
+
+    public function getPlatformCategoryAttr($value)
+    {
+        return $value ? json_decode($value, true) : [];
+    }
+
     public function merchantCategory()
     {
         return $this->hasOne(MerchantCategory::class, 'merchant_category_id', 'merchant_category_id')->bind(['category_name']);

@@ -108,11 +108,10 @@ class AccessTokenServeService extends HttpService
         $cacheToken = Cache::get($accessTokenKey);
         if (!$cacheToken) {
             $getToken = $this->getTokenFromServer();
-            Cache::set($accessTokenKey, $getToken['access_token'], 300);
             $cacheToken = $getToken['access_token'];
+            Cache::set($accessTokenKey, $cacheToken, 8600);
         }
         $this->accessToken = $cacheToken;
-
         return $cacheToken;
     }
 

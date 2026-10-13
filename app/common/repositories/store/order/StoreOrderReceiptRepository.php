@@ -119,8 +119,34 @@ class   StoreOrderReceiptRepository extends BaseRepository
             },]);
         $count = $query->count();
         $list = $query->page($page, $limit)->select();
+        $stat = $this->getStat($where);
 
-        return compact('count', 'list');
+        return compact('count', 'list', 'stat');
+    }
+
+    /**
+     * 各订单状态数量统计（口径与dao search 的 order_type 筛选一致）
+     * @param array $where
+     * @return array
+     */
+    public function getStat(array $where)
+    {
+        $types = [
+            'all' => '',
+            'unpaid' => 1,      // 待付款
+            'unshipped' => 2,   // 待发货
+            'untake' => 3,      // 待收货
+            'unevaluate' => 4,  // 待评价
+            'complete' => 5,    // 交易完成
+            'refund' => 6,      // 已退款
+            'del' => 7,         // 已删除
+        ];
+        $data = [];
+        foreach ($types as $key => $type) {
+            $where['order_type'] = $type;
+            $data[$key] = $this->dao->search($where)->count();
+        }
+        return $data;
     }
 
     /**

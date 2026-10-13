@@ -20,10 +20,9 @@ use app\common\repositories\BaseRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\system\groupData\GroupDataRepository;
 use app\common\repositories\system\merchant\FinancialRecordRepository;
-use app\common\repositories\wechat\WechatUserRepository;
 use crmeb\jobs\SendSmsJob;
-use crmeb\services\pay\Pay;
-use think\exception\ValidateException;
+use crmeb\services\pay\factory\UserOrderPayFactory;
+use crmeb\services\pay\PayServices;
 use FormBuilder\Factory\Elm;
 use think\facade\Db;
 use think\facade\Log;
@@ -109,49 +108,13 @@ class UserOrderRepository extends BaseRepository
             'status'     => 1,
             'other'     => $user->is_svip == -1 ? 'first' : '',
         ];
-        $body = [
-            'order_sn' => $order_sn,
-            'pay_price' => $data['pay_price'],
-            'attach' => 'user_order',
-            'body' =>'付费会员'
-        ];
         $type = $params['pay_type'];
-        if (in_array($type, ['weixin', 'alipay'], true) && $params['is_app']) {
-            $type .= 'App';
-        }
-        if ($params['return_url'] && $type === 'alipay') $body['return_url'] = $params['return_url'];
         $info = $this->dao->create($data);
         if ($data['pay_price']){
             try {
-                $pay = app()->make(Pay::class);
-                switch ($type) {
-                    case 'weixin':
-                        $wechatUserRepo = app()->make(WechatUserRepository::class);
-                        $openId = $wechatUserRepo->idByOpenId($user['wechat_user_id']);
-                        if (!$openId) throw new ValidateException('请关联微信公众号!');
-                        $config = $pay->pay($type, $body, $openId);
-                        break;
-                    case 'weixinApp':
-                        $config = $pay->pay($type, $body, '');
-                        break;
-                    case 'routine':
-                        $wechatUserRepo = app()->make(WechatUserRepository::class);
-                        $openId = $wechatUserRepo->idByRoutineId($user['wechat_user_id']);
-                        if (!$openId) throw new ValidateException('请关联微信小程序!');
-                        $config = $pay->pay($type, $body, $openId);
-                        break;
-                    case 'alipay':
-                        $body['attach'] = 'user_order';
-                        $config = (new Pay('alipay'))->pay($type, $body, '');
-                        break;
-                    case 'alipayApp':
-                        $body['attach'] = 'user_order';
-                        $config = (new Pay('alipay'))->pay($type, $body, '');
-                        break;
-                    default:
-                        $config = $pay->pay($type, $body, '');
-                }
-                return app('json')->status($type, $config + ['order_id' => $info->order_id]);
+                $dto = UserOrderPayFactory::make($type, $user, $order_sn, $data['pay_price'], $params);
+                $config = app()->make(PayServices::class)->pay($dto);
+                return app('json')->status($dto->payType, $config + ['order_id' => $info->order_id]);
             } catch (\Exception $e) {
                 return app('json')->status('error', $e->getMessage(), ['order_id' => $info->order_id]);
             }
@@ -210,13 +173,16 @@ class UserOrderRepository extends BaseRepository
         //如果是过期了的会员，则更新结束时间以当前时间增加,否则是根据结束时间增加
         $endtime = ($user['svip_endtime'] && $user['is_svip'] != 0) ? $user['svip_endtime'] : date('Y-m-d H:i:s',time());
         $svip_endtime =  date('Y-m-d H:i:s',strtotime("$endtime  +$day day" ));
+
         $user->is_svip = $info->svip_type;
         $user->svip_endtime = $svip_endtime;
         $user->save();
+
         $ret->status = 1;
         $ret->pay_time = date('Y-m-d H:i:s',time());
         $ret->end_time = $svip_endtime;
         $ret->save();
+
         $title = '支付会员';
         if ($info->svip_type == 3) {
             $date = '终身会员';

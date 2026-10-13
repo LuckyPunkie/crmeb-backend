@@ -16,7 +16,8 @@ namespace app\webscoket\handler;
 
 use app\common\repositories\system\merchant\MerchantAdminRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
-use crmeb\services\security\CoreAuthTokenService;
+use crmeb\services\JwtTokenService;
+use Firebase\JWT\ExpiredException;
 use think\db\exception\DataNotFoundException;
 use think\db\exception\DbException;
 use think\db\exception\ModelNotFoundException;
@@ -42,10 +43,8 @@ class MerchantHandler
     }
 
     /**
-     * 商户 WebSocket 登录校验。
-     *
-     * @param array $data 登录数据，必须包含 v2 Token。
-     * @return mixed 返回 JSON 成功或失败响应。
+     * @param array $data
+     * @return mixed
      * @throws DataNotFoundException
      * @throws DbException
      * @throws ModelNotFoundException
@@ -60,11 +59,17 @@ class MerchantHandler
          * @var MerchantAdminRepository $repository
          */
         $repository = app()->make(MerchantAdminRepository::class);
+        $service = new JwtTokenService();
         try {
-            $payload = app()->make(CoreAuthTokenService::class)->verifyMerchantToken($token);
+            $payload = $service->parseToken($token);
+        } catch (ExpiredException $e) {
+            $repository->checkToken($token);
+            $payload = $service->decode($token);
         } catch (Throwable $e) {//Token 过期
             return app('json')->fail('token 已过期，请重新登录');
         }
+        if ('mer' != $payload->jti[1])
+            return app('json')->fail('无效的 token');
 
         $admin = $repository->get($payload->jti[0]);
         if (!$admin)

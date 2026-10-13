@@ -437,6 +437,26 @@ Route::group(function () {
         ]
     ]);
 
+    Route::group('store/user_card', function () {
+        Route::get('verify_log/lst', [app\controller\merchant\store\product\UserCard::class, 'verifyLogList'])
+            ->name('systemStoreUserCardVerifyLogList')
+            ->option([
+                '_alias' => '次卡/年卡核销记录',
+            ]);
+        Route::get('verify/:code', [app\controller\merchant\store\product\UserCard::class, 'verifyDetail'])
+            ->name('systemStoreUserCardVerifyDetail')->option([
+                '_alias' => '次卡/年卡核销详情',
+            ]);
+        Route::get('verify', [app\controller\merchant\store\product\UserCard::class, 'verify'])
+            ->name('systemStoreUserCardVerify')
+            ->option([
+                '_alias' => '次卡/年卡核销',
+            ]);
+    })->option([
+        '_path' => '/product/user_card',
+        '_auth' => true,
+    ]);
+
 })->middleware(AllowOriginMiddleware::class)
     ->middleware(AdminTokenMiddleware::class, true)
     ->middleware(AdminAuthMiddleware::class)

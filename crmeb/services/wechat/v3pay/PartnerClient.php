@@ -10,6 +10,7 @@
 // +----------------------------------------------------------------------
 namespace crmeb\services\wechat\v3pay;
 
+use crmeb\exceptions\PayException;
 use crmeb\services\wechat\config\ServicePaymentConfig;
 use crmeb\services\wechat\config\V3PaymentConfig;
 use think\exception\ValidateException;
@@ -65,7 +66,7 @@ class PartnerClient extends BaseClient
             //特约商户号
             'sub_mchid' => $subMchid,
             //公众账号ID
-            'appid' => $this->serviceConfig->wechatAppid,
+            'appid' => $this->serviceConfig->appId,
             //接收方类型
             'type' => 'MERCHANT_ID',
             'name' => $this->serviceConfig->serviceName,
@@ -106,14 +107,11 @@ class PartnerClient extends BaseClient
         return response($response, 200, [], 'json');
     }
 
-    public function pay($type, array $order, string $appid = '')
+    public function pay($type, array $order)
     {
-        if (!$appid) {
-            $appid = $this->serviceConfig->wechatAppid;
-        }
         $params = [
             //服务商APPID
-            'sp_appid' => $appid,
+            'sp_appid' => $this->serviceConfig->appId,
             //服务商商户号
             'sp_mchid' => $this->serviceConfig->mchId,
             //子商户APPID sub_appid与sub_mchid有绑定关系
@@ -134,7 +132,7 @@ class PartnerClient extends BaseClient
 
             //订单金额
             'amount' => [
-                'total' => intval($order['pay_price'] * 100),
+                'total' => (int)bcmul((string)$order['pay_price'], '100', 0),
                 'currency' => 'CNY',
             ],
             //场景信息
@@ -181,11 +179,10 @@ class PartnerClient extends BaseClient
         return $this->pay('h5', $options);
     }
 
-    public function payJsapi($options, string $type = 'wechat')
+    public function payJsapi($options)
     {
-        $appid = $this->serviceConfig->{$type . 'Appid'};
-        $res = $this->pay('jsapi', $options, $appid);
-        return $this->configForJSSDKPayment($res['prepay_id'], $appid);
+        $res = $this->pay('jsapi', $options);
+        return $this->configForJSSDKPayment($res['prepay_id'], $this->serviceConfig->appId);
     }
 
     public function payNative(array $options)
@@ -206,7 +203,7 @@ class PartnerClient extends BaseClient
             $data = [
                 'type'      => 'MERCHANT_ID',
                 'account'   => $this->serviceConfig->mchId,
-                'amount'    => intval($item['amount'] * 100),
+                'amount'    => (int)bcmul((string)$item['amount'], '100', 0),
                 'description' => $item['body'] ?? $item['body'] ?? '',
             ];
             $params['receivers'][] = $data;
@@ -243,8 +240,8 @@ class PartnerClient extends BaseClient
             'out_trade_no' => $options['order_sn'],
             'out_refund_no' => $options['refund_order_sn'],
             'amount' => [
-                'refund' => intval($options['refund_price'] * 100),
-                'total' => intval($options['pay_price'] * 100),
+                'refund' => (int)bcmul((string)$options['refund_price'], '100', 0),
+                'total' => (int)bcmul((string)$options['pay_price'], '100', 0),
                 'currency' => 'CNY'
             ]
         ];
@@ -269,9 +266,9 @@ class PartnerClient extends BaseClient
             'out_refund_no' => $out_refund_no,
             //'notify_url' => '',
             'amount' => [
-                'refund' => $refund['refund_price'] * 100,
+                'refund' => (int)bcmul((string)$refund['refund_price'], '100', 0),
                 //原订单金额
-                'total' => $refund['pay_price'] * 100,
+                'total' => (int)bcmul((string)$refund['pay_price'], '100', 0),
                 'currency' => 'CNY',
             ]
         ];
@@ -314,7 +311,7 @@ class PartnerClient extends BaseClient
     public function configForAppPayment($prepayId)
     {
         $params = [
-            'appid' => $this->serviceConfig->wechatAppid,
+            'appid' => $this->serviceConfig->appId,
             'partnerid' => $this->serviceConfig->mchId,
             'prepayid' => $prepayId,
             'noncestr' => uniqid(),
@@ -349,7 +346,7 @@ class PartnerClient extends BaseClient
             //特约商户号
             'sub_mchid' => $order['sub_mchid'],
             //公众账号ID 可以填写这三种类型中的任意一种APPID，但请确保该appid与mchid有绑定关系
-            'appid' => $this->serviceConfig->wechatAppid,
+            'appid' => $this->serviceConfig->appId,
             //微信订单号
             'transaction_id' => $order['transaction_id'],
             //商户分账单号
@@ -365,7 +362,7 @@ class PartnerClient extends BaseClient
                 //分账接收方帐号
                 'account' => $this->serviceConfig->mchId,
                 //分账金额，单位为分
-                'amount' => intval($order['price'] * 100),
+                'amount' => (int)bcmul((string)$order['price'], '100', 0),
                 'description' => '分给服务商',
 
             ],
@@ -373,5 +370,4 @@ class PartnerClient extends BaseClient
             //'unfreeze_unsplit' => true,
         ];
     }
-
 }

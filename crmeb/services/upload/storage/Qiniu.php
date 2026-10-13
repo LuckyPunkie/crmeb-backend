@@ -142,7 +142,7 @@ class Qiniu extends BaseUpload
             }
             $this->fileInfo->uploadInfo = $result;
             $this->fileInfo->realName = isset($fileHandle) ? $fileHandle->getOriginalName() : $key;
-            $this->fileInfo->filePath = $this->uploadUrl . '/' . $key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
             return $this->afterUpload($this->isImageFileHandle($fileHandle), $this->fileInfo->filePath, $this->fileInfo->fileName);
         } catch (UploadException $e) {
@@ -171,7 +171,7 @@ class Qiniu extends BaseUpload
             }
             $this->fileInfo->uploadInfo = $result;
             $this->fileInfo->realName = $key;
-            $this->fileInfo->filePath = trim(($this->cdn ?: $this->uploadUrl),'/') . '/'.$key;
+            $this->fileInfo->filePath = $this->buildFileUrl($this->cdn ?: $this->uploadUrl, $key);
             $this->fileInfo->fileName = $key;
             return $this->afterUpload($this->isImageByPath($key), $this->fileInfo->filePath, $this->fileInfo->fileName);
         } catch (UploadException $e) {

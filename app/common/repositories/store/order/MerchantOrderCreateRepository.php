@@ -17,6 +17,7 @@ use crmeb\jobs\SendSmsJob;
 use crmeb\services\PayStatusService;
 use crmeb\services\SwooleTaskService;
 use think\exception\ValidateException;
+use app\common\repositories\merchant\MerchantMemberRepository;
 use app\common\repositories\system\RecordRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\store\coupon\StoreCouponUserRepository;
@@ -133,8 +134,11 @@ class MerchantOrderCreateRepository extends StoreOrderRepository
                 $value['updatedTotalAmount'] = $value['is_batch'] ? (float)$value['updatedTotalAmount'] : (float)bcmul($value['productAttr']['new_price'], $cartNum, 2);
             }
             // 会员权益后的金额
-            $value['vipTotalAmount'] = ($svipStatus && !$updatedPriceFlag) ? (float)bcmul($value['productAttr']['svip_price'], $cartNum, 2) : 0;
-            $value['productAttr']['show_svip_price'] = ($svipStatus && !$updatedPriceFlag) ? true : false;
+            $isSvipProduct = (int)($value['product']['member_price_setting'] ?? 0) === 1;
+            $value['vipTotalAmount'] = ($svipStatus && $isSvipProduct && !$updatedPriceFlag)
+                ? (float)bcmul($value['productAttr']['svip_price'], $cartNum, 2)
+                : 0;
+            $value['productAttr']['show_svip_price'] = ($svipStatus && $isSvipProduct && !$updatedPriceFlag);
             // 是否使用会员权益
             $value['useSvip'] = ($value['vipTotalAmount'] != 0) ? 1 : 0;
             // 实付价格：优先取改价后金额，若无改价后金额则取会员权益后的总金额，若无会员权益后的总金额则取原价
@@ -345,9 +349,9 @@ class MerchantOrderCreateRepository extends StoreOrderRepository
                     'type' => StoreOrderStatusRepository::TYPE_ORDER,
                     'change_message' => '订单生成',
                     'change_type' => StoreOrderStatusRepository::ORDER_STATUS_CREATE,
-                    'uid' => $user->uid ?? 0,
-                    'nickname' => $user->nickname ?? '游客',
-                    'user_type' => StoreOrderStatusRepository::U_TYPE_USER,
+                    'uid' => request()->adminId(),
+                    'nickname' => 'ID:' . request()->adminId() . ',昵称：' . request()->adminInfo()->real_name,
+                    'user_type' => request()->userType(),
                 ];
                 $this->getStoreOrderStatusRepository()->batchCreateLog($orderStatus);
                 // 8. 订单商品记录 order_product
@@ -411,8 +415,7 @@ class MerchantOrderCreateRepository extends StoreOrderRepository
     public function merchantPay(array $params, $user, $groupOrder)
     {
         $authCode = isset($params['auth_code']) && !empty($params['auth_code']) ? $params['auth_code'] : '';
-        //$combine = $params['pay_type'] == 'weixinQr' ? true : false;
-        //halt($params,$authCode,$combine);
+
         return $this->pay($params['pay_type'], $user, $groupOrder, '', false, null, $authCode);
     }
     /**
@@ -427,6 +430,13 @@ class MerchantOrderCreateRepository extends StoreOrderRepository
         $config = systemConfig(['pay_wechat_type', 'recharge_switch', 'yue_pay_status', 'pay_weixin_open', 'alipay_open', 'offline_switch', 'auto_close_order_timer', 'balance_func_status']);
         $merchant = $this->merchantInfo($merId);
         $timer = (int)($config['auto_close_order_timer'] ?: 15);
+        $shoppingCreditsStatus = 0;
+        $shoppingCreditsBalance = '0.00';
+        if ($uid) {
+            $member = app()->make(MerchantMemberRepository::class)->memberInfo((int)$uid, (int)$merId);
+            $shoppingCreditsStatus = !empty($member['is_merchant_member']) && (int)$member['financial_status'] === 1 ? 1 : 0;
+            $shoppingCreditsBalance = $member['shopping_credits_balance'] ?? '0.00';
+        }
         $data = [
             'is_wechat_v3' => $config['pay_wechat_type'] ? true : false,
             'offline_switch' => $config['offline_switch'] && $merchant['offline_switch'] ? 1 : 0,
@@ -434,6 +444,8 @@ class MerchantOrderCreateRepository extends StoreOrderRepository
             'pay_weixin_open' => $config['pay_weixin_open'],
             'alipay_open' => $config['alipay_open'],
             'yue_pay_status' => ($config['yue_pay_status'] && $config['balance_func_status'] && $uid) ? 1 : 0,
+            'shopping_credits_status' => $shoppingCreditsStatus,
+            'shopping_credits_balance' => $shoppingCreditsBalance,
             'invalid_time' => time() + $timer * 60,
         ];
         return $data;

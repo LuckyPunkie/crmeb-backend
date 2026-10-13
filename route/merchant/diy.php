@@ -18,28 +18,33 @@ use app\common\middleware\MerchantCheckBaseInfoMiddleware;
 
 Route::group(function () {
 
-    Route::get('change/color', 'admin.Common/getChangeColor')->name('merchantGetChangeColor')->option([
+    Route::get('change/color',  [app\controller\admin\Common::class,'getChangeColor'])
+        ->name('merchantGetChangeColor')
+        ->option([
         '_alias' => '一键换色',
         '_path' => '/setting/theme_style',
         '_auth' => false,
         '_form' => 'systemSetChangeColor'
     ]);
 
-    Route::get('diy/link/getLinks/:id', 'admin.system.diy.PageLink/getLinks')->option([
-        '_alias' => '列表',
-        '_auth' => false,
-    ]);
+    Route::get('diy/link/getLinks/:id',   [app\controller\admin\system\diy\PageLink::class,'getLinks'])
+        ->option([
+            '_alias' => '列表',
+            '_auth' => false,
+        ]);
 
-    Route::get('diy/link/lst', 'admin.system.diy.PageLink/lst')->name('merchantDiyPageLinkLst')->option([
-        '_alias' => '列表',
-        '_path' => '/devise/diy/list',
-    ])->append(['type' => 1]);
+    Route::get('diy/link/lst',  [app\controller\admin\system\diy\PageLink::class,'lst'])
+        ->name('merchantDiyPageLinkLst')
+        ->option([
+            '_alias' => '列表',
+            '_path' => '/devise/diy/list',
+        ])->append(['type' => 1]);
 
-
-    Route::get('diy/categroy/options', 'admin.system.diy.PageCategroy/options')->option([
-        '_alias' => '列表 ',
-        '_auth' => false,
-    ])->append(['type' => 1]);
+    Route::get('diy/categroy/options', [app\controller\admin\system\diy\PageCategroy::class,'options'])
+        ->option([
+            '_alias' => '列表 ',
+            '_auth' => false,
+        ]);
 
 
     Route::group('diy/', function () {

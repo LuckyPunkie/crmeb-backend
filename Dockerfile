@@ -1,5 +1,5 @@
 # 使用基础镜像
-FROM leekay0218/crmeb-mer
+FROM llfei/crmeb:8.0.5
 
 ## 复制代码
 ## 在本地调试注释掉，使用映射把文件映射进去

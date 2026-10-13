@@ -176,11 +176,14 @@ class MenuDao extends BaseDao
      *                    这允许函数对普通路由和商户路由进行区分查询。
      * @return bool 如果路由存在则返回true，否则返回false。
      */
-    public function routeExists(string $route, $is_mer = 0)
+    public function routeExists(string $route, $is_mer = 0, $is_agent = null)
     {
         // 通过数据库查询确定给定路由是否存在，并且满足is_menu为0和is_mer为指定值的条件
         // 这里使用了链式调用来构建查询条件，最后通过count方法检查满足条件的记录数量是否大于0
-        return Menu::getDB()->where('route', $route)->where('is_menu', 0)->where('is_mer', $is_mer)->count() > 0;
+        return Menu::getDB()->where('route', $route)->where('is_menu', 0)->where('is_mer', $is_mer)
+            ->when(!is_null($is_agent), function ($query) use ($is_agent) {
+                $query->where('is_agent', $is_agent);
+            })->count() > 0;
     }
 
     /**
@@ -203,16 +206,18 @@ class MenuDao extends BaseDao
     /**
      * 根据权限规则列表获取菜单规则
      * 该方法用于根据传入的权限规则数组，筛选出对应的菜单规则。主要用于权限管理中，根据用户的权限规则，
-     * 获取用户可以访问的菜单列表。is_mer 参数用于区分是否是商家后台菜单。
+     * 获取用户可以访问的菜单列表。is_mer 参数用于区分是否是商家后台菜单，is_agent 参数用于区分代理类型。
      *
      * @param array $rule 权限规则数组，包含有效的菜单 ID
-     * @param int $is_mer 是否是商家后台菜单的标志，0 表示系统后台，1 表示商家后台, 2 表示组织区域/商户
+     * @param int $is_mer 是否是商家后台菜单的标志，0 表示系统后台，1 表示商家后台
+     * @param int $is_agent 代理菜单类型，0 表示平台菜单，1 表示区域代理菜单，2 表示商户代理菜单
      * @return array 返回符合权限规则的菜单规则列表，包括菜单名称、路由、参数、图标、父级 ID 和菜单 ID
      */
-    public function ruleByMenuList(array $rule, $is_mer = 0)
+    public function ruleByMenuList(array $rule, $is_mer = 0, $is_agent = 0)
     {
         // 根据权限规则查询菜单路径
-        $paths = Menu::getDB()->whereIn($this->getPk(), $rule)->column('path', 'menu_id');
+        $paths = Menu::getDB()->where('is_mer', $is_mer)->where('is_agent', $is_agent)
+            ->whereIn($this->getPk(), $rule)->column('path', 'menu_id');
 
         // 用于存储所有相关菜单ID和其路径中的ID
         $ids = [];
@@ -224,7 +229,8 @@ class MenuDao extends BaseDao
 
         // 根据菜单的is_menu、is_show字段筛选出显示的菜单项，并按排序和ID升序排列
         // 过滤并去重$ids后，查询对应的菜单名称、路由、参数、图标、父级ID和菜单ID
-        return Menu::getDB()->where('is_menu', 1)->where('is_show', 1)->order('sort DESC,menu_id ASC')->where('is_mer', $is_mer)
+        return Menu::getDB()->where('is_menu', 1)->where('is_show', 1)->order('sort DESC,menu_id ASC')
+            ->where('is_mer', $is_mer)->where('is_agent', $is_agent)
             ->whereIn('menu_id', array_unique(array_filter($ids)))
             ->column('menu_name title,route path,params,icon,pid,menu_id id');
     }
@@ -464,10 +470,15 @@ class MenuDao extends BaseDao
      * @param array $ids 路由ID的数组。
      * @return array 返回一个包含params和route字段的数组，这些字段对应于查询到的记录。
      */
-    public function idsByRoutes(array $ids)
+    public function idsByRoutes(array $ids, $is_mer = null, $is_agent = null)
     {
         // 使用Menu类的getDB方法获取数据库对象，然后通过where和whereIn方法构建查询条件，最后使用column方法获取指定字段的列数据。
-        return Menu::getDB()->where('is_menu', 0)->whereIn($this->getPk(), $ids)->column('params,route');
+        return Menu::getDB()->where('is_menu', 0)->whereIn($this->getPk(), $ids)
+            ->when(!is_null($is_mer), function ($query) use ($is_mer) {
+                $query->where('is_mer', $is_mer);
+            })->when(!is_null($is_agent), function ($query) use ($is_agent) {
+                $query->where('is_agent', $is_agent);
+            })->column('params,route,is_mer,is_agent');
     }
 
 
@@ -484,14 +495,15 @@ class MenuDao extends BaseDao
      * @param array $ids 右侧关联ID数组，用于指定查询的具体ID集合。
      * @return array 返回包含params和route信息的数组集合。
      */
-    public function typesByRoutes($typeId, array $ids)
+    public function typesByRoutes($typeId, array $ids, $is_mer = 1, $is_agent = 0)
     {
         // 使用别名A查询Menu表，并通过left join与Relevance表（别名B）关联。
         // 查询条件包括：is_menu为0，B.left_id等于$typeId，B.right_id在$ids数组中，
         // 并且B.type为RelevanceRepository::TYPE_MERCHANT_AUTH所指定的类型。
         // 最终返回params和route两列数据。
-        return Menu::getDB()->alias('A')->leftJoin('Relevance B', 'A.menu_id = B.right_id')->where('is_menu', 0)
-            ->where('B.left_id', $typeId)->whereIn('B.right_id', $ids)->where('B.type', RelevanceRepository::TYPE_MERCHANT_AUTH)->column('params,route');
+        return Menu::getDB()->alias('A')->leftJoin('Relevance B', 'A.menu_id = B.right_id')->where('A.is_menu', 0)
+            ->where('A.is_mer', $is_mer)->where('A.is_agent', $is_agent)
+            ->where('B.left_id', $typeId)->whereIn('B.right_id', $ids)->where('B.type', RelevanceRepository::TYPE_MERCHANT_AUTH)->column('params,route,is_mer,is_agent');
     }
 
 
@@ -505,20 +517,22 @@ class MenuDao extends BaseDao
      * @param int $typeId 类型ID，用于查询与之关联的商戶类型路由信息。
      * @return array 返回一个包含路由和参数信息的数组，每个元素都是一个子数组。
      */
-    public function merchantTypeByRoutes($typeId)
+    public function merchantTypeByRoutes($typeId, $is_mer = 1, $is_agent = 0)
     {
         // 使用Menu模型的数据库实例，设置别名为A
         return Menu::getDB()->alias('A')
             // 左连接Relevance表，别名为B，关联条件为菜单ID等于关联表的右ID
             ->leftJoin('Relevance B', 'A.menu_id = B.right_id')
             // 筛选菜单项中is_menu为0（表示不是菜单）的记录
-            ->where('is_menu', 0)
+            ->where('A.is_menu', 0)
+            ->where('A.is_mer', $is_mer)
+            ->where('A.is_agent', $is_agent)
             // 筛选关联表中左ID为$typeId的记录
             ->where('B.left_id', $typeId)
             // 筛选关联表中类型为商戶授权的记录
             ->where('B.type', RelevanceRepository::TYPE_MERCHANT_AUTH)
             // 查询并返回params和route两列的数据
-            ->column('params,menu_name,route');
+            ->column('params,menu_name,route,is_mer,is_agent');
     }
 
     /**

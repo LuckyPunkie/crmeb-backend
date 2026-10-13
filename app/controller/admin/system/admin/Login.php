@@ -86,10 +86,23 @@ class Login extends BaseController
         $tokenInfo = $this->repository->createToken($adminInfo);
         $admin = $adminInfo->toArray();
         unset($admin['pwd']);
+
+        $auth = false;
+        try {
+            if (file_exists(public_path() . 'auth.lock')) {
+                $res = __61aoer74kcvi7e7a4vr42ro75k();
+                $auth = $res ? false : true;
+            }
+        } catch (\Throwable $e) {
+
+        }
+
         $data = [
             'token' => $tokenInfo['token'],
             'exp' => $tokenInfo['out'],
-            'admin' => $admin
+            'admin' => $admin,
+            'auth' => $auth,
+            'auth_message' => $auth ? (new \crmeb\basic\BaseAuth())->getPromptCode(10) : ''
         ];
         Cache::delete($key);
         return app('json')->success($data);

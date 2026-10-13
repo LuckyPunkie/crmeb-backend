@@ -40,7 +40,13 @@ class Parameter extends BaseModel
 
     public function getValuesAttr()
     {
-        return ParameterValue::where('parameter_id',$this->parameter_id)->where('mer_id',request()->merId())->column('parameter_value_id,value');
+        return ParameterValue::where('parameter_id',$this->parameter_id)
+            ->where(function($query){
+                $query->where('mer_id',request()->merId())
+                    ->whereOr('mer_id',0)
+                ;
+            })
+            ->column('parameter_value_id,value');
     }
 
     public function searchTemplateIdAttr($query, $value)

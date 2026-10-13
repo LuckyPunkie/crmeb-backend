@@ -22,6 +22,9 @@ Route::group(function () {
         Route::get('lst', '/lst')->name('systemMerchantApplymentsLst')->option([
             '_alias' => '分账商户申请列表',
         ]);
+        Route::get('title', '/title')->name('systemMerchantApplymentsTitle')->option([
+            '_alias' => '分账商户申请统计',
+        ]);
         Route::get('detail/:id', '/detail')->name('systemMerchantApplymentsDetail')->option([
             '_alias' => '分账商户申请详情',
         ]);
@@ -117,6 +120,9 @@ Route::group(function () {
         ]);
         Route::get('total', 'UserRecharge/total')->name('systemUserRechargeTotal')->option([
             '_alias' => '统计',
+        ]);
+        Route::post('refund/:id', 'UserRecharge/refund')->name('systemUserRechargeRefund')->option([
+            '_alias' => '退款',
         ]);
     })->prefix('admin.user.')->option([
         '_path' => '/accounts/bill',

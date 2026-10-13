@@ -420,13 +420,14 @@ class MenuRepository extends BaseRepository
      * 快捷搜索
      * @param int $isMer 是否商户
      * @param string $keyWord 关键词
+     * @param int $isAgent 代理菜单类型，0 表示平台菜单，1 表示区域代理菜单，2 表示商户代理菜单
      * @return array
      * @throws DataNotFoundException
      * @throws DbException
      * @throws ModelNotFoundException
      * FerryZhao 2024/4/3
      */
-    public function getMenusList($isMer, $keyWord)
+    public function getMenusList($isMer, $keyWord, $isAgent = 0)
     {
         $pre = '/' . config('admin.' . ($isMer ? 'merchant' : 'admin') . '_prefix');
         $configRepository = app()->make(ConfigRepository::class);
@@ -462,6 +463,7 @@ class MenuRepository extends BaseRepository
         }
         $menuData = $this->dao->getSearch([])
             ->where('is_mer', $isMer)
+            ->where('is_agent', $isAgent)
             ->where('is_menu', 1)
             ->where('is_show', 1)
             ->where(function ($query) use ($keyWord, $configMenusPath) {
@@ -496,4 +498,3 @@ class MenuRepository extends BaseRepository
         return compact('menus');
     }
 }
-

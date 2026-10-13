@@ -71,11 +71,16 @@ class StoreActivityCateRepository extends BaseRepository
 
     public function options()
     {
-        $data = $this->dao->getSearch(['status' => 1])->where('id','>',1)->with([
-            'children' => function ($query) {
-                $query->field('id,label_name,label_cate,style_type,color,bg_color,border_color,icon');
-            }
-        ])->field('id,name,sort,status')->order('sort desc, id desc')->select()->toArray();
+        $data = $this->dao->getSearch(['status' => 1])
+            ->where('is_sys',0)
+            ->with([
+                'children' => function ($query) {
+                    $query->field('id,label_name,label_cate,style_type,color,bg_color,border_color,icon,start_time,end_time');
+                }
+            ])
+            ->field('id,name,sort,status')
+            ->order('sort desc, id desc')
+            ->select()->toArray();
 
         foreach ($data as $key => &$item) {
             if(empty($item['children'])) {

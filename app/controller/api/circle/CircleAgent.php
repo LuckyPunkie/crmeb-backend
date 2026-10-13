@@ -68,13 +68,32 @@ class CircleAgent extends BaseController
 
     public function create()
     {
-        $data = $this->request->params(['name', 'phone', 'qualification', 'remark', 'type', 'business_name','business_store_category','business_store_type', ['extend', []]]);
+        $data = $this->request->params([
+            'name',
+            'phone',
+            'qualification',
+            'remark',
+            'type',
+            'business_name',
+            'business_store_category',
+            'business_store_type',
+            ['extend', []],
+            ['platform_category', []],
+            ['mer_product_type', []]
+        ]);
 
         $validate = $this->getValidate();
         if (!$validate->add($data)) {
             return app('json')->fail($validate->getError());
         }
-
+        //$category_number_count = systemConfig('category_number_count');
+        //if (
+        //    $data['type'] == 1 &&
+        //    $category_number_count &&
+        //    (count($data['platform_category']) > $category_number_count)
+        //) {
+        //    return app('json')->fail('分类数量最多为: '.$category_number_count);
+        //}
         $res = $this->getRepository()->createAgent($this->request->uid(), $data);
         if (!$res) {
             return app('json')->fail('添加失败', $res);
@@ -89,7 +108,8 @@ class CircleAgent extends BaseController
             return app('json')->fail('参数错误');
         }
 
-        $data = $this->request->params(['name', 'phone', 'qualification', 'remark', 'type', 'business_name','business_store_category','business_store_type', ['extend', []]]);
+        $data = $this->request->params(['name', 'phone', 'qualification', 'remark', 'type', 'business_name','business_store_category','business_store_type', ['extend', []], ['platform_category', []],
+            ['mer_product_type', []]]);
 
         $validate = $this->getValidate();
         if (!$validate->edit($data)) {

@@ -11,7 +11,6 @@
 namespace app\common\repositories\system\financial;
 
 
-use crmeb\services\wechat\Payment;
 use app\common\dao\system\financial\FinancialDao;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
@@ -20,6 +19,8 @@ use app\common\repositories\user\UserBillRepository;
 use crmeb\jobs\ChangeMerchantStatusJob;
 use crmeb\jobs\SendSmsJob;
 use crmeb\services\merchant\MerchantCoreService;
+use crmeb\services\pay\dto\PayRefundDto;
+use crmeb\services\pay\PayServices;
 use FormBuilder\Factory\Elm;
 use think\exception\ValidateException;
 use think\facade\Db;
@@ -985,14 +986,17 @@ class FinancialRepository extends BaseRepository
             $comp = bccomp($res['financial_account']->pay_price, $res['extract_money'], 2);
             if ($comp == -1)
                 throw new ValidateException('申请退款金额：' . $res['extract_money'] . ',大于支付保证金：' . $res['financial_account']->pay_price);
+
+            $order = app()->make(ServeOrderRepository::class)->get($res['financial_account']->order_id);
+
             //退款
             $data = [
                 'refund_id' => $res['financial_account']->order_sn,
                 'pay_price' => $res['financial_account']->pay_price,
-                'refund_price' => $res['extract_money']
+                'refund_price' => $res['extract_money'],
+                'transaction_id'=> $order['transaction_id'],
+                'desc' => '商户保证金',
             ];
-            $order = app()->make(ServeOrderRepository::class)->get($res['financial_account']->order_id);
-
         }
         $has = $this->dao->getSearch([])
             ->where('status', 0)
@@ -1003,7 +1007,8 @@ class FinancialRepository extends BaseRepository
 
         Db::transaction(function () use ($res, $data, $order, $has) {
             if ($data) {
-                Payment::instance()->payOrderRefund($res['financial_account']->order_sn, $data);
+                $driver = $res['financial_type'] == ServeOrderRepository::PAY_TYPE_ALIPAY ? 'alipay' : 'weixin';
+                app()->make(PayServices::class)->refund(PayRefundDto::fromArray($driver, $order->order_sn, $data));
                 //改订单
                 $order->status = 20;
                 $order->save();

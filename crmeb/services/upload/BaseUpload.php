@@ -12,6 +12,7 @@
 namespace crmeb\services\upload;
 
 use crmeb\basic\BaseStorage;
+use crmeb\services\UploadService;
 use think\facade\Config;
 
 /**
@@ -161,7 +162,7 @@ abstract class BaseUpload extends BaseStorage
      */
     public function to(string $path)
     {
-        $this->path = $path;
+        $this->path = trim($path, '/');
         return $this;
     }
 
@@ -197,10 +198,17 @@ abstract class BaseUpload extends BaseStorage
      */
     protected function checkUploadUrl(string $url)
     {
-        if ($url && strstr($url, 'http') === false) {
-            $url = 'http://' . $url;
-        }
-        return $url;
+        return UploadService::normalizeDomain($url);
+    }
+
+    /**
+     * 拼接文件访问地址，避免域名和文件路径之间出现重复斜杠。
+     */
+    protected function buildFileUrl(string $baseUrl, string $path): string
+    {
+        $baseUrl = rtrim($baseUrl, '/');
+        $path = ltrim($path, '/');
+        return $baseUrl === '' ? $path : $baseUrl . '/' . $path;
     }
 
     /**
@@ -249,11 +257,7 @@ abstract class BaseUpload extends BaseStorage
      */
     protected function getUploadPath(string $key)
     {
-        $path = ($this->path ? $this->path . '/' : '') . $key;
-        if ($path && $path[0] === '/') {
-            $path = substr($path, 1);
-        }
-        return $path;
+        return ($this->path ? $this->path . '/' : '') . ltrim($key, '/');
     }
 
     /**

@@ -240,7 +240,11 @@ class StoreGroupOrderRepository extends BaseRepository
 
         // 如果查询到了优惠券ID，进一步通过优惠券仓库查询该优惠券的发送类型，以确定是否为VIP专属
         if ($cid) {
-            return app()->make(StoreCouponRepository::class)->query(['coupon_id' => $cid])->value('send_type') === StoreCouponRepository::GET_COUPON_TYPE_SVIP;
+            return app()->make(StoreCouponRepository::class)
+                ->query(['coupon_id' => $cid])
+                ->where('mer_id', 0)
+                ->where('send_type', StoreCouponRepository::GET_COUPON_TYPE_SVIP)
+                ->count() > 0;
         }
 
         // 如果没有查询到优惠券ID，或者查询的优惠券不是VIP专属，则返回false

@@ -29,6 +29,9 @@ class ApiResponseService
     public function __construct(Json $response)
     {
         $this->response = $response;
+        $this->response->options([
+            'json_encode_param' => JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
+        ]);
     }
 
     public function code(int $code)
@@ -104,7 +107,7 @@ class ApiResponseService
         }
         $res['status'] = $status;
         $res['message'] = $message;
-        $content['data'] =  base64_encode(gzdeflate(json_encode($res,JSON_UNESCAPED_UNICODE),9));
+        $content['data'] =  base64_encode(gzdeflate(json_encode($res, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE),9));
         $this->response->data($content);
         return $this->response;
     }

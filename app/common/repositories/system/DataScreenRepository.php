@@ -57,6 +57,7 @@ class DataScreenRepository extends BaseRepository
         $this->dao = $dao;
         $this->cache_key = env('APP_KEY','merchant').'_data_screen';
         $this->time = date('Y-m-d', time());
+        $this->date = date('Y-m-d', time());
         if ($this->ficit) {
             $this->time = '2025-09-18';
             $this->date = '2025-09-18';

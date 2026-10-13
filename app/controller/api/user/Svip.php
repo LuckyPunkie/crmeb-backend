@@ -34,6 +34,11 @@ class Svip extends BaseController
 {
     protected $repository;
 
+    /**
+     * 初始化付费会员控制器，校验付费会员功能开关是否开启
+     * @param App $app 应用实例
+     * @param UserBillRepository $repository 用户账单仓储
+     */
     public function __construct(App $app, UserBillRepository $repository)
     {
         parent::__construct($app);
@@ -128,7 +133,10 @@ class Svip extends BaseController
      */
     public function svipCoupon(StoreCouponRepository $couponRepository)
     {
-        $where['send_type'] = $couponRepository::GET_COUPON_TYPE_SVIP;
+        $where = [
+            'send_type' => $couponRepository::GET_COUPON_TYPE_SVIP,
+            'mer_id' => 0,
+        ];
         $uid = $this->request->isLogin() ? $this->request->uid() : null;
         $data = $couponRepository->sviplist($where, $uid);
         return app('json')->success($data);

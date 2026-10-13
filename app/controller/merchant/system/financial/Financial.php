@@ -129,6 +129,7 @@ class Financial extends BaseController
         $where['keywords_'] = $where['keyword'];
         unset($where['keyword']);
         $where['mer_id'] = $this->request->merId();
+        $where['type'] = 0;
         $data = $this->repository->getAdminList($where,$page,$limit);
         return app('json')->success($data);
     }
@@ -210,6 +211,7 @@ class Financial extends BaseController
         unset($where['keyword']);
         // 添加商家ID
         $where['mer_id'] = $this->request->merId();
+        $where['type'] = 0;
 
         // 获取分页参数
         [$page, $limit] = $this->getPage();

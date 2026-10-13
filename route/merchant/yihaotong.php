@@ -31,7 +31,7 @@ Route::group(function () {
         Route::get('detail/:id','Serve/detail')->name('merchantServeDetail')->option([
             '_alias' => '详情',
         ]);
-        Route::get('info','Config/info');
+        Route::get('info','Serve/getUserInfo');
     })->prefix('merchant.system.serve.')->option([
         '_path' => '/setting/sms/sms_config/index',
         '_auth' => true,

@@ -27,12 +27,18 @@ class DeliveryOrderDao extends BaseDao
         return DeliveryOrder::getDB()
             ->when(isset($where['service_ids']) && $where['service_ids'] !== '', function ($query) use ($where) {
                 $query->whereIn('service_id', $where['service_ids']);
+            })->when(isset($where['service_id']) && $where['service_id'] !== '', function ($query) use ($where) {
+                $query->where('service_id', $where['service_id']);
             })->when(isset($where['mer_ids']) && $where['mer_ids'] !== '', function ($query) use ($where) {
                 $query->whereIn('mer_id', $where['mer_ids']);
             })->when(isset($where['mer_id']) && $where['mer_id'] !== '', function ($query) use ($where) {
                 $query->where('mer_id', $where['mer_id']);
             })->when(isset($where['status']) && $where['status'] !== '', function ($query) use ($where) {
                 $query->where('status', $where['status']);
+            })->when(isset($where['exclude_status']) && $where['exclude_status'] !== '', function ($query) use ($where) {
+                $query->where('status', '<>', $where['exclude_status']);
+            })->when(isset($where['station_type']) && $where['station_type'] !== '', function ($query) use ($where) {
+                $query->where('station_type', $where['station_type']);
             })->when(isset($where['station_id']) && $where['station_id'] !== '', function ($query) use ($where) {
                 $query->where('station_id', $where['station_id']);
             })->when(isset($where['order_sn']) && $where['order_sn'] !== '', function ($query) use ($where) {
@@ -41,11 +47,11 @@ class DeliveryOrderDao extends BaseDao
             })->when(isset($where['keyword']) && $where['keyword'] !== '', function ($query) use ($where) {
                 $query->where('order_sn', $where['keyword']);
             })->when(isset($where['date']) && $where['date'] !== '', function ($query) use ($where) {
-                $date = explode('-', $where['date']);
-                $startTime = date('Y-m-d', strtotime($date[0])) . ' 00:00:00';
-                $endTime = date('Y-m-d', strtotime($date[1])) . ' 23:59:59';
-
-                $query->whereTime('create_time', 'between', [$startTime, $endTime]);
+                $date = $where['date'];
+                if (preg_match('/^(\d{4}-\d{2}-\d{2})-(\d{4}-\d{2}-\d{2})$/', $date, $matches)) {
+                    $date = str_replace('-', '/', $matches[1]) . '-' . str_replace('-', '/', $matches[2]);
+                }
+                getModelTime($query, $date, 'create_time');
             });
     }
 }

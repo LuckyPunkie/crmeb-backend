@@ -28,6 +28,7 @@ class DeliverySevices
     public static function create($gateway = self::DELIVERY_TYPE_DADA, $merId = 0)
     {
         $gateway = (int)$gateway;
+        halt($gateway);
         switch ($gateway) {
             case 1:
                 $config = [

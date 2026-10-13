@@ -47,7 +47,7 @@ trait DeliveryTrait
      */
     protected function distanceStackFee(int $takeId, int $merId,  array $config, $address): float
     {
-        $fee = 0;
+        $fee = '0.00';
         // 提货点
         $deliveryStation = app()->make(DeliveryStationRepository::class)->deliveryStationInfo($takeId, $merId);
         // 配送距离
@@ -58,28 +58,30 @@ trait DeliveryTrait
         }
         // 阶梯范围
         if (!empty($config['level_stairs'])) {
-            foreach ($config['level_stairs'] as $level) {
+            foreach ((array)$config['level_stairs'] as $level) {
                 if(!$level['add_distance']) {
                     throw new ValidateException('商户阶梯配送费设置错误，阶梯增加距离不能为0');
                 };
 
                 if ($distance >= $level['end_distance']) {
                     $exceedDistance = bcsub($level['end_distance'], $level['start_distance'], 2);
-                    $fee += bcmul(ceil(bcdiv($exceedDistance, $level['add_distance'], 2)), $level['add_amount']);
-                }
-                if ($distance > $level['start_distance'] && $distance <= $level['end_distance']) {
+                    $addFee = bcmul((string)ceil(bcdiv($exceedDistance, $level['add_distance'], 8)), $level['add_amount'], 2);
+                    $fee = bcadd($fee, $addFee, 2);
+                } elseif ($distance > $level['start_distance']) {
                     $exceedDistance = bcsub($distance, $level['start_distance'], 2);
-                    $fee += bcmul(ceil(bcdiv($exceedDistance, $level['add_distance'], 2)), $level['add_amount']);
+                    $addFee = bcmul((string)ceil(bcdiv($exceedDistance, $level['add_distance'], 8)), $level['add_amount'], 2);
+                    $fee = bcadd($fee, $addFee, 2);
                 }
             }
         }
         // 最后等级距离
         if ($distance > $config['level_last']['gt_distance']) {
             $exceedDistance = bcsub($distance, $config['level_last']['gt_distance'], 2);
-            $fee += bcmul(ceil(bcdiv($exceedDistance,  $config['level_last']['add_distance'], 2)), $config['level_last']['add_amount']);
+            $addFee = bcmul((string)ceil(bcdiv($exceedDistance, $config['level_last']['add_distance'], 8)), $config['level_last']['add_amount'], 2);
+            $fee = bcadd($fee, $addFee, 2);
         }
 
-        return $fee;
+        return (float)$fee;
     }
     /**
      * 重量溢价计算
@@ -90,35 +92,62 @@ trait DeliveryTrait
      */
     protected function weightStackFee(float $totalWeight, array $config): float
     {
-        $fee = 0;
+        $fee = '0.00';
+        $firstWeight = (float)($config['level_first']['lt_weight'] ?? 0);
         // 小于第一等级重量
-        if ($totalWeight <= $config['level_first']['lt_weight']) {
-            return $fee;
+        if ($totalWeight <= $firstWeight) {
+            return 0.0;
         }
         // 阶梯范围
+        $previousWeight = $firstWeight;
         if (!empty($config['level_stairs'])) {
-            foreach ($config['level_stairs'] as $level) {
-                if(!$level['add_weight']) {
-                    throw new ValidateException('商户阶梯配送费设置错误，阶梯增加重量不能为0');
-                };
+            foreach ((array)$config['level_stairs'] as $level) {
+                if (!is_array($level)) {
+                    continue;
+                }
 
-                if ($totalWeight >= $level['end_weight']) {
-                    $exceedWeight = bcsub($level['end_weight'], $level['start_weight'], 2);
-                    $fee += bcmul(ceil(bcdiv($exceedWeight, $level['add_weight'], 2)), $level['add_amount']);
+                // 兼容旧配置中阶梯起始重量为空的情况，沿用上一档结束重量。
+                $startWeight = is_numeric($level['start_weight'] ?? null)
+                    ? (float)$level['start_weight']
+                    : $previousWeight;
+                $endWeight = is_numeric($level['end_weight'] ?? null)
+                    ? (float)$level['end_weight']
+                    : 0;
+                $addWeight = is_numeric($level['add_weight'] ?? null)
+                    ? (float)$level['add_weight']
+                    : 0;
+                $addAmount = is_numeric($level['add_amount'] ?? null)
+                    ? (float)$level['add_amount']
+                    : 0;
+                if ($endWeight <= $startWeight || $addWeight <= 0 || $addAmount <= 0) {
+                    continue;
                 }
-                if ($totalWeight > $level['start_weight'] && $totalWeight <= $level['end_weight']) {
-                    $exceedWeight = bcsub($totalWeight, $level['start_weight'], 2);
-                    $fee += bcmul(ceil(bcdiv($exceedWeight, $level['add_weight'], 2)), $level['add_amount']);
+
+                if ($totalWeight >= $endWeight) {
+                    $exceedWeight = bcsub((string)$endWeight, (string)$startWeight, 2);
+                    $addFee = bcmul((string)ceil(bcdiv($exceedWeight, (string)$addWeight, 8)), (string)$addAmount, 2);
+                    $fee = bcadd($fee, $addFee, 2);
+                } elseif ($totalWeight > $startWeight) {
+                    $exceedWeight = bcsub((string)$totalWeight, (string)$startWeight, 2);
+                    $addFee = bcmul((string)ceil(bcdiv($exceedWeight, (string)$addWeight, 8)), (string)$addAmount, 2);
+                    $fee = bcadd($fee, $addFee, 2);
                 }
+
+                $previousWeight = $endWeight;
             }
         }
         // 最后等级重量
-        if ($totalWeight > $config['level_last']['gt_weight']) {
-            $exceedWeight = bcsub($totalWeight, $config['level_last']['gt_weight'], 2);
-            $fee += bcmul(ceil(bcdiv($exceedWeight, $config['level_last']['add_weight'], 2)), $config['level_last']['add_amount']);
+        $last = is_array($config['level_last'] ?? null) ? $config['level_last'] : [];
+        $lastWeight = (float)($last['gt_weight'] ?? 0);
+        $lastAddWeight = (float)($last['add_weight'] ?? 0);
+        $lastAddAmount = (float)($last['add_amount'] ?? 0);
+        if ($lastAddWeight > 0 && $lastAddAmount > 0 && $totalWeight > $lastWeight) {
+            $exceedWeight = bcsub((string)$totalWeight, (string)$lastWeight, 2);
+            $addFee = bcmul((string)ceil(bcdiv($exceedWeight, (string)$lastAddWeight, 8)), (string)$lastAddAmount, 2);
+            $fee = bcadd($fee, $addFee, 2);
         }
 
-        return $fee;
+        return (float)$fee;
     }
     /**
      * 检查一个点是否在多边形内部

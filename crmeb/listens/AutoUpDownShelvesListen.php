@@ -30,45 +30,53 @@ class AutoUpDownShelvesListen extends TimerService implements ListenerInterface
      */
     public function handle($event): void
     {
-        $this->tick(1000 * 5, function () {
+        $this->tick(1000 * 60 , function () {
             try {
-                $today = strtotime("today");
-                $time = time() + 60;
+                $time = time();
                 $redis = app()->make(RedisCacheService::class);
                 $status = Cache::get(ProductRepository::AUTO_TIME_STATUS);
                 $productRepository = app()->make(ProductRepository::class);
-                if ($status) {
-                    $times = $redis->zRangeByScore(ProductRepository::AUTO_PREFIX_SET.ProductRepository::AUTO_ON_TIME,$today,$time);
-                    if ($times) {
-                        $productUpIds = $productRepository->autoSwitchShow($times,ProductRepository::AUTO_ON_TIME);
-                        Log::info('自动上架商品：'.$productUpIds);
-                    }
-                    $times = $redis->zRangeByScore(ProductRepository::AUTO_PREFIX_SET.ProductRepository::AUTO_OFF_TIME,$today,$time);
-                    if ($times) {
-                        $productDownIds = $productRepository->autoSwitchShow($times,ProductRepository::AUTO_OFF_TIME);
-                        Log::info('自动下架商品：'.$productDownIds);
-                    }
-                } else {
+
+                // 状态键只作为数据库同步的短期节流标记，过期后重新校准 Redis，避免缓存丢失后永久失效。
+                if (!$status) {
                     $productUpIds = $productRepository->getSearch([])
                         ->whereNotNull('auto_on_time')
                         ->where([
                             ['is_show', '=', 2],
+                            ['auto_on_time', '<>', 0],
                         ])->column('auto_on_time','product_id');
 
                     $productRepository->bathAutoOntime($productUpIds,$productRepository::AUTO_ON_TIME);
                     $productDownIds = $productRepository->getSearch([])
                         ->whereNotNull('auto_off_time')
                         ->where([
-                            ['is_show', '=', 1],
+                            ['is_show', 'in', [1, 2]],
                             ['auto_off_time', '<>', 0],
-                            ['auto_off_time', '<=', time()],
                         ])
-                        ->column('product_id','auto_off_time');
+                        ->column('auto_off_time','product_id');
                     $productRepository->bathAutoOntime($productDownIds,$productRepository::AUTO_OFF_TIME);
-                    Cache::set(ProductRepository::AUTO_TIME_STATUS,1);
+                    Cache::set(ProductRepository::AUTO_TIME_STATUS,1,300);
+                }
+
+                // 从负无穷开始处理所有已到期任务，服务停机或任务延迟后也能自动补偿。
+                $times = $redis->zRangeByScore(ProductRepository::AUTO_PREFIX_SET.ProductRepository::AUTO_ON_TIME,'-inf',$time);
+                if ($times) {
+                    $productUpIds = $productRepository->autoSwitchShow($times,ProductRepository::AUTO_ON_TIME);
+                    Log::info('自动上架商品：'.$productUpIds);
+                }
+                $times = $redis->zRangeByScore(ProductRepository::AUTO_PREFIX_SET.ProductRepository::AUTO_OFF_TIME,'-inf',$time);
+                if ($times) {
+                    $productDownIds = $productRepository->autoSwitchShow($times,ProductRepository::AUTO_OFF_TIME);
+                    Log::info('自动下架商品：'.$productDownIds);
                 }
             } catch (\Exception $e) {
-                Log::error('商品自动上下架失败' . var_export($e, true));
+                Log::error(sprintf(
+                    '商品自动上下架失败[%s]：%s [%s:%d]',
+                    get_class($e),
+                    $e->getMessage(),
+                    $e->getFile(),
+                    $e->getLine()
+                ));
             }
         });
     }

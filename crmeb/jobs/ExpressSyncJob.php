@@ -23,6 +23,7 @@ class ExpressSyncJob implements JobInterface
     public function fire($job, $data)
     {
         try{
+            Log::info('开始同步物流公司');
             app()->make(ExpressRepository::class)->syncExportAll();
         }catch (\Exception $exception){
             Log::error('同步物流公司失败:'.$exception->getMessage());

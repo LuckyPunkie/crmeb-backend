@@ -279,7 +279,7 @@ class Common extends BaseController
 
     public function config()
     {
-        $data = systemConfig(['tx_map_key', 'delivery_status', 'rmargin_emind_switch']);
+        $data = systemConfig(['tx_map_key', 'delivery_status', 'rmargin_emind_switch','platform_delivery_status']);
         $mer = merchantConfig($this->request->merId(),[
             'mer_dump_switch',
             'mer_dump_type',
@@ -297,6 +297,7 @@ class Common extends BaseController
         $data['reservation'] = $reservation;
         return app('json')->success($data);
     }
+
     public function saveConfig($type)
     {
         switch ($type) {

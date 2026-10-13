@@ -16,6 +16,7 @@ namespace crmeb\services\wechat\client\miniprogram;
 
 use Redis;
 use crmeb\exceptions\AdminException;
+use crmeb\services\wechat\BaseApplication;
 use crmeb\services\wechat\config\MiniProgramConfig;
 use crmeb\services\wechat\config\PaymentConfig;
 use crmeb\services\wechat\util\Helper;
@@ -65,7 +66,7 @@ class OrderClient
      */
     public function __construct(protected AccessTokenAwareClient $api)
     {
-        $this->config = app()->make(PaymentConfig::class);
+        $this->config = app()->make(PaymentConfig::class)->setAccessEnd(BaseApplication::MINI);
         $this->miniProgramConfig = app()->make(MiniProgramConfig::class);
     }
 
@@ -115,9 +116,9 @@ class OrderClient
         }
         $params = [
             'order_key' => [
-                'order_number_type' => 2,
+                'order_number_type' => 1,
                 'mchid' => $sub_mchid == '' ? $this->config->mchId : $sub_mchid,
-                'transaction_id' => $out_trade_no
+                'out_trade_no' => $out_trade_no
             ],
             'logistics_type' => $logistics_type,
             'delivery_mode' => $delivery_mode,
@@ -206,7 +207,8 @@ class OrderClient
     /**
      * 签收通知
      * @param string $merchant_trade_no
-     * @param string $received_time
+     * @param int $received_time
+     * @param string $sub_mchid
      * @return mixed
      * @throws ClientExceptionInterface
      * @throws RedirectionExceptionInterface
@@ -216,10 +218,10 @@ class OrderClient
      * @email 136327134@qq.com
      * @date 2023/9/15
      */
-    public function notifyConfirmByTradeNo(string $merchant_trade_no, string $received_time)
-	{
+    public function notifyConfirmByTradeNo(string $merchant_trade_no, int $received_time, string $sub_mchid = '')
+    {
         $params = [
-            'merchant_id' => $this->config->mchId,
+            'merchant_id' => $sub_mchid == '' ? $this->config->mchId : $sub_mchid,
             'merchant_trade_no' => $merchant_trade_no,
             'received_time' => $received_time
         ];

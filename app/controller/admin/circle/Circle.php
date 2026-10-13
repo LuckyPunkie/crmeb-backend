@@ -47,6 +47,7 @@ class Circle extends BaseController
     {
         $where = $this->request->params(['circle_agent_id', 'name', 'status', ['type',1]]);
         [$page, $limit] = $this->getPage();
+        $where['region_ids'] = $this->request->adminInfo()->region_ids;
         $data = $this->getRepository()->getListCircle($where, $page, $limit, ['circleAgent']);
         return app('json')->success($data);
     }
@@ -88,14 +89,23 @@ class Circle extends BaseController
             'type',
             'role_id',
             'business_store_category',
-            'business_store_type'
+            'business_store_type',
+            ['platform_category', []],
+            ['mer_product_type', []]
         ]);
 
         $validate = $this->getValidate();
         if (!$validate->add($data)) {
             return app('json')->fail($validate->getError());
         }
-
+        //$category_number_count = systemConfig('category_number_count');
+        //if (
+        //    $data['type'] == 1 &&
+        //    $category_number_count &&
+        //    (count($data['platform_category']) > $category_number_count)
+        //) {
+        //    return app('json')->fail('分类数量最多为: '.$category_number_count);
+        //}
         $res = $this->getRepository()->createCircle($data);
         if (!$res) {
             return app('json')->fail('添加失败', $res);
@@ -128,6 +138,8 @@ class Circle extends BaseController
             'role_id',
             'business_store_category',
             'business_store_type',
+            ['platform_category', []],
+            ['mer_product_type', []]
         ]);
 
         $validate = $this->getValidate();
@@ -135,6 +147,10 @@ class Circle extends BaseController
             return app('json')->fail($validate->getError());
         }
 
+        $data['platform_category'] = is_array($data['platform_category']) ? json_encode($data['platform_category']) :
+            $data['platform_category'];
+        $data['mer_product_type'] = is_array($data['mer_product_type']) ? json_encode($data['mer_product_type']) :
+        $data['mer_product_type'];
         $res = $this->getRepository()->updateCircle($id, $data);
         if (!$res) {
             return app('json')->fail('修改失败', $res);
@@ -221,5 +237,16 @@ class Circle extends BaseController
 
         $data = $this->getRepository()->search($where)->field('circle_id as value,pid,name as label')->select();
         return app('json')->success($data);
+    }
+
+    public function qrcode($id)
+    {
+        if (!$id) {
+            return app('json')->fail('参数错误');
+        }
+
+        return app('json')->success([
+            'qrcode' => $this->repository->wxQrcode((int)$id),
+        ]);
     }
 }

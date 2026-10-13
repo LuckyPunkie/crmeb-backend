@@ -8,7 +8,7 @@
 // +----------------------------------------------------------------------
 // | Author: CRMEB Team <admin@crmeb.com>
 // +----------------------------------------------------------------------
-namespace  crmeb\services\pay\storage;
+namespace crmeb\services\pay\storage;
 
 use think\facade\Log;
 use crmeb\services\pay\BasePay;
@@ -25,19 +25,20 @@ class Partner extends BasePay implements PayInterface
 
     public function pay($type, $order,$openid)
     {
-        $order['openid'] = $openid;
+
         switch ($type){
             case 'h5':
                 $config =  Payment::instance()->partnerClient()->payH5($order, 'Wap');
                 break;
             case 'weixin':
+                $order['openid'] = $openid;
                 $config =  Payment::instance()->partnerClient()->payJsapi($order);
                 break;
             case 'weixinQr':
                 $config =  Payment::instance()->partnerClient()->payNative($order);
                 break;
             case 'weixinApp':
-                $config =  Payment::instance()->partnerClient()->payApp($order);
+                $config =  Payment::instance()->setAccessEnd(Payment::APP)->partnerClient()->payApp($order);
                 break;
             case 'weixinBarCode':
                 $config = Payment::microPay(
@@ -46,13 +47,12 @@ class Partner extends BasePay implements PayInterface
                     $order['pay_price'],
                     $order['attach'],
                     $order['body'],
-                    '',
-                    $type,
-                    $order['sub_mchid'] ?? ''
+                    ''
                 );
                 break;
             case 'routine':
-                $config  = Payment::instance()->setAccessEnd(Payment::MINI)->partnerClient()->payJsapi($order,'routine' );
+                $order['openid'] = $openid;
+                $config  = Payment::instance()->setAccessEnd(Payment::MINI)->partnerClient()->payJsapi($order);
                 break;
             default:
                 throw new ValidateException('不存在的支付方式');
@@ -101,9 +101,12 @@ class Partner extends BasePay implements PayInterface
         return compact('config');
     }
 
-    public function payOrderRefund(string $outTradeNo, array $options = [])
+    public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $config = Payment::instance()->partnerClient()->refund($outTradeNo, $options);
+        $config = Payment::instance()
+            ->setAccessEnd($this->resolvePaymentAccessEnd($channel))
+            ->partnerClient()
+            ->refund($outTradeNo, $options);
         return compact('config');
     }
 
@@ -119,9 +122,14 @@ class Partner extends BasePay implements PayInterface
         return compact('config');
     }
 
-    public function refund(string $outTradeNo, array $options = [])
+    public function refund(string $outTradeNo, array $options = [], $channel = '')
     {
-        $config = Payment::instance()->partnerClient()->refund($outTradeNo,$options);
+        return $this->payOrderRefund($outTradeNo, $options, $channel);
+    }
+
+    public function receiversAdd($subMchid)
+    {
+        $config = Payment::instance()->partnerClient()->receiversAdd($subMchid);
         return compact('config');
     }
 

@@ -155,6 +155,9 @@ Route::group(function () {
         Route::get('lst', '/lst')->name('merchantOrderReceiptLst')->option([
             '_alias' => '列表',
         ]);
+        Route::get('title', '/title')->name('merchantOrderReceiptTitle')->option([
+            '_alias' => '统计',
+        ]);
         Route::get('detail/:id', '/detail')->name('merchantOrderReceiptDetail')->option([
             '_alias' => '详情',
         ]);

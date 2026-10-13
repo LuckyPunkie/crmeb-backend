@@ -8,7 +8,7 @@
 // +----------------------------------------------------------------------
 // | Author: CRMEB Team <admin@crmeb.com>
 // +----------------------------------------------------------------------
-namespace  crmeb\services\pay\storage;
+namespace crmeb\services\pay\storage;
 
 use think\facade\Cache;
 use crmeb\services\pay\BasePay;
@@ -22,7 +22,7 @@ class Alipay extends BasePay implements PayInterface
     {
         $affect = $order['attach'];
         $order['openid'] = $openid;
-        $service = AlipayService::instance();
+        $service = AlipayService::make();
         switch ($type){
             case 'alipay':
                 $url = $service->create(
@@ -79,15 +79,15 @@ class Alipay extends BasePay implements PayInterface
     }
 
 
-    public function payOrderRefund(string $outTradeNo, array $options = [])
+    public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '')
     {
         $refundId = $options['refund_id'] ?? $options['refund_no'] ?? $outTradeNo;
-        $config = AlipayService::instance()->refund($outTradeNo, (string)floatval($options['refund_price']), $refundId);
+        $config = AlipayService::make()->refund($outTradeNo, (string)floatval($options['refund_price']), $refundId);
         return compact('config');
     }
 
-    public function refund(string $outTradeNo, array $options = [])
+    public function refund(string $outTradeNo, array $options = [], $channel = '')
     {
-        return $this->payOrderRefund($outTradeNo, $options);
+        return $this->payOrderRefund($outTradeNo, $options, $channel);
     }
 }

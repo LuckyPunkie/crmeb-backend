@@ -13,6 +13,7 @@
 namespace app\controller\merchant\store\delivery;
 
 use app\common\repositories\delivery\DeliveryOrderRepository;
+use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\system\serve\ServeOrderRepository;
 use think\App;
 use crmeb\basic\BaseController;
@@ -52,6 +53,71 @@ class DeliveryOrder extends BaseController
         $data = $this->repository->merList($where, $page, $limit);
         // 返回成功响应
         return app('json')->success($data);
+    }
+
+    /**
+     * 商户配送订单管理列表。
+     */
+    public function manageList()
+    {
+        [$page, $limit] = $this->getPage();
+        $data = $this->repository->manageList(
+            $this->getManageWhere(),
+            $page,
+            $limit,
+            false,
+            $this->request->merId()
+        );
+        return app('json')->success($data);
+    }
+
+    /**
+     * 商户配送订单管理头部统计。
+     */
+    public function manageTitle()
+    {
+        $data = $this->repository->manageTitle(
+            $this->getManageWhere(),
+            false,
+            $this->request->merId()
+        );
+        return app('json')->success($data);
+    }
+
+    /**
+     * 商户配送订单批量派单。
+     */
+    public function batchDispatch()
+    {
+        $orderIds = $this->request->param('order_ids', []);
+        if (!is_array($orderIds)) {
+            return app('json')->fail('订单参数格式错误');
+        }
+        $serviceId = (int)$this->request->param('service_id', 0);
+        $data = $this->repository->batchDispatch(
+            $orderIds,
+            $serviceId,
+            false,
+            $this->request->merId()
+        );
+        return app('json')->success('批量派单完成', $data);
+    }
+
+    /**
+     * 商户配送订单批量确认送达。
+     */
+    public function batchConfirm()
+    {
+        $orderIds = $this->request->param('order_ids', []);
+        if (!is_array($orderIds)) {
+            return app('json')->fail('订单参数格式错误');
+        }
+        $data = $this->repository->batchConfirm(
+            $orderIds,
+            false,
+            $this->request->merId()
+        );
+        return app('json')->success('批量确认完成', $data);
     }
 
     /**
@@ -120,6 +186,59 @@ class DeliveryOrder extends BaseController
         $status = $this->request->param('status') == 1 ? 1 : 0;
         $this->repository->update($id, ['status' => $status]);
         return app('json')->success('修改成功');
+    }
+
+    protected function getManageWhere(): array
+    {
+        $where = $this->request->params([
+            'keywords', 'date', 'store_name', 'activity_type', 'status',
+            ['user_search_type', 'all'], ['user_search', ''],
+            ['nickname', ''], ['uid', ''], ['phone', ''],
+        ]);
+        $payType = $this->request->param('pay_type', '');
+
+        if ($payType !== '') {
+            if (!ctype_digit((string)$payType)) {
+                throw new ValidateException('支付方式参数错误');
+            }
+            $payType = (int)$payType;
+            if (!array_key_exists($payType, StoreOrderRepository::PAY_TYPE_FILTEER)) {
+                throw new ValidateException('支付方式参数错误');
+            }
+            $where['pay_type'] = StoreOrderRepository::PAY_TYPE_FILTEER[$payType];
+        }
+        $this->setUserSearchWhere($where);
+        return $where;
+    }
+
+    protected function setUserSearchWhere(array &$where): void
+    {
+        $searchType = (string)$where['user_search_type'];
+        $search = trim((string)$where['user_search']);
+        if ($search === '') {
+            foreach (['nickname', 'uid', 'phone'] as $legacySearchType) {
+                if (($where[$legacySearchType] ?? '') !== '') {
+                    $searchType = $legacySearchType;
+                    $search = trim((string)$where[$legacySearchType]);
+                    break;
+                }
+            }
+        }
+        unset($where['user_search_type'], $where['user_search']);
+        unset($where['nickname'], $where['uid'], $where['phone']);
+        if ($search === '') {
+            return;
+        }
+        $searchFields = [
+            'all' => 'username',
+            'uid' => 'uid',
+            'phone' => 'phone',
+            'nickname' => 'nickname',
+        ];
+        if (!isset($searchFields[$searchType])) {
+            throw new ValidateException('用户搜索类型错误');
+        }
+        $where[$searchFields[$searchType]] = $search;
     }
 
 

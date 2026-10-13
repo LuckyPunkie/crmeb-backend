@@ -25,9 +25,9 @@ use app\common\repositories\system\merchant\MerchantRepository;
 use app\common\repositories\user\UserBillRepository;
 use app\common\repositories\user\UserMerchantRepository;
 use app\common\repositories\user\UserRepository;
-use app\common\repositories\wechat\WechatUserRepository;
 use crmeb\jobs\UserBrokerageLevelJob;
-use crmeb\services\pay\Pay;
+use crmeb\services\pay\factory\PresellOrderPayFactory;
+use crmeb\services\pay\PayServices;
 use think\Exception;
 use think\exception\ValidateException;
 use think\facade\Db;
@@ -96,26 +96,14 @@ class PresellOrderRepository extends BaseRepository
             return $this->payBalance($user, $order);
         }
 
-        // 如果是微信或支付宝支付，并且是APP支付，则在支付方式后添加App后缀
-        if (in_array($type, ['weixin', 'alipay'], true) && $isApp) {
-            $type .= 'App';
-        }
-
         // 在支付前触发一个事件，允许其他功能模块进行额外的操作或校验
         event('order.presell.pay.before', compact('order', 'type', 'isApp'));
 
-        // 根据支付类型和系统配置，选择合单驱动或普通驱动
-        $isCombine = in_array($type, ['weixin', 'weixinApp', 'routine', 'h5', 'weixinQr'], true)
-            && systemConfig('open_wx_combine');
-        $driver = $isCombine ? 'combine' : null;
-        $orderParams = $isCombine
-            ? $order->getCombinePayParams()
-            : $order->getPayParams($type === 'alipay' ? $return_url : '');
-
-        $config = $this->callPayDriver($type, $orderParams, $user, $driver);
+        $dto = PresellOrderPayFactory::make($type, $user, $order, $return_url, $isApp);
+        $config = app()->make(PayServices::class)->pay($dto);
 
         // 返回支付配置和订单ID，供前端进行支付操作
-        return app('json')->status($type, $config + ['order_id' => $order['presell_order_id']]);
+        return app('json')->status($dto->payType, $config + ['order_id' => $order['presell_order_id']]);
     }
 
 
@@ -445,49 +433,4 @@ class PresellOrderRepository extends BaseRepository
         event('order.presll.fail', compact('order'));
     }
 
-    /**
-     * 统一支付调用：根据类型获取 openid 并调用 Pay 驱动
-     *
-     * @param string      $type       支付类型
-     * @param array       $orderParams 订单参数
-     * @param User|null   $user       用户对象
-     * @param string|null $driver     驱动名称，null 使用默认驱动
-     * @return array
-     */
-    protected function callPayDriver(string $type, array $orderParams, ?User $user, ?string $driver = null): array
-    {
-        $pay = app()->make(Pay::class);
-        if ($driver) {
-            $pay = $pay->driver($driver);
-        }
-
-        switch ($type) {
-            case 'weixin':
-                $wechatUserRepo = app()->make(WechatUserRepository::class);
-                $openId = $wechatUserRepo->idByOpenId($user['wechat_user_id']);
-                if (!$openId) throw new ValidateException('请关联微信公众号!');
-                return $pay->pay($type, $orderParams, $openId);
-
-            case 'routine':
-                $wechatUserRepo = app()->make(WechatUserRepository::class);
-                $openId = $wechatUserRepo->idByRoutineId($user['wechat_user_id']);
-                if (!$openId) throw new ValidateException('请关联微信小程序!');
-                return $pay->pay($type, $orderParams, $openId);
-
-            case 'alipay':
-                $orderParams['attach'] = 'presell';
-                return (new Pay('alipay'))->pay($type, $orderParams, '');
-
-            case 'alipayApp':
-                $orderParams['attach'] = 'presell';
-                return (new Pay('alipay'))->pay($type, $orderParams, '');
-
-            case 'alipayQr':
-                $orderParams['attach'] = 'presell';
-                return (new Pay('alipay'))->pay($type, $orderParams, '');
-
-            default:
-                return $pay->pay($type, $orderParams, '');
-        }
-    }
 }

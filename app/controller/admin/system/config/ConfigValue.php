@@ -59,7 +59,6 @@ class ConfigValue extends BaseController
         $children = array_column($make->children($cid, 'config_classify_id')->toArray(), 'config_classify_id');
         $children[] = $cid;
         $this->repository->save($children, $formData, $this->request->merId());
-        //$this->repository->after_review_mode($cid,$formData,$this->request->merId(),1);
         return app('json')->success('保存成功');
     }
 }

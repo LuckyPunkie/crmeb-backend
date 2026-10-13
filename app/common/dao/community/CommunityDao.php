@@ -84,7 +84,20 @@ class CommunityDao extends BaseDao
                 $query->whereIn('uid',$where['uids']);
             })
             ->when(isset($where['topic_id']) && $where['topic_id'] !==  '', function ($query) use($where) {
-                $query->where('topic_id',$where['topic_id']);
+                // DIY组件的多选话题以逗号分隔，统一转换后使用对应的筛选方式
+                $topicIds = is_array($where['topic_id'])
+                    ? $where['topic_id']
+                    : explode(',', (string)$where['topic_id']);
+                $topicIds = array_values(array_filter(array_map(function ($topicId) {
+                    return trim((string)$topicId);
+                }, $topicIds), function ($topicId) {
+                    return $topicId !== '';
+                }));
+                if (count($topicIds) > 1) {
+                    $query->whereIn('topic_id', $topicIds);
+                } elseif ($topicIds) {
+                    $query->where('topic_id', $topicIds[0]);
+                }
             })
             ->when(isset($where['mer_id']) && $where['mer_id'] !==  '', function ($query) use($where) {
                 $query->where('mer_id',$where['mer_id']);

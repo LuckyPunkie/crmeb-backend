@@ -14,9 +14,11 @@
 namespace app\common\repositories\store\coupon;
 
 
+use app\common\model\system\merchant\Merchant;
 use app\common\dao\store\coupon\StoreCouponDao;
 use app\common\dao\store\coupon\StoreCouponProductDao;
 use app\common\model\store\coupon\StoreCoupon;
+use app\common\model\store\coupon\StoreCouponUser;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\product\ProductRepository;
 use app\common\repositories\store\StoreCategoryRepository;
@@ -63,6 +65,8 @@ class StoreCouponRepository extends BaseRepository
     const GET_COUPON_TYPE_FIRST = 4;
     //会员券
     const GET_COUPON_TYPE_SVIP = 5;
+    //店铺会员券与平台付费会员券共用历史枚举值，通过 mer_id 区分
+    const GET_COUPON_TYPE_MERCHANT_MEMBER = 5;
     //后台赠送
     const GET_COUPON_TYPE_ADMIN = 6;
 
@@ -190,6 +194,12 @@ class StoreCouponRepository extends BaseRepository
      */
     public function apiList(array $where, int $page, int $limit, $uid)
     {
+        if (isset($where['region_id']) && ($where['region_id'] != '')) {
+            $where['mer_id'] = app()->make(MerchantRepository::class)
+                ->getSearch([])
+                ->where('region_id',$where['region_id'])
+                ->column('mer_id');
+        }
         // 定义要包含的关联数据，首先是商家信息
         $with = [
             'merchant' => function ($query) {
@@ -385,12 +395,37 @@ class StoreCouponRepository extends BaseRepository
 //                ['value' => 2, 'label' => '新人券'],
                 ['value' => self::GET_COUPON_TYPE_ADMIN, 'label' => '后台发放'],
                 ['value' => self::GET_COUPON_TYPE_PAY, 'label' => '赠送券'],
+                ['value' => self::GET_COUPON_TYPE_MERCHANT_MEMBER, 'label' => '店铺会员券'],
             ])->appendControl(1, [Elm::number('full_reduction', '满赠金额：', 0)->min(0)->placeholder('赠送优惠券的最低消费金额')]),
             Elm::radio('is_limited', '是否限量：', 0)->options([['label' => '限量', 'value' => 1], ['label' => '不限量', 'value' => 0]])
                 ->appendControl(1, [Elm::number('total_count', '发布数量：', 0)->min(0)]),
             Elm::number('sort', '排序：', 0)->precision(0)->max(99999),
             Elm::radio('status', '状态：', 1)->options([['label' => '开启', 'value' => 1], ['label' => '关闭', 'value' => 0]]),
         ])->setTitle('发布优惠券');
+    }
+
+    /**
+     * 获取店铺领券中心可展示的优惠券。
+     * 店铺会员在普通领取券之外，还可以查看店铺会员券。
+     */
+    public function validMerCoupon($merId, $uid = null, $type = 0)
+    {
+        $sendType = self::GET_COUPON_TYPE_RECEIVE;
+        if ($uid) {
+            $isMember = Db::name('merchant_member')
+                ->where('uid', (int)$uid)
+                ->where('mer_id', (int)$merId)
+                ->where('is_logoff', 0)
+                ->count();
+            if ($isMember) {
+                $sendType = [
+                    self::GET_COUPON_TYPE_RECEIVE,
+                    self::GET_COUPON_TYPE_MERCHANT_MEMBER,
+                ];
+            }
+        }
+
+        return $this->dao->validMerCoupon($merId, $uid, $type, $sendType);
     }
 
     /**
@@ -406,6 +441,15 @@ class StoreCouponRepository extends BaseRepository
      */
     public function receiveCoupon($id, $uid)
     {
+        $couponInfo = $this->dao->get($id);
+        if (
+            $couponInfo
+            && (int)$couponInfo->send_type === self::GET_COUPON_TYPE_MERCHANT_MEMBER
+            && (int)$couponInfo->mer_id > 0
+        ) {
+            return $this->receiveMerchantMemberCoupon($id, $uid);
+        }
+
         // 验证优惠券是否有效且未被领取
         $coupon = $this->dao->validCoupon($id, $uid);
         if (!$coupon)
@@ -417,6 +461,158 @@ class StoreCouponRepository extends BaseRepository
 
         // 发送优惠券给用户
         $this->sendCoupon($coupon, $uid,StoreCouponUserRepository::SEND_TYPE_RECEIVE);
+    }
+
+    /**
+     * 领取店铺会员专享券。
+     */
+    public function receiveMerchantMemberCoupon($id, $uid)
+    {
+        Db::transaction(function () use ($id, $uid) {
+            StoreCoupon::getDB()->where('coupon_id', $id)->lock(true)->find();
+            $coupon = $this->dao->validMerchantMemberCoupon($id, $uid);
+            if (!$coupon) {
+                throw new ValidateException('优惠券失效');
+            }
+            $isMember = Db::name('merchant_member')
+                ->where('uid', (int)$uid)
+                ->where('mer_id', (int)$coupon->mer_id)
+                ->where('is_logoff', 0)
+                ->count();
+            if (!$isMember) {
+                throw new ValidateException('请先加入店铺会员');
+            }
+            if (!is_null($coupon['issue'])) {
+                throw new ValidateException('优惠券已领取');
+            }
+            $this->sendCoupon($coupon, $uid, StoreCouponUserRepository::SEND_TYPE_RECEIVE);
+        });
+    }
+
+    /**
+     * 发放店铺会员等级奖励优惠券。
+     */
+    public function receiveMerchantLevelRewardCoupon(int $id, int $uid, int $merId): void
+    {
+        $coupon = $this->validCouponQueryWithMerchant([
+            'mer_id' => $merId,
+        ])->setOption('field', [])
+            ->field('C.*')
+            ->where('C.coupon_id', $id)
+            ->find();
+        if (!$coupon) {
+            throw new ValidateException('优惠券失效');
+        }
+
+        $this->sendCoupon($coupon, $uid, StoreCouponUserRepository::SEND_TYPE_SEND);
+    }
+
+    /**
+     * 店铺会员专享券列表。
+     */
+    public function merchantMemberCouponList(int $merId, int $uid, int $page, int $limit): array
+    {
+        $isMember = Db::name('merchant_member')
+            ->where('uid', $uid)
+            ->where('mer_id', $merId)
+            ->where('is_logoff', 0)
+            ->count();
+        if (!$isMember) {
+            throw new ValidateException('请先加入店铺会员');
+        }
+
+        $where = [
+            'mer_id' => $merId,
+            'send_type' => self::GET_COUPON_TYPE_MERCHANT_MEMBER,
+        ];
+        $query = $this->validCouponQueryWithMerchant($where)
+            ->with([
+                'issue' => function ($query) use ($uid) {
+                    $query->where('uid', $uid);
+                },
+            ]);
+        $count = (clone $query)->count($this->dao->getPk());
+        $list = $query->setOption('field', [])
+            ->field('C.*')
+            ->page($page, $limit)
+            ->select()
+            ->toArray();
+        $usedCouponIds = [];
+        if ($list) {
+            $usedCouponIds = StoreCouponUser::where('uid', $uid)
+                ->whereIn('coupon_id', array_column($list, 'coupon_id'))
+                ->where('status', 1)
+                ->column('coupon_id');
+            $usedCouponIds = array_fill_keys(array_map('intval', $usedCouponIds), true);
+        }
+        foreach ($list as &$item) {
+            $item['received'] = !empty($item['issue']);
+            $item['used'] = isset($usedCouponIds[(int)$item['coupon_id']]);
+        }
+        unset($item);
+        return compact('count', 'list');
+    }
+
+    /**
+     * 获取指定商户当前有效的店铺会员优惠券ID列表。
+     */
+    public function merchantMemberCouponIds(int $merId): array
+    {
+        $ids = $this->validCouponQueryWithMerchant([
+            'mer_id' => $merId,
+            'send_type' => self::GET_COUPON_TYPE_MERCHANT_MEMBER,
+        ])->column('C.coupon_id');
+
+        return array_values(array_unique(array_map('intval', $ids)));
+    }
+
+    /**
+     * 查询装修组件指定的有效店铺会员券。
+     */
+    public function merchantMemberCouponListByIds(array $ids, int $merId, ?int $uid = null): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $ids))));
+        if (!$ids) {
+            return [];
+        }
+
+        $query = $this->validCouponQueryWithMerchant([
+            'send_type' => self::GET_COUPON_TYPE_MERCHANT_MEMBER,
+        ])->where('C.mer_id', $merId)
+            ->whereIn('C.coupon_id', $ids);
+        if ($uid) {
+            $query->with([
+                'issue' => function ($query) use ($uid) {
+                    $query->where('uid', $uid);
+                },
+            ]);
+        }
+
+        $rows = $query->setOption('field', [])
+            ->field('C.*')
+            ->select()
+            ->toArray();
+        $usedCouponIds = [];
+        if ($uid) {
+            $usedCouponIds = StoreCouponUser::where('uid', $uid)
+                ->whereIn('coupon_id', $ids)
+                ->where('status', 1)
+                ->column('coupon_id');
+            $usedCouponIds = array_fill_keys(array_map('intval', $usedCouponIds), true);
+        }
+        $sort = array_flip($ids);
+        usort($rows, static fn($left, $right) => ($sort[(int)$left['coupon_id']] ?? PHP_INT_MAX)
+            <=> ($sort[(int)$right['coupon_id']] ?? PHP_INT_MAX));
+        foreach ($rows as &$row) {
+            $row['received'] = !empty($row['issue']);
+            $row['used'] = isset($usedCouponIds[(int)$row['coupon_id']]);
+            $row['money'] = (string)($row['coupon_price'] ?? '0.00');
+            $row['minPrice'] = (string)($row['use_min_price'] ?? '0.00');
+            $row['name'] = (string)($row['title'] ?? '会员专享券');
+            unset($row['issue']);
+        }
+        unset($row);
+        return $rows;
     }
 
     /**
@@ -526,7 +722,7 @@ class StoreCouponRepository extends BaseRepository
         ];
 
         // 根据优惠券的获取类型，设置不同的有效时间
-        if ($coupon['send_type'] == self::GET_COUPON_TYPE_SVIP) {
+        if ($coupon['send_type'] == self::GET_COUPON_TYPE_SVIP && (int)$coupon['mer_id'] === 0) {
             // SVIP获取的优惠券，有效时间为当前月的第一天到下个月的最后一天
             $data['start_time'] = date('Y-m-d 00:00:00', time());
             $firstday = date('Y-m-01', time());
@@ -1016,7 +1212,9 @@ class StoreCouponRepository extends BaseRepository
         $senMake = app()->make(StoreCouponSendRepository::class);
 
         // 查询可用的SVIP优惠券ID
-        $couponIds = $this->dao->validCouponQuery(null, StoreCouponRepository::GET_COUPON_TYPE_SVIP)->column('coupon_id');
+        $couponIds = $this->dao->validCouponQuery(null, StoreCouponRepository::GET_COUPON_TYPE_SVIP)
+            ->where('mer_id', 0)
+            ->column('coupon_id');
 
         // 如果有可用的优惠券ID和SVIP用户，那么开始发送优惠券
         if ($couponIds && $uids) {

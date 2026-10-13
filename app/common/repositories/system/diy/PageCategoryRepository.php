@@ -143,10 +143,10 @@ class PageCategoryRepository extends BaseRepository
         // 定义查询条件，筛选父ID为$pid且类型为$type的分类。
         $where['pid'] = $pid;
         $where['is_mer'] = $type;
-        // 如果类型为1，则进一步筛选不为'product_category'的分类。
-        if ($type == 1) {
-            $where['not_type'] = 'product_category';
-        }
+        //// 如果类型为1，则进一步筛选不为'product_category'的分类。
+        //if ($type == 1) {
+        //    $where['not_type'] = 'product_category';
+        //}
         // 执行查询，获取级别小于3的分类信息，按排序和添加时间降序排列。
         $list = $this->dao->getSearch($where)->where('level', '<', 3)
             ->field('id,pid,type,name label,status')->order('sort DESC,add_time DESC')->select();

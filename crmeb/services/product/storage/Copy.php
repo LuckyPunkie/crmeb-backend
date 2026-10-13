@@ -29,6 +29,8 @@ class Copy extends BaseProduct
      */
     const PRODUCT_GOODS = 'copy/goods';
 
+    const GET_USER_INFO = 'user/info';
+
     /** 初始化
      * @param array $config
      */
@@ -54,5 +56,14 @@ class Copy extends BaseProduct
         return $this->accessToken->httpRequest(self::PRODUCT_GOODS, $param);
     }
 
+    /**
+     *  获取一号通信息
+     * @return array|mixed
+     * @author Qinii
+     */
+    public function getUserInfo()
+    {
+        return $this->accessToken->httpRequest(self::GET_USER_INFO);
+    }
 
 }

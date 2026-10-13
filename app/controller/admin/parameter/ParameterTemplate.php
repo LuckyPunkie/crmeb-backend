@@ -184,7 +184,7 @@ class ParameterTemplate extends BaseController
     public function checkParams($isCreate = 0)
     {
         $mer_id = $this->request->merId();
-        $data = $this->request->params(['template_name', ['cate_ids', []], 'sort', 'params','delete_params']);
+        $data = $this->request->params(['template_name', ['cate_ids', []], 'sort', 'params','delete_params','required']);
         app()->make(ParameterTemplateValidate::class)->check($data);
         if ($mer_id == 0 && empty($data['cate_ids'])) {
             throw new ValidateException('请选择商品分类');

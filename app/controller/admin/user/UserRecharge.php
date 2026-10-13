@@ -61,4 +61,17 @@ class UserRecharge extends BaseController
         $totalWxPrice = $this->repository->totalWxPrice();
         return app('json')->success(compact('totalWxPrice', 'totalRoutinePrice', 'totalPayPrice', 'totalRefundPrice'));
     }
+
+    /**
+     * 充值订单退款
+     * @param int $id
+     * @return mixed
+     */
+    public function refund($id)
+    {
+        $refundPrice = $this->request->param('price',0);
+        $this->repository->refund((int)$id, (float)$refundPrice);
+        return app('json')->success('退款成功');
+    }
+
 }

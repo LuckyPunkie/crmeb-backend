@@ -11,6 +11,7 @@
 namespace app\common\repositories\delivery;
 
 use app\common\dao\delivery\DeliveryStationDao;
+use app\common\model\delivery\DeliveryStation;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\system\config\ConfigClassifyRepository;
 use app\common\repositories\system\config\ConfigValueRepository;
@@ -122,7 +123,10 @@ class DeliveryStationRepository extends BaseRepository
     {
         return Db::transaction(function () use ($data) {
             if (!$data['origin_shop_id']) $data['origin_shop_id'] = $data['mer_id'] . '_' . $this->getSn();
-            if($data['bind_type'] == 0 && $data['type']) {
+            if ($data['bind_type'] == 0 && in_array((int)$data['type'], [
+                DeliverySevices::DELIVERY_TYPE_DADA,
+                DeliverySevices::DELIVERY_TYPE_UU,
+            ], true)) {
                 DeliverySevices::create($data['type'])->addShop($data);
             }
             unset($data['bind_type']);
@@ -175,7 +179,10 @@ class DeliveryStationRepository extends BaseRepository
             $data['origin_shop_id'] = $origin_shop_id;
         }
         return Db::transaction(function () use ($id, $data, $merId) {
-            if($data['type']) {
+            if (in_array((int)$data['type'], [
+                DeliverySevices::DELIVERY_TYPE_DADA,
+                DeliverySevices::DELIVERY_TYPE_UU,
+            ], true)) {
                 DeliverySevices::create($data['type'], $merId)->updateShop($data);
             }
             unset($data['bind_type']);
@@ -402,7 +409,13 @@ class DeliveryStationRepository extends BaseRepository
         $lat = 0;
         $lng = 0;
         if($params['switch_city']) {
-            $params['mer_delivery_type'] = merchantConfig($params['mer_id'], 'mer_delivery_type');
+            $merDeliveryType = (array)merchantConfig($params['mer_id'], 'mer_delivery_type');
+            if ((int)systemConfig('platform_delivery_status') === 1) {
+                $merDeliveryType[] = DeliveryStation::TYPE_PLATFORM;
+            } else {
+                $merDeliveryType = array_diff($merDeliveryType, [DeliveryStation::TYPE_PLATFORM]);
+            }
+            $params['mer_delivery_type'] = array_values(array_unique($merDeliveryType));
             $address = app()->make(UserAddressRepository::class)->get($params['address_id'], $params['uid']);
             $addressDetail = $address['province'] . $address['city'] . $address['district'] . $address['street'] . $address['detail'];
             try{
@@ -410,7 +423,6 @@ class DeliveryStationRepository extends BaseRepository
                 $lat = $addressLatAndLong['location']['lat'];
                 $lng = $addressLatAndLong['location']['lng'];
             }catch (\Exception $exception) {
-
             }
         }
         if($params['switch_take']) {
@@ -446,6 +458,11 @@ class DeliveryStationRepository extends BaseRepository
             usort($list, function($a, $b) {
                 return ($a['distanceM'] ?? 0) <=> ($b['distanceM'] ?? 0);
             });
+        } else if(!empty($list)){
+            $list = array_map(function ($item) {
+                $item['distance'] = '0 m';
+                return $item;
+            }, $list);
         }
 
         return $list;

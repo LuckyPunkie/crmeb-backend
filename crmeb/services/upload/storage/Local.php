@@ -133,7 +133,7 @@ class Local extends BaseUpload
         $this->fileInfo->uploadInfo = new File($filePath);
         $this->fileInfo->realName = $fileHandle->getOriginalName();
         $this->fileInfo->fileName = $this->fileInfo->uploadInfo->getFilename();
-        $this->fileInfo->filePath = $this->defaultPath . '/' . str_replace('\\', '/', $fileName);
+        $this->fileInfo->filePath = $this->buildFileUrl($this->defaultPath, str_replace('\\', '/', $fileName));
         return $this->afterUpload($this->isImageFileHandle($fileHandle), $this->fileInfo->filePath, $this->fileInfo->fileName);
     }
 
@@ -153,11 +153,13 @@ class Local extends BaseUpload
             return $this->setError('Failed to generate upload directory, please check the permission!');
         }
         $fileName = $dir . '/' . $key;
-        file_put_contents($fileName, $fileContent);
+        if (file_put_contents($fileName, $fileContent) === false) {
+            return $this->setError('写入上传文件失败');
+        }
         $this->fileInfo->uploadInfo = new File($fileName);
         $this->fileInfo->realName = $key;
         $this->fileInfo->fileName = $key;
-        $this->fileInfo->filePath = $this->defaultPath . '/' . $this->path . '/' . $key;
+        $this->fileInfo->filePath = $this->buildFileUrl($this->defaultPath, ($this->path ? $this->path . '/' : '') . $key);
 
         try {
             return $this->afterUpload($this->isImageByPath($key), $this->fileInfo->filePath, $this->fileInfo->fileName);
@@ -182,11 +184,13 @@ class Local extends BaseUpload
             return $this->setError('Failed to generate upload directory, please check the permission!');
         }
         $fileName = $dir . '/' . $key;
-        file_put_contents($fileName, $fileContent);
+        if (file_put_contents($fileName, $fileContent) === false) {
+            return $this->setError('写入下载文件失败');
+        }
         $this->downFileInfo->downloadInfo = new File($fileName);
         $this->downFileInfo->downloadRealName = $key;
         $this->downFileInfo->downloadFileName = $key;
-        $this->downFileInfo->downloadFilePath = $this->defaultPath . '/' . $this->path . '/' . $key;
+        $this->downFileInfo->downloadFilePath = $this->buildFileUrl($this->defaultPath, ($this->path ? $this->path . '/' : '') . $key);
         return $this->downFileInfo;
     }
 

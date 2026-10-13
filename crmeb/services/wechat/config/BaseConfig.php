@@ -12,9 +12,7 @@
 namespace crmeb\services\wechat\config;
 
 use crmeb\services\wechat\contract\ConfigHandlerInterface;
-use crmeb\services\wechat\DefaultConfig;
-use JetBrains\PhpStorm\ArrayShape;
-use JetBrains\PhpStorm\Pure;
+use crmeb\services\wechat\BaseApplication;
 
 /**
  * 支付配置
@@ -26,7 +24,7 @@ class BaseConfig implements ConfigHandlerInterface
     /**
      * @var string
      */
-    protected string $channel = 'wechat';
+    protected string $channel = BaseApplication::WEB;
     /**
      * @var HttpCommonConfig
      */
@@ -62,10 +60,11 @@ class BaseConfig implements ConfigHandlerInterface
      */
     protected function init()
     {
-        if ($this->init) {
-            return;
-        }
-        $this->channel === 'wechat' ? $this->getWechat() : $this->getMini();
+        match ($this->channel){
+            BaseApplication::MINI => $this->getMini(),
+            BaseApplication::APP => $this->getApp(),
+            default => $this->getWechat()
+        };
     }
 
     /**
@@ -82,6 +81,17 @@ class BaseConfig implements ConfigHandlerInterface
     public function getMini()
     {
         $this->init = true;
+    }
+
+    public function getApp()
+    {
+        $this->init = true;
+    }
+
+    protected function publicFilePath($path): string
+    {
+        $path = trim((string)$path);
+        return $path === '' ? '' : app()->getRootPath() . 'public' . $path;
     }
 
     public function all(): array

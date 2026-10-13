@@ -598,7 +598,8 @@ class FinancialRecordRepository extends BaseRepository
             //退回收入 refund_order + 退回佣金
             $number_2 = bcadd(bcadd($data['number_refund'], $data['number_coupon'], 2), $data['number_svipcoupon'], 2);
 
-            $data['count'] = $data['count_brokerage'] + $data['count_refund'] + $data['count_order_charge'] + $data['count_refund'] + $data['count_refund_brokerage'] + $data['count_svipcoupon'];
+            $data['count'] = $data['count_brokerage'] + $data['count_refund'] + $data['count_order_charge'] + $data['count_refund_brokerage'] + $data['count_svipcoupon'];
+
             $data['number'] = bcadd(bcadd($number_2, $number, 3), $number_1, 2);
         } else { //平台的
             // 退回 订单实际获得金额

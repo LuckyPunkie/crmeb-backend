@@ -9,12 +9,12 @@
 //// +----------------------------------------------------------------------
 //// | Author: CRMEB Team <admin@crmeb.com>
 //// +----------------------------------------------------------------------
-
+use think\facade\Route;
 use app\common\middleware\AllowOriginMiddleware;
 use app\common\middleware\CheckSiteOpenMiddleware;
 use app\common\middleware\InstallMiddleware;
 use app\common\middleware\RequestLockMiddleware;
-use think\facade\Route;
+
 
 Route::group('api/', function () {
     $path = $this->app->getRootPath() . 'route' . DIRECTORY_SEPARATOR.'api';
@@ -24,6 +24,13 @@ Route::group('api/', function () {
             include $path . DIRECTORY_SEPARATOR . $file;
         }
     }
+    $pc_path = $this->app->getRootPath() . 'route' . DIRECTORY_SEPARATOR.'pc.php';
+    if (is_file($pc_path)) {
+        include $pc_path;
+    }
+    Route::miss(function () {
+        return app('json')->fail('接口不存在');
+    })->middleware(AllowOriginMiddleware::class);
 })
     ->middleware(AllowOriginMiddleware::class)
     ->middleware(InstallMiddleware::class)

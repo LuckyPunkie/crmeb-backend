@@ -105,6 +105,14 @@ class Product extends BaseModel
         return !is_array($value) ? explode(',', $value) : $value;
     }
 
+    public function getPriceNegotiableTextAttr($value)
+    {
+        if (empty($value)) return [];
+        if (is_array($value)) return $value;
+        $value = json_decode($value, true);
+        return is_array($value) ? $value : [];
+    }
+
     //public function getParamTempIdAttr($value)
     //{
     //    if (empty($value)) return [];
@@ -349,7 +357,7 @@ class Product extends BaseModel
             $defaltLabelWhere[] = 10; // 自营
         }
         // 构建基础查询条件
-        $field = 'id,label_name,style_type,color,bg_color,border_color,icon,default_type,is_show,status';
+        $field = 'id,label_name,style_type,color,bg_color,border_color,icon,default_type,is_show,status,start_time,end_time';
         $baseQuery = StoreActivityLabel::where('status', 1);
         // 复用查询对象，分别获取默认标签和自定义标签
         $defaultLabels = [];
@@ -417,7 +425,12 @@ class Product extends BaseModel
      */
     public function getShowSvipPriceAttr()
     {
-        if ($this->mer_svip_status != 0 && (systemConfig('svip_show_price') != 1 || $this->is_vip) && $this->svip_price_type > 0) {
+        if (
+            (int)($this->member_price_setting ?? 0) === 1
+            && $this->mer_svip_status != 0
+            && (systemConfig('svip_show_price') != 1 || $this->is_vip)
+            && $this->svip_price_type > 0
+        ) {
             return true;
         }
         return false;
@@ -460,7 +473,12 @@ class Product extends BaseModel
      */
     public function getSvipPriceAttr()
     {
-        if ($this->product_type == 0 && $this->mer_svip_status != 0 && $this->show_svip_price) {
+        if (
+            $this->product_type == 0
+            && (int)($this->member_price_setting ?? 0) === 1
+            && $this->mer_svip_status != 0
+            && $this->show_svip_price
+        ) {
             //默认比例
             if ($this->svip_price_type == 1) {
                 $rate = merchantConfig($this->mer_id, 'svip_store_rate');
@@ -478,7 +496,11 @@ class Product extends BaseModel
 
     public function getIsSvipPriceAttr()
     {
-        if ($this->product_type == 0 && $this->mer_svip_status != 0) {
+        if (
+            $this->product_type == 0
+            && (int)($this->member_price_setting ?? 0) === 1
+            && $this->mer_svip_status != 0
+        ) {
             //默认比例
             if ($this->svip_price_type == 1) {
                 $rate = merchantConfig($this->mer_id, 'svip_store_rate');

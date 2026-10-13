@@ -177,6 +177,9 @@ class Order extends BaseController
         $params['id'] = $id;
         $validate = $this->getValidate();
         $groupOrder = $groupOrderRepository->detail($params['uid'], $id, false);
+        if (!$groupOrder) {
+            return app('json')->fail('订单已失效');
+        }
         if (!$validate->scenePay($params, $groupOrder)) {
             return app('json')->fail($validate->getError());
         }

@@ -56,7 +56,7 @@ class CombineClient extends BaseClient
         $params = [
             'combine_out_trade_no' => $order['order_sn'],
             'combine_mchid' => $this->serviceConfig->mchId,
-            'combine_appid' => $this->serviceConfig->wechatAppid,
+            'combine_appid' => $this->serviceConfig->appId,
             'scene_info' => [
                 'device_id' => 'shop system',
                 'payer_client_ip' => request()->ip(),
@@ -75,7 +75,7 @@ class CombineClient extends BaseClient
             $subOrder = [
                 'mchid' => $this->serviceConfig->mchId,
                 'amount' => [
-                    'total_amount' => intval($sub_order['pay_price'] * 100),
+                    'total_amount' => (int)bcmul((string)$sub_order['pay_price'], '100', 0),
                     'currency' => 'CNY',
                 ],
                 'settle_info' => [
@@ -95,7 +95,6 @@ class CombineClient extends BaseClient
             ];
         }
         $content = json_encode($params, JSON_UNESCAPED_UNICODE);
-
         $res = $this->request('/v3/combine-transactions/' . $type, 'POST', ['sign_body' => $content]);
         if (isset($res['code'])) {
             throw new ValidateException('微信接口报错:' . $res['message']);
@@ -140,7 +139,7 @@ class CombineClient extends BaseClient
     public function profitsharingOrder(array $options, bool $finish = false)
     {
         $params = [
-            'appid' => $this->serviceConfig->wechatAppid,
+            'appid' => $this->serviceConfig->appId,
             'sub_mchid' => $options['sub_mchid'],
             'transaction_id' => $options['transaction_id'],
             'out_order_no' => $options['out_order_no'],
@@ -150,7 +149,7 @@ class CombineClient extends BaseClient
 
         foreach ($options['receivers'] as $receiver) {
             $data = [
-                'amount' => intval($receiver['amount'] * 100),
+                'amount' => (int)bcmul((string)$receiver['amount'], '100', 0),
                 'description' => $receiver['body'] ?? $options['body'] ?? '',
             ];
             $data['receiver_account'] = $receiver['receiver_account'];
@@ -190,12 +189,12 @@ class CombineClient extends BaseClient
     {
         $params = [
             'sub_mchid' => $options['sub_mchid'],
-            'sp_appid' => $this->serviceConfig->wechatAppid,
+            'sp_appid' => $this->serviceConfig->appId,
             'out_trade_no' => $options['order_sn'],
             'out_refund_no' => $options['refund_order_sn'],
             'amount' => [
-                'refund' => intval($options['refund_price'] * 100),
-                'total' => intval($options['pay_price'] * 100),
+                'refund' => (int)bcmul((string)$options['refund_price'], '100', 0),
+                'total' => (int)bcmul((string)$options['pay_price'], '100', 0),
                 'currency' => 'CNY'
             ]
         ];
@@ -225,7 +224,7 @@ class CombineClient extends BaseClient
     public function configForPayment($prepayId, $json = true)
     {
         $params = [
-            'appId' => $this->serviceConfig->wechatAppid,
+            'appId' => $this->serviceConfig->appId,
             'timeStamp' => strval(time()),
             'nonceStr' => uniqid(),
             'package' => "prepay_id=$prepayId",
@@ -253,7 +252,7 @@ class CombineClient extends BaseClient
     public function configForAppPayment($prepayId)
     {
         $params = [
-            'appid' => $this->serviceConfig->wechatAppid,
+            'appid' => $this->serviceConfig->appId,
             'partnerid' => $this->serviceConfig->mchId,
             'prepayid' => $prepayId,
             'noncestr' => uniqid(),

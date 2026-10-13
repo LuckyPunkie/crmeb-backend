@@ -339,11 +339,17 @@ class Diy extends BaseController
      */
     public function community(CommunityRepository $repository)
     {
-        $limit = $this->request->param('limit',10);
-        $data = $this->cache(function() use($repository,$limit) {
+        $param = $this->request->params([['limit', 10], 'topic_id', 'top_id']);
+        $limit = $param['limit'];
+        // DIY组件使用topic_id筛选话题，兼容历史版本传入的top_id参数
+        $topicId = $param['topic_id'] !== '' ? $param['topic_id'] : $param['top_id'];
+        $data = $this->cache(function () use ($repository, $limit, $topicId) {
             $where = $repository::IS_SHOW_WHERE;
+            if ($topicId !== '') {
+                $where['topic_id'] = $topicId;
+            }
             $list = $repository->search($where)->with([
-                'author' => function($query) {
+                'author' => function ($query) {
                     $query->field('uid,real_name,status,avatar,nickname,count_start');
                 },
             ])->limit($limit)->select();
@@ -548,6 +554,7 @@ class Diy extends BaseController
     public function productDetail(DiyRepository $repository)
     {
         $key = env('APP_KEY').'_sys.get_sys_product_detail';
+
         $data = Cache::remember($key,function(){
             $res = app()->make(DiyRepository::class)->getProductDetail();
             $data['value'] = $res['product_detail_diy'];

@@ -78,7 +78,7 @@ class AccessToken extends HttpService
         'http://api.feieyun.cn/Api/Open/',
     ];
 
-    public function __construct(array $config = [], string $name, string $configFile)
+    public function __construct(array $config, string $name, string $configFile)
     {
         //打印机编号
         $this->machineCode = $config['terminal'] ?? null;

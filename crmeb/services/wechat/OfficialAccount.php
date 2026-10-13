@@ -110,7 +110,13 @@ class OfficialAccount extends BaseApplication
             $server->with($pushMessageHandler);
         }
         $response = $server->serve();
-        return response($response->getBody());
+        $contentType = $response->getHeaderLine('Content-Type') ?: 'text/plain; charset=utf-8';
+
+        return response(
+            (string)$response->getBody(),
+            $response->getStatusCode(),
+            ['Content-Type' => $contentType]
+        );
     }
 
     /**
@@ -632,14 +638,14 @@ class OfficialAccount extends BaseApplication
         if (!$code) {
             throw new WechatException('无效CODE');
         }
-        //try {
+        try {
             $response = self::instance()->application()->getOauth()->userFromCode($code);
             self::logger('静默授权-使用code获取用户授权信息', compact('code'), $response);
 
             return $response->getTokenResponse();
-        //} catch (Throwable $e) {
-        //    throw new WechatException('授权失败' . $e->getMessage() . 'line' . $e->getLine());
-        //}
+        } catch (Throwable $e) {
+            throw new WechatException('授权失败' . $e->getMessage() . 'line' . $e->getLine());
+        }
     }
 
     /**

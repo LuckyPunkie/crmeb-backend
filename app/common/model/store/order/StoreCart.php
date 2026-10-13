@@ -44,7 +44,6 @@ class StoreCart extends BaseModel
 
     public function searchCartIdAttr($query, $value)
     {
-        /** @var \think\db\Query|\think\model\Relation $query */
         $query->where('cart_id',$value);
     }
 

@@ -17,6 +17,12 @@ class DeliveryConfigValidate extends Validate
     protected $rule = [
         'mer_delivery_type|配送方式' => 'require|array',
         'mer_delivery_order_status|配送员抢单开关' => 'require|integer|in:0,1',
+        'platform_delivery_status|平台配送开关' => 'require|integer|in:0,1',
+        'platform_delivery_grab_status|平台配送员抢单开关' => 'require|integer|in:0,1',
+        'platform_delivery_accept_status|平台配送员接单开关' => 'require|integer|in:0,1',
+        'platform_delivery_pickup_status|到达提货点开关' => 'require|integer|in:0,1',
+        'platform_delivery_start_status|开始送货开关' => 'require|integer|in:0,1',
+        'platform_delivery_finish_status|确认送达开关' => 'require|integer|in:0,1',
         'dada_app_key|达达AppKey' => 'requireIn:mer_delivery_type,1',
         'dada_app_sercret|达达AppSecret' => 'requireIn:mer_delivery_type,1',
         'dada_source_id|达达商户ID' => 'requireIn:mer_delivery_type,1',
@@ -27,16 +33,16 @@ class DeliveryConfigValidate extends Validate
         'base_shipping_fee|基础运费' => 'require|float|egt:0|elt:999999.99',
         'free_shipping_amount|包邮金额' => 'require|float|egt:0|elt:999999.99',
         'is_premium_stack_enabled|是否开启溢价叠加' => 'require|integer|in:0,1',
-        'distance_premium_config|距离溢价设置' => 'requireIf:is_premium_stack_enabled,1|array',
-        'distance_premium_config.level_first.lt_distance|第一级公里数' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'distance_premium_config.level_last.gt_distance|最后一级公里数' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'distance_premium_config.level_last.add_distance|最后一级公里数,增加公里数' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'distance_premium_config.level_last.add_amount|最后一级公里数,增加运费' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'weight_premium_config|重量溢价设置' => 'requireIf:is_premium_stack_enabled,1|array',
-        'weight_premium_config.level_first.lt_weight|第一级重量' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'weight_premium_config.level_last.gt_weight|最后一级重量' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'weight_premium_config.level_last.add_weight|最后一级重量,增加重量' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
-        'weight_premium_config.level_last.add_amount|最后一级重量,增加运费' => 'requireIf:is_premium_stack_enabled,1|float|gt:0|elt:999999.99',
+        'distance_premium_config|距离溢价设置' => 'array',
+        'distance_premium_config.level_first.lt_distance|第一级公里数' => 'require|float|gt:0|elt:999999.99',
+        'distance_premium_config.level_last.gt_distance|最后一级公里数' => 'require|float|gt:0|elt:999999.99',
+        'distance_premium_config.level_last.add_distance|最后一级公里数,增加公里数' => 'require|float|gt:0|elt:999999.99',
+        'distance_premium_config.level_last.add_amount|最后一级公里数,增加运费' => 'require|float|gt:0|elt:999999.99',
+        'weight_premium_config|重量溢价设置' => 'array',
+        'weight_premium_config.level_first.lt_weight|第一级重量' => 'require|float|gt:0|elt:999999.99',
+        'weight_premium_config.level_last.gt_weight|最后一级重量' => 'require|float|gt:0|elt:999999.99',
+        'weight_premium_config.level_last.add_weight|最后一级重量,增加重量' => 'require|float|gt:0|elt:999999.99',
+        'weight_premium_config.level_last.add_amount|最后一级重量,增加运费' => 'require|float|gt:0|elt:999999.99',
         'delivery_time_type|配送时间类型' => 'require|integer|in:1,2',
         'selectable_days|用户端可选天数' => 'requireIf:delivery_time_type,1|integer|between:0,30',
         'delivery_prompt|尽快送达文案' => 'requireIf:delivery_time_type,2',
@@ -61,25 +67,35 @@ class DeliveryConfigValidate extends Validate
             'uupt_app_id',
             'uupt_open_id'
         ],
+        'platform' => [
+            'platform_delivery_status',
+            'platform_delivery_grab_status',
+            'platform_delivery_accept_status',
+            'platform_delivery_pickup_status',
+            'platform_delivery_start_status',
+            'platform_delivery_finish_status',
+        ],
         'config' => [
-            'min_delivery_amount',
             'base_shipping_fee',
-            'free_shipping_amount',
             'is_premium_stack_enabled',
-            'distance_premium_config',
-            'distance_premium_config.level_first.lt_distance',
-            'distance_premium_config.level_last.gt_distance',
-            'distance_premium_config.level_last.add_distance',
-            'distance_premium_config.level_last.add_amount',
-            'weight_premium_config',
-            'weight_premium_config.level_first.lt_weight',
-            'weight_premium_config.level_last.gt_weight',
-            'weight_premium_config.level_last.add_weight',
-            'weight_premium_config.level_last.add_amount',
             'delivery_time_type',
             'selectable_days',
             'delivery_prompt',
             'commission_rate'
+        ],
+        'distance_config' => [
+            'distance_premium_config',
+            'distance_premium_config.level_first.lt_distance',
+            'distance_premium_config.level_last.gt_distance',
+            'distance_premium_config.level_last.add_distance',
+            'distance_premium_config.level_last.add_amount'
+        ],
+        'weight_config' => [
+            'weight_premium_config',
+            'weight_premium_config.level_first.lt_weight',
+            'weight_premium_config.level_last.gt_weight',
+            'weight_premium_config.level_last.add_weight',
+            'weight_premium_config.level_last.add_amount'
         ],
         'stair_distance' => [
             'start_distance',
@@ -116,7 +132,7 @@ class DeliveryConfigValidate extends Validate
     public function update(array $basicSettings, array $deliveryParams)
     {
         if(empty($basicSettings['mer_delivery_type'])) {
-            $this->error = '配送方式不能为空';
+            $this->error = ['mer_delivery_type' => '配送方式不能为空'];
             return false;
         }
 
@@ -127,80 +143,139 @@ class DeliveryConfigValidate extends Validate
             return false;
         }
         if($deliveryParams['is_premium_stack_enabled']) {
+            $distanceConfig = $deliveryParams['distance_premium_config'] ?? [];
+            $weightConfig = $deliveryParams['weight_premium_config'] ?? [];
+            $hasDistanceConfig = $this->hasPremiumConfigValue($distanceConfig);
+            $hasWeightConfig = $this->hasPremiumConfigValue($weightConfig);
+            if (!$hasDistanceConfig && !$hasWeightConfig) {
+                $this->error = ['premium_config' => '距离溢价和重量溢价至少需要配置一项'];
+                return false;
+            }
+
+            if ($hasDistanceConfig && !$this->scene('distance_config')->check($deliveryParams)) {
+                return false;
+            }
+            if ($hasWeightConfig && !$this->scene('weight_config')->check($deliveryParams)) {
+                return false;
+            }
+
             // 距离溢价设置验证
-            $kaishiDistance = $deliveryParams['distance_premium_config']['level_first']['lt_distance'];
-            if(!empty($deliveryParams['distance_premium_config']['level_stairs'])) {
-                foreach ($deliveryParams['distance_premium_config']['level_stairs'] as $key => $item) {
-                    $num = $key + 1;
-                    if (!$this->scene('stair_distance')->check($item)) {
-                        return false;
-                    }
-                    if($item['start_distance'] >= $item['end_distance']) {
-                        $this->error = '第'.$num.'级阶梯公里数范围有误';
-                        return false;
-                    }
-                    if($key == 0 && $kaishiDistance > $item['start_distance']) {
-                        $this->error = '范围公里数，必须大于等于基础公里数';
-                        return false;
-                    }
-                    if($kaishiDistance > $item['start_distance']) {
-                        $this->error = '第'.$num.'级范围公里数必须大于等于第'.($num - 1).'级范围公里数';
-                        return false;
-                    }
-                    if($item['add_distance'] === '' || $item['add_distance'] <= 0) {
-                        $this->error = '第'.$num.'级范围公里数,增加公里数必须大于0';
-                        return false;
-                    }
-                    if($item['add_amount'] === '' || $item['add_amount'] <= 0) {
-                        $this->error = '第'.$num.'级范围公里数,增加运费必须大于0';
-                        return false;
-                    }
+            if ($hasDistanceConfig) {
+                $kaishiDistance = $deliveryParams['distance_premium_config']['level_first']['lt_distance'];
+                if(!empty($deliveryParams['distance_premium_config']['level_stairs'])) {
+                    foreach ($deliveryParams['distance_premium_config']['level_stairs'] as $key => $item) {
+                        $num = $key + 1;
+                        if (!$this->scene('stair_distance')->check($item)) {
+                            return false;
+                        }
+                        if($item['start_distance'] >= $item['end_distance']) {
+                            $this->error = ['distance_premium_config' => '第'.$num.'级阶梯公里数范围有误'];
+                            return false;
+                        }
+                        if($key == 0 && $kaishiDistance > $item['start_distance']) {
+                            $this->error = ['distance_premium_config' => '范围公里数，必须大于等于基础公里数'];
+                            return false;
+                        }
+                        if($kaishiDistance > $item['start_distance']) {
+                            $this->error = ['distance_premium_config' => '第'.$num.'级范围公里数必须大于等于第'.($num - 1).'级范围公里数'];
+                            return false;
+                        }
+                        if($item['add_distance'] === '' || $item['add_distance'] <= 0) {
+                            $this->error = ['distance_premium_config' => '第'.$num.'级范围公里数,增加公里数必须大于0'];
+                            return false;
+                        }
+                        if($item['add_amount'] === '' || $item['add_amount'] <= 0) {
+                            $this->error = ['distance_premium_config' => '第'.$num.'级范围公里数,增加运费必须大于0'];
+                            return false;
+                        }
 
-                    $kaishiDistance = $item['end_distance'];
+                        $kaishiDistance = $item['end_distance'];
+                    }
+                }
+                if($kaishiDistance > $deliveryParams['distance_premium_config']['level_last']['gt_distance']) {
+                    $this->error = ['distance_premium_config' => '最后一级公里数,必须大于等于上一级公里数'];
+                    return false;
                 }
             }
-            if($kaishiDistance > $deliveryParams['distance_premium_config']['level_last']['gt_distance']) {
-                $this->error = '最后一级公里数,必须大于等于上一级公里数';
-                return false;
-            }
+
             // 重量溢价设置验证
-            $kaishiWeight = $deliveryParams['weight_premium_config']['level_first']['lt_weight'];
-            if(!empty($deliveryParams['weight_premium_config']['level_stairs'])) {
-                foreach ($deliveryParams['weight_premium_config']['level_stairs'] as $key => $item) {
-                    $num = $key + 1;
-                    if (!$this->scene('stair_weight')->check($item)) {
-                        return false;
-                    }
-                    if($item['start_weight'] >= $item['end_weight']) {
-                        $this->error = '第'.$num.'级阶梯重量范围有误';
-                        return false;
-                    }
-                    if($key == 0 && $kaishiWeight > $item['start_weight']) {
-                        $this->error = '范围重量，必须大于等于基础重量';
-                        return false;
-                    }
-                    if($kaishiWeight > $item['start_weight']) {
-                        $this->error = '第'.$num.'级范围重量必须大于等于第'.($num - 1).'级范围重量';
-                        return false;
-                    }
-                    if($item['add_weight'] === '' || $item['add_weight'] <= 0) {
-                        $this->error = '第'.$num.'级范围重量,增加重量必须大于0';
-                        return false;
-                    }
-                    if($item['add_amount'] === '' || $item['add_amount'] <= 0) {
-                        $this->error = '第'.$num.'级范围重量,增加运费必须大于0';
-                        return false;
-                    }
+            if ($hasWeightConfig) {
+                $kaishiWeight = $deliveryParams['weight_premium_config']['level_first']['lt_weight'];
+                if(!empty($deliveryParams['weight_premium_config']['level_stairs'])) {
+                    foreach ($deliveryParams['weight_premium_config']['level_stairs'] as $key => $item) {
+                        $num = $key + 1;
+                        if (!$this->scene('stair_weight')->check($item)) {
+                            return false;
+                        }
+                        if($item['start_weight'] >= $item['end_weight']) {
+                            $this->error = ['weight_premium_config' => '第'.$num.'级阶梯重量范围有误'];
+                            return false;
+                        }
+                        if($key == 0 && $kaishiWeight > $item['start_weight']) {
+                            $this->error = ['weight_premium_config' => '范围重量，必须大于等于基础重量'];
+                            return false;
+                        }
+                        if($kaishiWeight > $item['start_weight']) {
+                            $this->error = ['weight_premium_config' => '第'.$num.'级范围重量必须大于等于第'.($num - 1).'级范围重量'];
+                            return false;
+                        }
+                        if($item['add_weight'] === '' || $item['add_weight'] <= 0) {
+                            $this->error = ['weight_premium_config' => '第'.$num.'级范围重量,增加重量必须大于0'];
+                            return false;
+                        }
+                        if($item['add_amount'] === '' || $item['add_amount'] <= 0) {
+                            $this->error = ['weight_premium_config' => '第'.$num.'级范围重量,增加运费必须大于0'];
+                            return false;
+                        }
 
-                    $kaishiWeight = $item['end_weight'];
+                        $kaishiWeight = $item['end_weight'];
+                    }
                 }
-            }
-            if($kaishiWeight > $deliveryParams['weight_premium_config']['level_last']['gt_weight']) {
-                $this->error = '最后一级重量,必须大于等于上一级重量';
-                return false;
+                if($kaishiWeight > $deliveryParams['weight_premium_config']['level_last']['gt_weight']) {
+                    $this->error = ['weight_premium_config' => '最后一级重量,必须大于等于上一级重量'];
+                    return false;
+                }
             }
         }
 
         return true;
+    }
+
+    /**
+     * 判断某一类溢价规则是否填写了内容。
+     */
+    protected function hasPremiumConfigValue($config): bool
+    {
+        if (!is_array($config)) {
+            return false;
+        }
+        foreach ($config as $value) {
+            if (is_array($value)) {
+                if ($this->hasPremiumConfigValue($value)) {
+                    return true;
+                }
+            } elseif ($value !== '' && $value !== null) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public function platformUpdate(array $basicSettings, array $deliveryParams)
+    {
+        if (!$this->scene('platform')->check($basicSettings)) {
+            return false;
+        }
+
+        return $this->update([
+            'mer_delivery_type' => [0],
+            'mer_delivery_order_status' => 0,
+            'dada_app_key' => '',
+            'dada_app_sercret' => '',
+            'dada_source_id' => '',
+            'uupt_appkey' => '',
+            'uupt_app_id' => '',
+            'uupt_open_id' => '',
+        ], $deliveryParams);
     }
 }

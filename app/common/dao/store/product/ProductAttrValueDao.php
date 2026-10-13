@@ -19,6 +19,7 @@ use app\common\repositories\store\product\CdkeyLibraryRepository;
 use app\common\repositories\store\product\ProductCdkeyRepository;
 use app\common\repositories\store\product\ProductRepository;
 use think\db\exception\DbException;
+use think\exception\ValidateException;
 use think\facade\Db;
 
 /**
@@ -52,6 +53,9 @@ class ProductAttrValueDao extends BaseDao
             case 2: //网盘信息
                 $cdkey = [];
                 foreach ($data as $datum) {
+                    if (empty($datum['cdkey']) || !isset($datum['cdkey'][0]) || !is_array($datum['cdkey'][0])) {
+                        throw new ValidateException('网盘商品必须填写信息');
+                    }
                     $sku_cdkey = $datum['cdkey'][0];
                     unset($datum['cdkey']);
                     $sku = $this->create($datum);

@@ -58,12 +58,23 @@ class ParameterValueRepository extends BaseRepository
         }
         $productRepository = app()->make(ParameterProductRepository::class);
         foreach ($data as &$datum) {
-            $value_ids = $this->dao->getSearch(['parameter_id' => $datum['parameter_id']])->column('parameter_value_id');
-            $keepValueIds = array_filter(array_map('intval', array_column($datum['values'], 'parameter_value_id')));
-            $deleteValueIds = array_values(array_diff($value_ids, $keepValueIds));
-            if ($deleteValueIds) {
-                $this->dao->getSearch([])->whereIn('parameter_value_id', $deleteValueIds)->delete();
-                $productRepository->clear($deleteValueIds, 'parameter_value_id');
+            $parameterId = (int)($datum['parameter_id'] ?? 0);
+
+            // 模板参数值由多个商品共享。保存商品时只更新商品关联关系，
+            // 不删除模板中的其他参数值；只有编辑模板（productId 为 0）时
+            // 才清理模板旧值。商品自定义参数的清理范围限定为当前商品。
+            if (!$productId || !$parameterId) {
+                $valueQuery = $this->dao->getSearch(['parameter_id' => $parameterId]);
+                if ($productId && !$parameterId) {
+                    $valueQuery->where('product_id', $productId);
+                }
+                $valueIds = $valueQuery->column('parameter_value_id');
+                $keepValueIds = array_filter(array_map('intval', array_column($datum['values'], 'parameter_value_id')));
+                $deleteValueIds = array_values(array_diff($valueIds, $keepValueIds));
+                if ($deleteValueIds) {
+                    $this->dao->getSearch([])->whereIn('parameter_value_id', $deleteValueIds)->delete();
+                    $productRepository->clear($deleteValueIds, 'parameter_value_id');
+                }
             }
             // 创建参数属性
             foreach ($datum['values'] as &$v) {
@@ -72,8 +83,8 @@ class ParameterValueRepository extends BaseRepository
                     'value' => $v['value'],
                     'mer_id' => $merId,
                     //如果是存在$datum['parameter_id'],则表示这个属性是模板中定义的 不需要和商品绑定
-                    'product_id' => isset($datum['parameter_id']) ? 0 : $productId,
-                    'parameter_id' => isset($datum['parameter_id']) ? $datum['parameter_id'] : 0,
+                    'product_id' => $parameterId ? 0 : $productId,
+                    'parameter_id' => $parameterId,
                 ];
                 $create = $this->dao->findOrcreate($createData);
                 $v['parameter_value_id'] = $create->parameter_value_id;
@@ -170,4 +181,3 @@ class ParameterValueRepository extends BaseRepository
     }
 
 }
-
