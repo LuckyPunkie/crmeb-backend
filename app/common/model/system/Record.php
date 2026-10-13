@@ -1,0 +1,45 @@
+<?php
+
+// +----------------------------------------------------------------------
+// | CRMEB [ CRMEB赋能开发者，助力企业发展 ]
+// +----------------------------------------------------------------------
+// | Copyright (c) 2016-2026 https://www.crmeb.com All rights reserved.
+// +----------------------------------------------------------------------
+// | Licensed CRMEB并不是自由软件，未经许可不能去掉CRMEB相关版权
+// +----------------------------------------------------------------------
+// | Author: CRMEB Team <admin@crmeb.com>
+// +----------------------------------------------------------------------
+
+namespace app\common\model\system;
+
+use app\common\model\BaseModel;
+
+class Record extends BaseModel
+{
+
+    /**
+     * @return string
+     * @author Qinii
+     * @day 2023/11/29
+     */
+    public static function tablePk(): string
+    {
+        return 'id';
+    }
+
+    /**
+     * @return string
+     * @author Qinii
+     * @day 2023/11/29
+     */
+    public static function tableName(): string
+    {
+        return 'record';
+    }
+
+    public function searchTypeAttr($query, $value)
+    {
+        $query->where('type', $value);
+    }
+
+}

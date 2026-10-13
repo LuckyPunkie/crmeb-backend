@@ -1,0 +1,82 @@
+{
+    "name": "topthink/think",
+    "description": "the new thinkphp framework",
+    "type": "project",
+    "keywords": [
+        "framework",
+        "thinkphp",
+        "ORM"
+    ],
+    "homepage": "http://thinkphp.cn/",
+    "license": "Apache-2.0",
+    "authors": [
+        {
+            "name": "liu21st",
+            "email": "liu21st@gmail.com"
+        },
+        {
+            "name": "yunwuxin",
+            "email": "448901948@qq.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.0",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "ext-gd": "*",
+        "ext-redis": "*",
+        "ext-zip": "*",
+        "ext-pdo": "*",
+        "ext-curl": "*",
+        "ext-bcmath": "*",
+        "ext-mbstring": "*",
+        "ext-ctype": "*",
+        "ext-swoole": "^4.6.0|^5.0",
+        "topthink/framework": "^8.0",
+        "topthink/think-orm": "^3.0",
+        "topthink/think-swoole": "^4.1",
+        "topthink/think-queue": "^3.0",
+        "topthink/think-image": "^1.0",
+        "topthink/think-trace": "^1.6",
+        "firebase/php-jwt": "^6.0",
+        "w7corp/easywechat": "^6.0",
+        "xaboy/form-builder": "^2.0.20",
+        "phpoffice/phpspreadsheet": "^1.18",
+        "aliyuncs/oss-sdk-php": "^2.3",
+        "qiniu/php-sdk": "^7.2",
+        "gregwar/captcha": "^1.1",
+        "endroid/qr-code": "^4.0|^5.0",
+        "riverslei/payment": "^5.1",
+        "lizhichao/word": "^2.1",
+        "joypack/tencent-map": "^1.0",
+        "obs/esdk-obs-php": "^3.21",
+        "ucloud/ufile-php-sdk": "^1.0",
+        "swoole/ide-helper": "^4.3|^5.0",
+        "alipaysdk/easysdk": "^2.2",
+        "fastknife/ajcaptcha": "^1.1",
+        "aws/aws-sdk-php": "^3.301",
+        "ucloud/ucloud-sdk-php": "^0.3.5",
+        "topthink/think-filesystem": "^2.0"
+    },
+    "require-dev": {
+        "symfony/var-dumper": "^5.0|^6.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "app\\": "app",
+            "crmeb\\": "crmeb"
+        },
+        "psr-0": {
+            "": "extend/"
+        }
+    },
+    "config": {
+        "preferred-install": "dist"
+    },
+    "scripts": {
+        "post-autoload-dump": [
+            "@php think service:discover",
+            "@php think vendor:publish"
+        ]
+    }
+}
