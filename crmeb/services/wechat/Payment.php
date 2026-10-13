@@ -261,6 +261,9 @@ class Payment extends BaseApplication
                 $config['notify_url'] = trim($make->getConfig(DefaultConfig::COMMENT_URL)) . DefaultConfig::value('pay.mini.notifyUrl');
                 break;
         }
+        // HttpCommonConfig 为公众号/小程序把 http.base_uri 设成了 api.weixin.qq.com，
+        // 支付客户端 withOptions 时会用它覆盖 BASE_PAY_URL，导致 V2 统一下单请求到 api.weixin.qq.com/pay/unifiedorder 返回 404
+        $config['http'] = array_merge($config['http'] ?? [], ['base_uri' => self::BASE_PAY_URL . '/']);
         if (!isset($this->application[$accessEnd])) {
             $this->application[$accessEnd] = new Application($config);
             $this->setHttpClient($this->application[$accessEnd], self::BASE_PAY_URL);
