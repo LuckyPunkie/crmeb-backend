@@ -113,10 +113,18 @@ class Message extends BaseController
                 false
             );
         }
+        $imageModeration = null;
         if ((int)$data['msn_type'] === 3) {
             $scan = AliyunBaselineDriver::moderateImageUrl((string)$data['msn']);
+            $imageModeration = [
+                'channel' => 'aliyun_baseline',
+                'aliyun_enabled' => AliyunBaselineDriver::enabled(),
+                'verdict' => $scan['verdict'],
+                'error' => $scan['error'],
+                'results' => $scan['results'],
+            ];
             if ($scan['verdict'] === AliyunBaselinePolicy::ACTION_REJECT) {
-                return app('json')->fail('图片未通过安全审核');
+                return app('json')->fail('图片未通过安全审核', ['ugc_moderation' => $imageModeration]);
             }
             if ($scan['verdict'] === AliyunBaselinePolicy::ACTION_MANUAL) {
                 UgcModerationTicket::open([
@@ -129,7 +137,7 @@ class Message extends BaseController
                     'machine_driver' => 'aliyun',
                     'machine_summary' => $scan['error'] !== '' ? $scan['error'] : 'aliyun_manual',
                 ]);
-                return app('json')->fail('图片需人工审核，请稍后再试');
+                return app('json')->fail('图片需人工审核，请稍后再试', ['ugc_moderation' => $imageModeration]);
             }
         }
 
@@ -165,6 +173,9 @@ class Message extends BaseController
             // 入队失败不影响消息发送（文档 5.4：服务不可用时放行并记录日志）
             \think\facade\Log::error("私聊审核入队失败(message#{$messageId}): " . $e->getMessage());
             ContentSecurityService::recordFailure('chat_msg', $e->getMessage());
+        }
+        if ($imageModeration !== null) {
+            $result['ugc_moderation'] = $imageModeration;
         }
         return app('json')->success($result);
     }
