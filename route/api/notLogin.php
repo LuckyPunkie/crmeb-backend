@@ -14,12 +14,16 @@ use think\facade\Route;
 Route::any('wechat/serve', [app\controller\WechatNotice::class, 'serve']);
 // 支付回调
 Route::group('notice', function () {
+    // 兼容 v4.0 的支付宝回调地址（升级前创建、升级后才付款的订单仍回调旧地址），须放在 pay/:type 之前
+    Route::any('pay/alipay', [app\controller\api\Common::class, 'alipayNotify']);
     //微信支付回调:微信 服务商 收付通
     Route::any('pay/:type', [app\controller\api\Common::class, 'notify']);
     //支付宝支付回调
     Route::any('alipay', [app\controller\api\Common::class, 'alipayNotify'])->name('alipayNotify');
     //同城配送回调
     Route::any('callback', [app\controller\api\Common::class, 'deliveryNotify']);
+    // 兼容 v4.0 的微信支付回调地址 notice/{wechat|routine|partner|app...}，须放在最后
+    Route::any(':type', [app\controller\api\Common::class, 'notify']);
 });
 
 // 微信退款结果回调
