@@ -12,6 +12,21 @@ class UgcTextSecurity
         return $text === '' ? '' : UgcDfaFilter::filter($text);
     }
 
+    /**
+     * 社区评论：人工审核通过（status=1）原文展示；待审/未通过且命中敏感词则打星
+     */
+    public static function maskReplyContentForDisplay(string $text, int $status): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return '';
+        }
+        if ((int)$status === 1) {
+            return $text;
+        }
+        return UgcDfaFilter::contains($text) ? UgcDfaFilter::filter($text) : $text;
+    }
+
     public static function applyMaskToMessage(array $item): array
     {
         if ((int)($item['msn_type'] ?? 0) === 1 && isset($item['msn'])) {

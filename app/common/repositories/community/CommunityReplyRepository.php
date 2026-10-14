@@ -147,7 +147,7 @@ class CommunityReplyRepository extends BaseRepository
                 $q->where('status', 1);
                 if ($viewerUid) {
                     $q->whereOr(function ($own) use ($viewerUid) {
-                        $own->where('uid', $viewerUid)->where('status', 0);
+                        $own->where('uid', $viewerUid)->whereIn('status', [0, -1]);
                     });
                 }
             })
@@ -309,13 +309,23 @@ class CommunityReplyRepository extends BaseRepository
             }
         }
 
+        // 待审/未通过仅评论者本人可见，通过后再通知笔记作者
+        if ((int)($data['status'] ?? 1) !== 1) {
+            return $ret;
+        }
+
         // 互动通知
         try {
             $fromUid = (int)($data['uid'] ?? 0);
             $communityId = (int)($data['community_id'] ?? 0);
             $note = \app\common\repositories\user\UserNotificationRepository::noteBriefById($communityId);
             $notifyRepo = app()->make(\app\common\repositories\user\UserNotificationRepository::class);
-            $contentText = mb_substr((string)($data['content'] ?? ''), 0, 100);
+            $notifyStatus = (int)($data['status'] ?? 1);
+            $contentText = mb_substr(
+                UgcTextSecurity::maskReplyContentForDisplay((string)($data['content'] ?? ''), $notifyStatus),
+                0,
+                100
+            );
             if ($contentText === '' && !empty($data['pics'])) $contentText = '[图片]';
             if ($replyId) {
                 // 回复评论
@@ -453,13 +463,19 @@ class CommunityReplyRepository extends BaseRepository
         foreach ($list as $i => $item) {
             $row = is_array($item) ? $item : (is_object($item) && method_exists($item, 'toArray') ? $item->toArray() : (array)$item);
             if (isset($row['content'])) {
-                $row['content'] = UgcTextSecurity::maskForDisplay((string)$row['content']);
+                $row['content'] = UgcTextSecurity::maskReplyContentForDisplay(
+                    (string)$row['content'],
+                    (int)($row['status'] ?? 1)
+                );
             }
             if (!empty($row['children'])) {
                 foreach ($row['children'] as $j => $child) {
                     $c = is_array($child) ? $child : (is_object($child) && method_exists($child, 'toArray') ? $child->toArray() : (array)$child);
                     if (isset($c['content'])) {
-                        $c['content'] = UgcTextSecurity::maskForDisplay((string)$c['content']);
+                        $c['content'] = UgcTextSecurity::maskReplyContentForDisplay(
+                            (string)$c['content'],
+                            (int)($c['status'] ?? 1)
+                        );
                     }
                     $row['children'][$j] = $c;
                 }

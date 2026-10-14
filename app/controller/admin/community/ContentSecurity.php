@@ -18,6 +18,7 @@ class ContentSecurity extends BaseController
     {
         return app('json')->success([
             'labels' => WechatMediaPolicy::labels(),
+            'labelTitles' => WechatMediaPolicy::labelTitles(),
             'suggests' => WechatMediaPolicy::suggests(),
             'rows' => WechatMediaPolicy::allRows(),
         ]);

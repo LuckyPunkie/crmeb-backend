@@ -124,7 +124,7 @@ class Impression extends BaseController
         $fromUid = (int) $this->request->userInfo()->uid;
         $params = $this->request->params(['content', 'images', 'parent_id', 'reply_to_uid', 'reply_to_comment_id']);
         $data = $this->repository->createComment($iid, $fromUid, $params);
-        return app('json')->success('评论成功', $data);
+        return app('json')->success('发布成功', $data);
     }
 
     /**
