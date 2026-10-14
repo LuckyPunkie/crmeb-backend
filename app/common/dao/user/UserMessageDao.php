@@ -22,10 +22,13 @@ class UserMessageDao extends BaseDao
         return UserMessage::class;
     }
 
-    public function getHistory(int $dialogId, int $page, int $limit)
+    public function getHistory(int $dialogId, int $page, int $limit, ?string $sinceTime = null)
     {
-        return $this->getModel()::withSearch(['dialog_id'], ['dialog_id' => $dialogId])
-            ->order('create_time', 'desc')
+        $query = $this->getModel()::withSearch(['dialog_id'], ['dialog_id' => $dialogId]);
+        if ($sinceTime) {
+            $query->where('create_time', '>', $sinceTime);
+        }
+        return $query->order('create_time', 'desc')
             ->page($page, $limit)
             ->select();
     }
@@ -62,13 +65,16 @@ class UserMessageDao extends BaseDao
             ->count() > 0;
     }
 
-    public function searchInDialog(int $dialogId, string $keyword, int $page, int $limit)
+    public function searchInDialog(int $dialogId, string $keyword, int $page, int $limit, ?string $sinceTime = null)
     {
         $keyword = trim($keyword);
-        return $this->getModel()::where('dialog_id', $dialogId)
+        $query = $this->getModel()::where('dialog_id', $dialogId)
             ->where('msn_type', 1)
-            ->whereLike('msn', '%' . $keyword . '%')
-            ->order('create_time', 'desc')
+            ->whereLike('msn', '%' . $keyword . '%');
+        if ($sinceTime) {
+            $query->where('create_time', '>', $sinceTime);
+        }
+        return $query->order('create_time', 'desc')
             ->page($page, $limit)
             ->select();
     }
