@@ -16,6 +16,7 @@ use app\common\repositories\community\CommunityRepository;
 use app\common\repositories\system\RelevanceRepository;
 use crmeb\basic\BaseController;
 use crmeb\services\security\ContentSecurityService;
+use crmeb\services\security\UgcTextSecurity;
 use think\App;
 use app\common\repositories\community\CommunityReplyRepository as repository;
 use think\exception\ValidateException;
@@ -108,29 +109,31 @@ class CommunityReply extends BaseController
         $data['uid'] = $user->uid;
         $data['community_id'] = $id;
 
+        // 文本 DFA：明文存库；命中 → status=0 进后台待审；C 端非「审核通过」且命中词打星
+        // 未命中敏感词仍直接 status=1；community_reply_audit 不再对全量评论待审
         $data['status'] = 1;
-        $msg = '回复成功';
-        if (systemConfig('community_reply_audit')) {
-            $data['status'] = 0;
-            $msg = '回复成功,正在审核中';
-        }
-        // risky：入库为未通过（不公开、通知评论者）；review：进待审队列；pass：沿用后台审核开关
+        $msg = '发布成功';
         if ($check['suggest'] === 'risky') {
             $data['status'] = -1;
             $data['refusal'] = '内容包含违规信息';
             $msg = '评论未通过审核，未能公开展示';
-        } elseif ($check['suggest'] !== 'pass') {
+        } elseif (!empty($check['hit_sensitive'])) {
             $data['status'] = 0;
-            $msg = '回复成功,正在审核中';
+            $msg = '评论已提交，审核通过后公开展示';
         }
         $ret = $this->repository->create($replyId, $data);
         ContentSecurityService::bindBizId((int)($check['log_id'] ?? 0), (int)($ret['reply_id'] ?? 0));
         if ($data['status'] === -1) {
             ContentSecurityService::notifyRejected((int)$user->uid, '评论');
-        } elseif ($pics) {
+        } elseif ($pics && (int)$data['status'] !== -1) {
             // 评论配图先发后审，违规时清除对应图片
             ContentSecurityService::dispatchMediaCheck('community_reply', (int)($ret['reply_id'] ?? 0), (int)$user->uid,
                 $openid, $pics, ContentSecurityService::SCENE_COMMENT);
+        }
+        // 刚发的评论直接插进评论区：待审/拒绝打星，人工通过后再原文展示
+        if ($ret && isset($ret['content'])) {
+            $replyStatus = (int)($ret['status'] ?? $data['status']);
+            $ret['content'] = UgcTextSecurity::maskReplyContentForDisplay((string)$ret['content'], $replyStatus);
         }
         return app('json')->success($msg, $ret);
     }

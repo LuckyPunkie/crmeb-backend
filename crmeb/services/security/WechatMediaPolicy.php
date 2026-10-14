@@ -18,6 +18,23 @@ class WechatMediaPolicy
         return [100, 20001, 20002, 20006, 21000];
     }
 
+    /** 微信 media_check 回调 label 中文释义（与官方文档一致） */
+    public static function labelTitles(): array
+    {
+        return [
+            100 => '正常',
+            20001 => '时政',
+            20002 => '色情',
+            20006 => '违法犯罪',
+            21000 => '其他',
+        ];
+    }
+
+    public static function titleForLabel(int $label): string
+    {
+        return (string)(self::labelTitles()[$label] ?? '');
+    }
+
     public static function suggests(): array
     {
         return ['pass', 'review', 'risky'];
