@@ -96,7 +96,7 @@ if (strtolower(substr(PHP_OS, 0, 3)) === 'win') {
             ],
         ],
         'hot_update' => [
-            'enable'  => env('APP_DEBUG', false),
+            'enable'  => env('SWOOLE_HOT_UPDATE', false),
             'name'    => ['*.php'],
             'include' => [app_path(), root_path('crmeb')],
             'exclude' => [],
