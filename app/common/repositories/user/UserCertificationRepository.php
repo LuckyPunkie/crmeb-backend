@@ -5,6 +5,7 @@ namespace app\common\repositories\user;
 use app\common\dao\user\UserCertificationDao as dao;
 use app\common\repositories\BaseRepository;
 use crmeb\services\identity\AliyunMobileThreeElementService;
+use crmeb\services\identity\ChsiReportService;
 use think\facade\Db;
 
 class UserCertificationRepository extends BaseRepository
@@ -85,14 +86,135 @@ class UserCertificationRepository extends BaseRepository
         if ($this->isIdentityCertType($type)) {
             throw new \InvalidArgumentException('请使用运营商三要素完成实名认证');
         }
+        if ($type === 'education' && $this->isEducationLocked($uid)) {
+            throw new \InvalidArgumentException('学历认证已通过，如学历有更新请使用学信网验证码重新核验');
+        }
         $this->dao->upsert($uid, $type, [
+            'method'      => 'upload',
             'description' => $description,
             'images'      => json_encode($images, JSON_UNESCAPED_UNICODE),
+            'verify_code' => '',
+            'verify_data' => null,
             'status'      => 1,
             'remark'      => '',
         ]);
         $this->applyLabel($uid, $type);
         $this->markAiPassed($uid);
+    }
+
+    /**
+     * 学历认证已通过（任一方式最新一条 status=1）：资料里学历 / 学历类型 / 学校锁定，用户不可再改
+     */
+    public function isEducationLocked(int $uid): bool
+    {
+        $row = $this->dao->getByUidType($uid, 'education');
+        return $row && (int)$row->status === 1;
+    }
+
+    /**
+     * 学信网在线验证码核验：报告页 HTML 由用户手机取回（学信网拦机房 IP），为空时服务器自取兜底。
+     * 核验通过直接认证，不进人工队列；学历 / 学历类型 / 学校同步到资料并锁定。
+     * $save=false 只校验并返回报告预览（小程序先给用户看报告，确认后再提交）。
+     */
+    public function verifyEducationByChsi(int $uid, string $vcode, string $html, bool $save = true): array
+    {
+        $chsi = app()->make(ChsiReportService::class);
+        $vcode = $chsi->normalizeVcode($vcode);
+        if (!$chsi->isValidVcode($vcode)) {
+            throw new \InvalidArgumentException('在线验证码格式不正确，请核对后重新输入');
+        }
+        if (!$this->isIdentityVerified($uid)) {
+            throw new \InvalidArgumentException('请先完成实名认证');
+        }
+        $realName = (string)Db::name('user')->where('uid', $uid)->value('real_name');
+
+        if (trim($html) === '') {
+            $fetched = $chsi->fetch($vcode);
+            if (!$fetched['ok']) {
+                throw new \InvalidArgumentException($fetched['message']);
+            }
+            $html = $fetched['html'];
+        }
+        $report = $chsi->parse($html);
+        if (!$report['ok']) {
+            throw new \InvalidArgumentException($report['message']);
+        }
+        // 报告页自带在线验证码，对不上说明不是这份报告
+        if ($report['vcode'] !== $vcode) {
+            throw new \InvalidArgumentException('报告与在线验证码不一致，请重新核验');
+        }
+        $edu = $chsi->toEducation($report);
+        if ($edu['name'] === '' || $edu['school'] === '') {
+            throw new \InvalidArgumentException('未能识别学信网报告内容，请稍后重试');
+        }
+        if (!$chsi->sameName($edu['name'], $realName)) {
+            throw new \InvalidArgumentException('报告姓名与实名认证姓名不一致');
+        }
+        if ($edu['invalid_status']) {
+            throw new \InvalidArgumentException('学籍状态为「' . $edu['status'] . '」，无法完成学历认证');
+        }
+        if ($edu['education'] === 0) {
+            throw new \InvalidArgumentException('暂不支持该学历层次：' . ($edu['level'] ?: '未知'));
+        }
+        $usedBy = Db::name('user_certification')
+            ->where('verify_code', $vcode)
+            ->where('uid', '<>', $uid)
+            ->where('status', 1)
+            ->value('uid');
+        if ($usedBy) {
+            throw new \InvalidArgumentException('该在线验证码已被其他账号使用');
+        }
+
+        if (!$save) {
+            return [
+                'vcode'       => $vcode,
+                'title'       => $edu['title'],
+                'update_time' => $edu['update_time'],
+                'name'        => $edu['name'],
+                'school'      => $edu['school'],
+                'major'       => $edu['major'],
+                'level_text'  => $edu['level_text'],
+                'study_form'  => $edu['study_form'],
+                'fields'      => $edu['fields'],
+            ];
+        }
+
+        $verifyData = $edu;
+        unset($verifyData['name'], $verifyData['invalid_status']);
+        $desc = '学信网核验：' . $edu['school'] . ' ' . $edu['major'] . '（' . $edu['level_text'] . '）';
+        $this->dao->upsert($uid, 'education', [
+            'method'      => 'chsi',
+            'description' => mb_substr($desc, 0, 500),
+            'images'      => '[]',
+            'verify_code' => $vcode,
+            'verify_data' => json_encode($verifyData, JSON_UNESCAPED_UNICODE),
+            'status'      => 1,
+            'remark'      => '',
+        ]);
+
+        Db::name('user')->where('uid', $uid)->update([
+            'edu_school' => mb_substr($edu['school'], 0, 100),
+            'edu_major'  => mb_substr($edu['major'], 0, 60),
+            'edu_level'  => mb_substr($edu['level_text'], 0, 20),
+        ]);
+        $profilePatch = [
+            'education'   => $edu['education'],
+            'school_name' => mb_substr($edu['school'], 0, 100),
+        ];
+        // 学位报告没有学习形式，保留用户原来选的学历类型
+        if ($edu['education_type'] > 0) {
+            $profilePatch['education_type'] = $edu['education_type'];
+        }
+        app()->make(UserProfileRepository::class)->save($uid, $profilePatch);
+        $this->applyLabel($uid, 'education');
+
+        return [
+            'school'         => $edu['school'],
+            'major'          => $edu['major'],
+            'level_text'     => $edu['level_text'],
+            'education_type' => $edu['education_type'],
+            'title'          => $edu['title'],
+        ];
     }
 
     /**
@@ -603,6 +725,11 @@ class UserCertificationRepository extends BaseRepository
                 $decoded = json_decode($images, true);
                 $c['images'] = is_array($decoded) ? $decoded : ($images ? [$images] : []);
             }
+            $verifyData = json_decode((string)($c['verify_data'] ?? ''), true);
+            $c['verify_data'] = is_array($verifyData) ? $verifyData : null;
+            $c['report_url'] = ($c['verify_code'] ?? '') !== ''
+                ? app()->make(ChsiReportService::class)->reportUrl((string)$c['verify_code'])
+                : '';
             $type = (string)($c['type'] ?? '');
             $c['is_latest'] = $type !== '' && !isset($seen[$type]);
             if ($c['is_latest']) {

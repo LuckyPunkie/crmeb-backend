@@ -30,8 +30,12 @@ class UserCertification extends BaseController
         $seen = [];
         foreach ($list as &$item) {
             $item['images'] = $item['images'] ? json_decode($item['images'], true) : [];
+            $verifyData = json_decode((string)($item['verify_data'] ?? ''), true);
+            $item['verify_data'] = is_array($verifyData) ? $verifyData : null;
             $type = (string)($item['type'] ?? '');
-            if (in_array($type, ['identity', 'realname', 'real_name'], true)) {
+            if (($item['method'] ?? '') === 'chsi' && (int)$item['status'] === 1) {
+                $item['status_label'] = '学信网已认证';
+            } elseif (in_array($type, ['identity', 'realname', 'real_name'], true)) {
                 if ((int)$item['status'] === 1) {
                     $item['status_label'] = '已认证';
                 } elseif ((int)$item['status'] === 2) {
@@ -59,7 +63,7 @@ class UserCertification extends BaseController
         if ((int)($review['profile_review_status'] ?? 0) === repository::REVIEW_MANUAL_PASS) {
             foreach ($list as &$item) {
                 $t = (string)($item['type'] ?? '');
-                if (in_array($t, ['identity', 'realname', 'real_name'], true)) {
+                if (in_array($t, ['identity', 'realname', 'real_name'], true) || ($item['method'] ?? '') === 'chsi') {
                     continue;
                 }
                 if ((int)$item['status'] === 1) {
@@ -112,41 +116,27 @@ class UserCertification extends BaseController
     }
 
     /**
-     * 接收前端 WebView 提取的学历信息，比对姓名后写库
+     * 学信网在线验证码核验学历
      * POST /api/user/certification/chsi_verify
+     * body: vcode 在线验证码；html 手机端取回的报告页（为空时服务器自取，H5 兜底）；preview=1 只校验返回报告预览、不入库
      */
     public function chsiVerify()
     {
-        $uid    = $this->request->uid();
-        $name   = trim($this->request->post('name', ''));
-        $school = trim($this->request->post('school', ''));
-        $major  = trim($this->request->post('major', ''));
-        $level  = trim($this->request->post('level', ''));
+        $uid   = $this->request->uid();
+        $vcode = (string)$this->request->post('vcode', '');
+        $html  = (string)$this->request->post('html', '', null);
 
-        if (!$name || !$school) {
-            return app('json')->fail('未获取到完整学历信息');
+        if (strlen($html) > 300 * 1024) {
+            return app('json')->fail('报告内容异常，请重试');
         }
-
-        $desc = "学信网核验：{$name} {$school} {$major}（{$level}）";
         try {
-            $this->repository->save($uid, 'education', $desc, []);
+            $preview = (int)$this->request->post('preview', 0) === 1;
+            $data = $this->repository->verifyEducationByChsi($uid, $vcode, $html, !$preview);
         } catch (\InvalidArgumentException $e) {
             return app('json')->fail($e->getMessage());
         }
 
-        // 同步写入用户表
-        Db::name('user')->where('uid', $uid)->update([
-            'edu_school' => $school,
-            'edu_major'  => $major,
-            'edu_level'  => $level,
-        ]);
-
-        return app('json')->success([
-            'name'   => $name,
-            'school' => $school,
-            'major'  => $major,
-            'level'  => $level,
-        ], '学历核验成功');
+        return app('json')->success($data, $preview ? 'ok' : '学历认证成功');
     }
 
     /**

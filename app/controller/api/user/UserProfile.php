@@ -139,6 +139,9 @@ class UserProfile extends BaseController
             'profile'  => $profile,
             'fields'   => $fields,
             'find_me'  => app()->make(UserFindMeRepository::class)->state($uid, $profile),
+            // 学历认证已通过：学历 / 学历类型 / 学校不可编辑
+            'edu_locked' => app()->make(\app\common\repositories\user\UserCertificationRepository::class)
+                ->isEducationLocked($uid),
         ]);
     }
 
@@ -233,8 +236,10 @@ class UserProfile extends BaseController
     public function save()
     {
         $uid   = $this->request->uid();
-        $identityLocked = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
-            ->isIdentityVerified($uid);
+        $certRepo = app()->make(\app\common\repositories\user\UserCertificationRepository::class);
+        $identityLocked = $certRepo->isIdentityVerified($uid);
+        // 学历认证通过后学历 / 学历类型 / 学校以认证结果为准，用户不可再改
+        $eduLocked = $certRepo->isEducationLocked($uid);
         $sex   = $this->request->param('sex/d', -1);
         $input = $this->request->param();
 
@@ -459,6 +464,10 @@ class UserProfile extends BaseController
             }
         }
 
+        if ($eduLocked) {
+            unset($filtered['education'], $filtered['education_type'], $filtered['school_name']);
+            unset($extraPatch['education'], $extraPatch['education_type'], $extraPatch['school_name']);
+        }
         if (!empty($filtered)) {
             $this->repository->save($uid, $filtered);
         }
