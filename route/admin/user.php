@@ -106,6 +106,28 @@ Route::group(function () {
         '_auth' => true,
     ]);
 
+    // 交友资料版块配置（与字段配置同一页面）
+    Route::group('user/profile_section', function () {
+        Route::get('lst', '/lst')->name('systemUserProfileSectionLst')->option([
+            '_alias' => '版块列表',
+        ]);
+        Route::post('create', '/create')->name('systemUserProfileSectionCreate')->option([
+            '_alias' => '新增版块',
+        ]);
+        Route::post('update/:id', '/update')->name('systemUserProfileSectionUpdate')->option([
+            '_alias' => '编辑版块',
+        ]);
+        Route::delete('delete/:id', '/delete')->name('systemUserProfileSectionDelete')->option([
+            '_alias' => '删除版块',
+        ]);
+        Route::post('sort', '/saveSort')->name('systemUserProfileSectionSort')->option([
+            '_alias' => '版块排序',
+        ]);
+    })->prefix('admin.user.UserProfileSection')->option([
+        '_path' => '/user/profile_fields',
+        '_auth' => true,
+    ]);
+
     // 印象墙开启弹窗文案
     Route::group('user/impression_wall_tip', function () {
         Route::get('detail', '/detail')->name('systemUserImpressionWallTipDetail')->option([

@@ -981,32 +981,6 @@ class CommunityRepository extends BaseRepository
                     'is_self' => false,
                 ];
             }
-            // 主页付费解锁：设置了 homepage_unlock_price 且当前用户未解锁 → 返回锁定态基础信息
-            $homepageLockRow = \think\facade\Db::name('user_profile')
-                ->where('uid', $uid)
-                ->field('homepage_unlock_price')
-                ->find();
-            $homepagePrice = round((float)($homepageLockRow['homepage_unlock_price'] ?? 0), 2);
-            if ($homepagePrice > 0) {
-                $homepageUnlocked = false;
-                if ($self) {
-                    $homepageUnlocked = (bool)\think\facade\Db::name('user_homepage_unlock')
-                        ->where('buyer_uid', $self->uid)
-                        ->where('target_uid', $uid)
-                        ->where('pay_status', 1)
-                        ->count();
-                }
-                if (!$homepageUnlocked) {
-                    return [
-                        'uid' => $uid,
-                        'nickname' => $user->nickname,
-                        'avatar' => $user->avatar,
-                        'is_self' => false,
-                        'homepage_locked' => true,
-                        'homepage_unlock_price' => $homepagePrice,
-                    ];
-                }
-            }
             // $self 为 null 时（未登录）跳过关注状态查询
             if ($self) {
                 $is_start = $relevanceRepository->checkHas($self->uid, $uid, RelevanceRepository::TYPE_COMMUNITY_FANS) > 0;
@@ -1071,6 +1045,8 @@ class CommunityRepository extends BaseRepository
             unset($pf);
         }
         $data['profile_fields'] = $profileFields;
+        // 版块配置：主页「资料」按它隐藏版块 / 子项、使用后台改过的版块名称
+        $data['profile_sections'] = app()->make(\app\common\repositories\user\UserProfileSectionRepository::class)->publicConfig();
 
         $review = app()->make(\app\common\repositories\user\UserCertificationRepository::class)
             ->buildReviewDisplay(is_array($user) ? $user : $user->toArray());
@@ -1097,11 +1073,6 @@ class CommunityRepository extends BaseRepository
         $data['wechat_unlock_price'] = $unlockPrice;
         $data['wechat_unlocked'] = $is_self || $wechatUnlocked;
         $data['wechat_id'] = ($is_self || $wechatUnlocked || $unlockPrice <= 0) ? $wechatId : '';
-        // 主页解锁状态（能走到这里说明本人 or 免费 or 已解锁；仅用于前端展示）
-        $homepageUnlockPrice = round((float)($profile['homepage_unlock_price'] ?? 0), 2);
-        $data['homepage_unlock_price'] = $homepageUnlockPrice;
-        $data['homepage_unlocked'] = true;
-        $data['homepage_locked'] = false;
         // 回填可展示的微信号到 profile_fields
         if (!empty($data['profile_fields']) && is_array($data['profile_fields'])) {
             foreach ($data['profile_fields'] as &$pf) {

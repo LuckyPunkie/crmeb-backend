@@ -43,22 +43,27 @@ class UgcTextSecurity
         if (isset($item['title'])) {
             $item['title'] = self::maskForDisplay((string)$item['title']);
         }
-        if (!empty($item['topic']) && is_array($item['topic']) && isset($item['topic']['topic_name'])) {
-            $item['topic']['topic_name'] = self::maskForDisplay((string)$item['topic']['topic_name']);
+        // 话题 / 标签命中敏感词：直接不展示（不打星）
+        if (!empty($item['topic']) && is_array($item['topic']) && isset($item['topic']['topic_name'])
+            && self::hitSensitive((string)$item['topic']['topic_name'])) {
+            $item['topic'] = null;
         }
         if (!empty($item['topics']) && is_array($item['topics'])) {
-            foreach ($item['topics'] as $i => $topic) {
-                if (!is_array($topic) || !isset($topic['topic_name'])) {
-                    continue;
-                }
-                $item['topics'][$i]['topic_name'] = self::maskForDisplay((string)$topic['topic_name']);
-            }
+            $item['topics'] = array_values(array_filter($item['topics'], function ($topic) {
+                return !(is_array($topic) && isset($topic['topic_name']) && self::hitSensitive((string)$topic['topic_name']));
+            }));
         }
         if (!empty($item['tags']) && is_array($item['tags'])) {
-            foreach ($item['tags'] as $i => $tag) {
-                $item['tags'][$i] = self::maskForDisplay((string)$tag);
-            }
+            $item['tags'] = array_values(array_filter($item['tags'], function ($tag) {
+                return !self::hitSensitive((string)$tag);
+            }));
         }
         return $item;
+    }
+
+    private static function hitSensitive(string $text): bool
+    {
+        $text = trim($text);
+        return $text !== '' && UgcDfaFilter::contains($text);
     }
 }

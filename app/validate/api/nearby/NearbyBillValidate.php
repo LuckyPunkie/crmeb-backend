@@ -19,14 +19,15 @@ class NearbyBillValidate extends Validate
 
     protected $rule = [
         'mer_id|商户ID' => 'require|integer|>:0',
-        'pay_price|支付金额' => 'require|float|>=:1|<=:50000',
+        'pay_price|支付金额' => 'require|float|>=:0.01|<=:50000|regex:/^\d+(\.\d{1,2})?$/',
         'pay_type|支付方式' => 'require|in:weixin,weixinApp,alipay,alipayApp,routine,mock,balance',
         'coupon_id|优惠券ID' => 'integer',
     ];
 
     protected $message = [
         'pay_price.float' => '请输入有效的支付金额',
-        'pay_price.>=' => '支付金额不能低于1元',
+        'pay_price.>=' => '支付金额不能低于0.01元',
+        'pay_price.regex' => '支付金额最多两位小数',
         'pay_price.<=' => '支付金额不能超过50000元',
         'pay_type.in' => '支付方式仅支持微信或支付宝',
     ];

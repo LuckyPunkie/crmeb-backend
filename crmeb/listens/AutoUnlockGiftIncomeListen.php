@@ -3,12 +3,14 @@
 namespace crmeb\listens;
 
 use app\common\dao\user\UserBillDao;
+use app\common\repositories\gift\GiftRepository;
 use crmeb\interfaces\ListenerInterface;
 use crmeb\services\TimerService;
 use think\facade\Db;
 
 /**
- * 礼物收益 7 天后自动解冻
+ * 礼物收益、微信号解锁收益冻结期满后自动解冻进佣金（可提现）
+ * 冻结天数统一用 GiftRepository::FREEZE_DAYS
  */
 class AutoUnlockGiftIncomeListen extends TimerService implements ListenerInterface
 {
@@ -17,7 +19,7 @@ class AutoUnlockGiftIncomeListen extends TimerService implements ListenerInterfa
         $this->tick(1000 * 60 * 20, function () {
             $billDao = app()->make(UserBillDao::class);
             request()->clearCache();
-            $time = date('Y-m-d H:i:s', strtotime('-7 days'));
+            $time = date('Y-m-d H:i:s', strtotime('-' . GiftRepository::FREEZE_DAYS . ' days'));
             $bills = $billDao->getTimeoutGiftIncomeBill($time);
             Db::transaction(function () use ($bills) {
                 foreach ($bills as $bill) {

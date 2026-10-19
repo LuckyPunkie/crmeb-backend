@@ -12,6 +12,9 @@ class UserProfileFieldRepository extends BaseRepository
 
     public const TYPES = ['text', 'radio', 'checkbox', 'year', 'height', 'weight', 'region', 'number', 'switch'];
 
+    /** 字段所属版块缺省值（版块配置见 UserProfileSectionRepository，kind=fields 的版块才能放字段） */
+    public const DEFAULT_SECTION = 'basic';
+
     public function __construct(dao $dao)
     {
         $this->dao = $dao;
@@ -38,7 +41,7 @@ class UserProfileFieldRepository extends BaseRepository
         return $this->enabledFields();
     }
 
-    /** 已上架字段：个人资料编辑页（含手机号，按后台 sort） */
+    /** 已上架字段（不看版块显隐）：筛选选项、找我、认证回填、资料保存校验等后端逻辑用 */
     public function enabledFields(): array
     {
         $list = $this->dao->getEnabledList();
@@ -49,15 +52,50 @@ class UserProfileFieldRepository extends BaseRepository
         return $list;
     }
 
-    /** 已上架且主页展示：个人主页「个人信息」 */
+    /** 已上架且 is_filter=1（含尚未通过 filterSchema 校验的项） */
+    public function filterableFieldRows(): array
+    {
+        $filter = app()->make(UserProfileFieldFilter::class);
+        $list = $this->dao->getFilterableList();
+        $out = [];
+        foreach ($list as $row) {
+            $row = $this->formatRow($row);
+            if (!$filter->canEnableFilter($row)) {
+                continue;
+            }
+            $out[] = $row;
+        }
+        return $out;
+    }
+
+    public function filterSchema(): array
+    {
+        return app()->make(UserProfileFieldFilter::class)->filterSchema();
+    }
+
+    /** App 交友资料编辑页要展示的字段：已上架，且所属版块显示中 */
+    public function editableFields(): array
+    {
+        return $this->filterHiddenSections($this->dao->getEnabledList());
+    }
+
+    /** 已上架且主页展示：个人主页「个人信息」；所属版块被隐藏的不返回 */
     public function displayFields(): array
     {
-        $list = $this->dao->getDisplayList();
-        foreach ($list as &$row) {
+        return $this->filterHiddenSections($this->dao->getDisplayList());
+    }
+
+    protected function filterHiddenSections(array $list): array
+    {
+        $shown = array_flip(app()->make(UserProfileSectionRepository::class)->fieldSectionKeys(true));
+        $out = [];
+        foreach ($list as $row) {
             $row = $this->formatRow($row);
+            if (isset($shown[$row['section']])) {
+                $out[] = $row;
+            }
         }
-        unset($row);
-        return $list;
+        return $out;
     }
 
     protected function filterProfileEditExcluded(array $list): array
@@ -239,7 +277,38 @@ class UserProfileFieldRepository extends BaseRepository
         $row['icon'] = (string)($row['icon'] ?? '');
         $row['bind_column'] = (string)($row['bind_column'] ?? '');
         $row['placeholder'] = (string)($row['placeholder'] ?? '');
+        $row['section'] = (string)($row['section'] ?? '') !== '' ? (string)$row['section'] : self::DEFAULT_SECTION;
+        $row['is_filter'] = (int)($row['is_filter'] ?? 0);
         return $row;
+    }
+
+    protected function normalizeIsFilterInput(array $data, array $payload, bool $isCreate, string $resolvedFieldKey = ''): int
+    {
+        $fieldKey = $resolvedFieldKey !== ''
+            ? $resolvedFieldKey
+            : (string)($payload['field_key'] ?? ($data['field_key'] ?? ($payload['field_key'] ?? '')));
+        $row = array_merge($payload, [
+            'field_key' => $fieldKey,
+            'type'      => (string)($payload['type'] ?? ($data['type'] ?? 'text')),
+            'bind_column' => (string)($payload['bind_column'] ?? ($data['bind_column'] ?? '')),
+            'status'    => isset($data['status']) ? ((int)$data['status'] ? 1 : 0) : (int)($payload['status'] ?? 1),
+        ]);
+        $filter = app()->make(UserProfileFieldFilter::class);
+        if (isset($data['is_filter'])) {
+            $want = (int)$data['is_filter'] ? 1 : 0;
+            if ($want && !$filter->canEnableFilter($row)) {
+                throw new ValidateException('该字段类型或用途不支持参与用户筛选');
+            }
+            return $want;
+        }
+        if (!$isCreate) {
+            return (int)($row['is_filter'] ?? 0);
+        }
+        $type = (string)($row['type'] ?? '');
+        if (in_array($type, ['radio', 'checkbox'], true) && $filter->canEnableFilter($row)) {
+            return 1;
+        }
+        return 0;
     }
 
     protected function normalizeInput(array $data, bool $isCreate, array $exist = []): array
@@ -270,6 +339,14 @@ class UserProfileFieldRepository extends BaseRepository
             }
         }
 
+        $section = (string)($data['section'] ?? '');
+        if ($section === '') {
+            $section = (string)($exist['section'] ?? self::DEFAULT_SECTION);
+        }
+        if (!in_array($section, app()->make(UserProfileSectionRepository::class)->fieldSectionKeys(false), true)) {
+            throw new ValidateException('所属版块不存在或不能放字段');
+        }
+
         $options = $data['options'] ?? ($exist['options'] ?? []);
         if (is_string($options)) {
             $decoded = json_decode($options, true);
@@ -291,6 +368,7 @@ class UserProfileFieldRepository extends BaseRepository
             'title' => mb_substr($title, 0, 64),
             'icon' => mb_substr(trim((string)($data['icon'] ?? ($exist['icon'] ?? ''))), 0, 512),
             'type' => $type,
+            'section' => $section,
             'options' => json_encode($options, JSON_UNESCAPED_UNICODE),
             'placeholder' => mb_substr(trim((string)($data['placeholder'] ?? ($exist['placeholder'] ?? ''))), 0, 128),
             'is_show' => isset($data['is_show']) ? ((int)$data['is_show'] ? 1 : 0) : (int)($exist['is_show'] ?? 1),
@@ -298,6 +376,14 @@ class UserProfileFieldRepository extends BaseRepository
             'sort' => isset($data['sort']) ? (int)$data['sort'] : (int)($exist['sort'] ?? 100),
             'bind_column' => mb_substr(trim((string)($data['bind_column'] ?? ($exist['bind_column'] ?? ''))), 0, 64),
         ];
+        if ($isCreate || array_key_exists('is_filter', $data)) {
+            $payload['is_filter'] = $this->normalizeIsFilterInput(
+                $data,
+                array_merge($exist, $payload),
+                $isCreate,
+                $fieldKey
+            );
+        }
         if ($isCreate || $fieldKey !== '') {
             $payload['field_key'] = $fieldKey;
         }

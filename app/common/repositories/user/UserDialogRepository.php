@@ -305,8 +305,9 @@ class UserDialogRepository extends BaseRepository
         $hasEduFilter = !empty($educations);
 
         $profileUids = $this->filterUidsByUserProfile($filter);
+        $hasDynamicProfileFilter = $this->hasDynamicProfileFilter($filter);
 
-        if ($gender === null && !$hasAgeFilter && !$hasHeightFilter && !$hasEduFilter && $profileUids === null) {
+        if ($gender === null && !$hasAgeFilter && !$hasHeightFilter && !$hasEduFilter && $profileUids === null && !$hasDynamicProfileFilter) {
             return null;
         }
 

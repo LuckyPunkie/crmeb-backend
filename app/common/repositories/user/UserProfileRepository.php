@@ -21,6 +21,8 @@ class UserProfileRepository extends BaseRepository
             return ['extra_fields' => []];
         }
         $arr = $profile->toArray();
+        // 主页付费解锁已下线（2026-10-14），库里旧列保留但不再下发
+        unset($arr['homepage_unlock_price']);
         $arr['extra_fields'] = $this->decodeExtraFields($arr['extra_fields'] ?? null);
         return $arr;
     }
@@ -37,7 +39,6 @@ class UserProfileRepository extends BaseRepository
             'job_title',
             'wechat_id',
             'wechat_unlock_price',
-            'homepage_unlock_price',
             'network_fans',
             'hometown_province',
             'hometown_city',
@@ -63,6 +64,7 @@ class UserProfileRepository extends BaseRepository
             'hope_age_min',
             'hope_age_max',
             'hope_height_min',
+            'hope_height_max',
             'hope_education',
             'hope_cities',
             'hope_text',

@@ -28,11 +28,15 @@ class CommissionConfig extends BaseController
         $paidRate  = (float)$this->request->param('paid_rate', 0);
         $videoRate = (float)$this->request->param('video_rate', 0);
         $remark    = (string)$this->request->param('remark', '');
+        // 新增项：旧版后台不传则不改
+        $wechatUnlockRate = $this->request->has('wechat_unlock_rate')
+            ? (float)$this->request->param('wechat_unlock_rate', 0)
+            : null;
 
         $adminInfo = $this->request->adminInfo();
         $operator  = $adminInfo['real_name'] ?? ($adminInfo['account'] ?? '管理员');
 
-        $this->repository->saveConfig($redRate, $paidRate, $videoRate, $operator, $remark);
+        $this->repository->saveConfig($redRate, $paidRate, $videoRate, $operator, $remark, $wechatUnlockRate);
 
         return app('json')->success('保存成功');
     }

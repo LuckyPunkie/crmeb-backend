@@ -49,6 +49,17 @@ class UserProfileFieldDao extends BaseDao
             ->toArray();
     }
 
+    /** 已上架且参与用户筛选 */
+    public function getFilterableList(): array
+    {
+        return UserProfileField::getDB()
+            ->where('status', 1)
+            ->where('is_filter', 1)
+            ->order('sort ASC,id ASC')
+            ->select()
+            ->toArray();
+    }
+
     /** @deprecated 使用 getEnabledList */
     public function getVisibleList(): array
     {

@@ -12,6 +12,8 @@
 
 namespace app\common\repositories\user;
 
+use app\common\repositories\commission\CommissionConfigRepository;
+use app\common\repositories\gift\GiftRepository;
 use app\common\repositories\wechat\WechatUserRepository;
 use crmeb\services\pay\Pay;
 use think\exception\ValidateException;
@@ -134,13 +136,14 @@ class UserWechatUnlockRepository
             $user->now_money = bcsub((string)$user->now_money, (string)$amount, 2);
             $user->save();
 
-            Db::name(self::TABLE)->insert([
+            $unlockId = (int)Db::name(self::TABLE)->insertGetId([
                 'buyer_uid' => $buyerUid,
                 'target_uid' => $targetUid,
                 'order_no' => $orderNo,
                 'amount' => $amount,
                 'pay_status' => 1,
             ]);
+            $this->creditTarget($unlockId);
 
             app()->make(UserBillRepository::class)->decBill(
                 $buyerUid, 'now_money', 'pay_product', [
@@ -239,8 +242,52 @@ class UserWechatUnlockRepository
         if (!$order) throw new ValidateException('订单不存在');
         if ((int)$order['pay_status'] === 1) return;
 
-        Db::name(self::TABLE)->where('id', $order['id'])->update([
-            'pay_status' => 1,
+        Db::transaction(function () use ($order) {
+            Db::name(self::TABLE)->where('id', $order['id'])->update([
+                'pay_status' => 1,
+            ]);
+            $this->creditTarget((int)$order['id']);
+        });
+    }
+
+    /**
+     * 被解锁用户分成：扣平台抽成（平台抽成配置 wechat_unlock）后记入佣金 brokerage_price，
+     * 先冻结（user_bill status=0），FREEZE_DAYS 天后由 AutoUnlockGiftIncomeListen 解冻可提现。
+     * 幂等：同一解锁记录只记一次（按 link_id 查账单）。
+     */
+    public function creditTarget(int $unlockId): void
+    {
+        $row = Db::name(self::TABLE)->where('id', $unlockId)->find();
+        if (!$row || (int)$row['pay_status'] !== 1) return;
+        $amount = round((float)$row['amount'], 2);
+        if ($amount <= 0) return;
+        $targetUid = (int)$row['target_uid'];
+        $exists = Db::name('user_bill')
+            ->where('uid', $targetUid)
+            ->where('category', 'brokerage')
+            ->where('type', 'wechat_unlock_income')
+            ->where('link_id', $unlockId)
+            ->count();
+        if ($exists) return;
+
+        $rate = round(app()->make(CommissionConfigRepository::class)->getRateDecimal('wechat_unlock') * 100, 2);
+        $commission = round($amount * $rate / 100, 2);
+        $income = round($amount - $commission, 2);
+        Db::name(self::TABLE)->where('id', $unlockId)->update([
+            'commission_rate' => $rate,
+            'commission_amount' => $commission,
+            'receiver_income' => $income,
+        ]);
+        if ($income <= 0) return;
+
+        $target = app()->make(UserRepository::class)->get($targetUid);
+        app()->make(UserBillRepository::class)->incBill($targetUid, 'brokerage', 'wechat_unlock_income', [
+            'link_id' => $unlockId,
+            'status' => 0,
+            'title' => '微信号被解锁',
+            'number' => $income,
+            'mark' => '微信号被解锁收益 ¥' . number_format($income, 2, '.', '') . '，' . GiftRepository::FREEZE_DAYS . '天后可提现',
+            'balance' => $target ? (float)$target['brokerage_price'] : 0,
         ]);
     }
 }

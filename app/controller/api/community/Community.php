@@ -147,7 +147,7 @@ class Community extends BaseController
             'annual_income', 'relationship_status', 'relationship_status_not', 'marital_status',
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
-            'hobby', 'social_tab', 'latitude', 'longitude',
+            'hobby', 'social_tab', 'latitude', 'longitude', 'profile_filter',
         ]);
         [$page, $limit] = $this->getPage();
 

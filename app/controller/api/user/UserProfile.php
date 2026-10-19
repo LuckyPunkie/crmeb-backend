@@ -8,8 +8,8 @@ use crmeb\basic\BaseController;
 use crmeb\services\security\ContentSecurityService;
 use app\common\repositories\user\UserProfileRepository as repository;
 use app\common\repositories\user\UserProfileFieldRepository;
+use app\common\repositories\user\UserProfileSectionRepository;
 use app\common\repositories\user\UserWechatUnlockRepository;
-use app\common\repositories\user\UserHomepageUnlockRepository;
 use app\common\repositories\user\UserFindMeOrderRepository;
 use app\common\repositories\user\UserFindMeRepository;
 
@@ -51,32 +51,6 @@ class UserProfile extends BaseController
     }
 
     /**
-     * 付费解锁对方主页
-     * POST /api/user/homepage_unlock/:uid
-     */
-    public function homepageUnlock($uid)
-    {
-        $buyerUid = $this->request->uid();
-        $payType = (string)$this->request->param('pay_type', 'weixin');
-        $returnUrl = (string)$this->request->param('return_url', '');
-        $result = app()->make(UserHomepageUnlockRepository::class)
-            ->unlock((int)$uid, $buyerUid, $payType, $returnUrl);
-        return app('json')->success($result);
-    }
-
-    /**
-     * 检查是否已解锁对方主页
-     * GET /api/user/homepage_unlock_check/:uid
-     */
-    public function homepageUnlockCheck($uid)
-    {
-        $buyerUid = $this->request->uid();
-        $unlocked = app()->make(UserHomepageUnlockRepository::class)
-            ->checkUnlocked((int)$uid, $buyerUid);
-        return app('json')->success(['unlocked' => $unlocked]);
-    }
-
-    /**
      * 交友资料字段的选项元数据（供筛选/资料页拉取，运营在后台可编辑）
      * GET /api/user/profile/field_options
      */
@@ -106,6 +80,16 @@ class UserProfile extends BaseController
     }
 
     /**
+     * 用户筛选面板动态块 schema（后台 is_filter=1 的自定义字段）
+     * GET /api/user/profile/filter_schema
+     */
+    public function filterSchema()
+    {
+        $fields = app()->make(UserProfileFieldRepository::class)->filterSchema();
+        return app('json')->success(['fields' => $fields]);
+    }
+
+    /**
      * 获取当前用户社交档案
      * GET /api/user/profile
      */
@@ -124,7 +108,7 @@ class UserProfile extends BaseController
 
         $fieldRepo = app()->make(UserProfileFieldRepository::class);
         $accountPhone = trim((string)($userInfo['phone'] ?? ''));
-        $fields = $fieldRepo->attachValues($fieldRepo->enabledFields(), $profile, [
+        $fields = $fieldRepo->attachValues($fieldRepo->editableFields(), $profile, [
             'account_phone' => $accountPhone,
             'account_real_name' => trim((string)($userInfo['real_name'] ?? '')),
         ]);
@@ -138,6 +122,8 @@ class UserProfile extends BaseController
             'birthday' => $userInfo['birthday'] ?? null,
             'profile'  => $profile,
             'fields'   => $fields,
+            // 版块配置（顺序 / 名称 / 显隐 / 内置版块子项），编辑页按它分块
+            'sections' => app()->make(UserProfileSectionRepository::class)->publicConfig(),
             'find_me'  => app()->make(UserFindMeRepository::class)->state($uid, $profile),
             // 学历认证已通过：学历 / 学历类型 / 学校不可编辑
             'edu_locked' => app()->make(\app\common\repositories\user\UserCertificationRepository::class)
@@ -169,7 +155,7 @@ class UserProfile extends BaseController
 
     /**
      * 找人：按信息项检索已开启「找到我的方式」的用户
-     * 需年卡有效，或带本人已支付、类型和关键词一致的单次订单号
+     * 需标准版 / 尊享版有效（受每日次数限制），或带本人已支付、类型和关键词一致的体验版订单号
      * GET /api/user/find_me/search?type=douyin_id&keyword=xxx&order_no=FM...
      */
     public function findMeSearch()
@@ -186,24 +172,31 @@ class UserProfile extends BaseController
         $orderNo = trim((string)$this->request->param('order_no', ''));
         $findMe = app()->make(UserFindMeRepository::class);
         $value = $findMe->normalizeQuery($type, $keyword);
-        if (!app()->make(UserFindMeOrderRepository::class)->canSearch($uid, $type, $value, $orderNo)) {
+        $orders = app()->make(UserFindMeOrderRepository::class);
+        $via = $orders->authorize($uid, $type, $value, $orderNo);
+        if ($via === '') {
             return app('json')->fail('请先支付查询费用');
         }
-        return app('json')->success(['list' => $findMe->search($type, $keyword, $uid)]);
+        $list = $findMe->search($type, $keyword, $uid);
+        if ($via === 'member') {
+            $orders->markDailyQuery($uid, $type, $value);
+        }
+        return app('json')->success(['list' => $list]);
     }
 
     /**
-     * 找人查询页：套餐价格 + 年卡到期时间
+     * 找人查询页：banner + 套餐 + 当前会员（标准版 / 尊享版）+ 每日次数；登录可选
      * GET /api/user/find_me/pay_info
      */
     public function findMePayInfo()
     {
-        return app('json')->success(app()->make(UserFindMeOrderRepository::class)->info($this->request->uid()));
+        $uid = $this->request->isLogin() ? (int)$this->request->uid() : 0;
+        return app('json')->success(app()->make(UserFindMeOrderRepository::class)->info($uid));
     }
 
     /**
      * 找人下单支付
-     * POST /api/user/find_me/order  body: plan=once|year, type, keyword, pay_type
+     * POST /api/user/find_me/order  body: plan=once|month|life, type, keyword, pay_type
      */
     public function findMeOrder()
     {
@@ -269,6 +262,7 @@ class UserProfile extends BaseController
             'hope_age_min',
             'hope_age_max',
             'hope_height_min',
+            'hope_height_max',
             'hope_education',
         ];
         // dating_purpose：VARCHAR，多选 CSV（如 "1,2"）
@@ -351,10 +345,6 @@ class UserProfile extends BaseController
             $price = round(max(0, min(9999, (float)$input['wechat_unlock_price'])), 2);
             $filtered['wechat_unlock_price'] = $price;
         }
-        if (array_key_exists('homepage_unlock_price', $input)) {
-            $price = round(max(0, min(9999, (float)$input['homepage_unlock_price'])), 2);
-            $filtered['homepage_unlock_price'] = $price;
-        }
         // 全网粉丝：仅自然数；空串/null 表示清空不展示
         if (array_key_exists('network_fans', $input)) {
             $raw = $input['network_fans'];
@@ -375,7 +365,7 @@ class UserProfile extends BaseController
         // 动态字段：field_values = { field_key: value }
         $extraPatch = [];
         if (array_key_exists('field_values', $input) && is_array($input['field_values'])) {
-            $allowedBind = array_flip(array_merge($intFields, $stringFields, $csvFields, ['wechat_unlock_price', 'homepage_unlock_price', 'network_fans']));
+            $allowedBind = array_flip(array_merge($intFields, $stringFields, $csvFields, ['wechat_unlock_price', 'network_fans']));
             $fieldRepo = app()->make(UserProfileFieldRepository::class);
             $metaMap = [];
             foreach ($fieldRepo->enabledFields() as $meta) {

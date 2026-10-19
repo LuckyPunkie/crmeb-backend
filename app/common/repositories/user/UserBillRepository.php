@@ -45,6 +45,7 @@ class UserBillRepository extends BaseRepository
             'brokerage/refund_one' => '退还一级佣金',
             'brokerage/refund_two' => '退还二级佣金',
             'brokerage/gift_income' => '收到礼物收益',
+            'brokerage/wechat_unlock_income' => '微信号解锁收益',
             'brokerage/major_customer_referrer' => '大客户卡推荐佣金',
             'brokerage/paid_content_income' => '付费内容收益',
             'brokerage/redpacket_income' => '红包任务收益',

@@ -79,11 +79,12 @@ class UserBillDao extends BaseDao
             ->whereIn('type', ['order_one', 'order_two'])->with('user')->where('status', 0)->select();
     }
 
+    /** 到期的冻结收益：礼物收益 + 微信号解锁收益（同一冻结期，见 GiftRepository::FREEZE_DAYS） */
     public function getTimeoutGiftIncomeBill($time)
     {
         return UserBill::getDB()->where('create_time', '<=', $time)
             ->where('category', 'brokerage')
-            ->where('type', 'gift_income')
+            ->whereIn('type', ['gift_income', 'wechat_unlock_income'])
             ->where('status', 0)
             ->with('user')
             ->select();

@@ -199,15 +199,13 @@ Route::group(function () {
         Route::get('find_me', 'UserProfile/findMeState');
         Route::post('find_me/toggle', 'UserProfile/findMeToggle');
         Route::get('find_me/search', 'UserProfile/findMeSearch');
-        Route::get('find_me/pay_info', 'UserProfile/findMePayInfo');
+        // find_me/pay_info 在 notLogin.php（未登录也要拿 banner / 套餐）
         Route::post('find_me/order', 'UserProfile/findMeOrder');
         Route::get('find_me/order/:order_no', 'UserProfile/findMeOrderStatus');
         // 付费解锁微信号
         Route::post('wechat_unlock/:uid', 'UserProfile/wechatUnlock');
         Route::get('wechat_unlock_check/:uid', 'UserProfile/wechatUnlockCheck');
         // 付费解锁主页
-        Route::post('homepage_unlock/:uid', 'UserProfile/homepageUnlock');
-        Route::get('homepage_unlock_check/:uid', 'UserProfile/homepageUnlockCheck');
 
         // 资质认证
         Route::get('certification', 'UserCertification/list');

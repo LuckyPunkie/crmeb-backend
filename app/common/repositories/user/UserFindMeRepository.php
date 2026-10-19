@@ -31,6 +31,9 @@ class UserFindMeRepository
     /** 手机号取账号绑定的 eb_user.phone，不走后台资料字段，始终可开 */
     public const PHONE_KEY = 'phone';
 
+    /** 账号自带来源的信息项：不看后台资料字段是否上架，始终可开、可查（身份证号来自实名认证 eb_user.card_id，资料字段下架也照样能找） */
+    public const ACCOUNT_KEYS = [self::PHONE_KEY, 'id_card'];
+
     /**
      * 设置页用：各项（是否已填、是否开启）
      */
@@ -78,9 +81,13 @@ class UserFindMeRepository
         $items = self::parseItems($profile['find_me_items'] ?? '');
         if ($enabled) {
             if (!isset($this->itemValues($uid, $profile)[$key])) {
-                throw new ValidateException($key === self::PHONE_KEY
-                    ? '请先绑定手机号'
-                    : '请先填写' . $available[$key] . '并保存资料');
+                if ($key === self::PHONE_KEY) {
+                    throw new ValidateException('请先绑定手机号');
+                }
+                if ($key === 'id_card' && !$this->fieldOnShelf($key)) {
+                    throw new ValidateException('请先完成实名认证');
+                }
+                throw new ValidateException('请先填写' . $available[$key] . '并保存资料');
             }
             $items[] = $key;
             $items = self::parseItems(implode(',', $items));
@@ -205,7 +212,18 @@ class UserFindMeRepository
         return mb_substr($value, 0, 64);
     }
 
-    /** 已上架的信息项：key => 文案 */
+    /** 后台资料字段是否上架 */
+    protected function fieldOnShelf(string $key): bool
+    {
+        foreach (app()->make(UserProfileFieldRepository::class)->enabledFields() as $field) {
+            if ((string)$field['field_key'] === $key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 可用的信息项：账号自带的（手机号、身份证号）+ 后台已上架的资料字段；key => 文案 */
     protected function availableItems(): array
     {
         $titles = [];
@@ -214,8 +232,8 @@ class UserFindMeRepository
         }
         $items = [];
         foreach (self::ITEMS as $key => $default) {
-            if ($key === self::PHONE_KEY) {
-                $items[$key] = $default;
+            if (in_array($key, self::ACCOUNT_KEYS, true)) {
+                $items[$key] = ($titles[$key] ?? '') !== '' ? $titles[$key] : $default;
             } elseif (isset($titles[$key])) {
                 $items[$key] = $titles[$key] !== '' ? $titles[$key] : $default;
             }

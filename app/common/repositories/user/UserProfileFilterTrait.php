@@ -89,33 +89,6 @@ trait UserProfileFilterTrait
             $profileQuery->where('marital_status', (int)$where['marital_status']);
         }
 
-        if (!empty($where['dating_purpose'])) {
-            $hasProfileFilter = true;
-            // dating_purpose 是 CSV 字符串（如 "1,2"），用户命中任一 id 即算命中
-            $purposes = is_array($where['dating_purpose'])
-                ? $where['dating_purpose']
-                : array_filter(explode(',', (string)$where['dating_purpose']));
-            $purposes = array_values(array_filter(array_map('intval', $purposes)));
-            if ($purposes) {
-                $conds = array_map(fn($pid) => "FIND_IN_SET('" . (int)$pid . "', dating_purpose)", $purposes);
-                $profileQuery->whereRaw('(' . implode(' OR ', $conds) . ')');
-            }
-        }
-        if (!empty($where['dating_purpose_not_in'])) {
-            $hasProfileFilter = true;
-            $exclude = is_array($where['dating_purpose_not_in'])
-                ? $where['dating_purpose_not_in']
-                : array_filter(explode(',', (string)$where['dating_purpose_not_in']));
-            $exclude = array_values(array_filter(array_map('intval', $exclude)));
-            if ($exclude) {
-                foreach ($exclude as $pid) {
-                    $profileQuery->whereRaw("NOT FIND_IN_SET('" . (int)$pid . "', dating_purpose)");
-                }
-            }
-            // 必须已填交友目的
-            $profileQuery->where('dating_purpose', '<>', '');
-        }
-
         if (isset($where['car_has']) && $where['car_has'] !== '') {
             $hasProfileFilter = true;
             if ((int)$where['car_has'] === 1) {
@@ -205,11 +178,74 @@ trait UserProfileFilterTrait
             }
         }
 
-        if (!$hasProfileFilter) {
+        $staticUids = $hasProfileFilter ? $profileQuery->column('uid') : null;
+        $dynamicUids = app()->make(UserProfileFieldFilter::class)
+            ->filterUids(app()->make(UserProfileFieldFilter::class)->parseProfileFilter($where));
+        $tabUids = $this->filterUidsBySocialTabDatingRules($where);
+
+        return $this->intersectUidSets($staticUids, $dynamicUids, $tabUids);
+    }
+
+    /**
+     * 脱单/人脉/邂逅 Tab 注入的交友目的规则（与面板 profile_filter 分开求交，避免误伤动态字段筛选）
+     */
+    protected function filterUidsBySocialTabDatingRules(array $where): ?array
+    {
+        $hasTabRule = !empty($where['dating_purpose']) || !empty($where['dating_purpose_not_in']);
+        if (!$hasTabRule) {
             return null;
         }
 
+        $profileQuery = Db::name('user_profile');
+
+        if (!empty($where['dating_purpose'])) {
+            $purposes = is_array($where['dating_purpose'])
+                ? $where['dating_purpose']
+                : array_filter(explode(',', (string)$where['dating_purpose']));
+            $purposes = array_values(array_filter(array_map('intval', $purposes)));
+            if ($purposes) {
+                $conds = array_map(fn($pid) => "FIND_IN_SET('" . (int)$pid . "', dating_purpose)", $purposes);
+                $profileQuery->whereRaw('(' . implode(' OR ', $conds) . ')');
+            }
+        }
+        if (!empty($where['dating_purpose_not_in'])) {
+            $exclude = is_array($where['dating_purpose_not_in'])
+                ? $where['dating_purpose_not_in']
+                : array_filter(explode(',', (string)$where['dating_purpose_not_in']));
+            $exclude = array_values(array_filter(array_map('intval', $exclude)));
+            if ($exclude) {
+                foreach ($exclude as $pid) {
+                    $profileQuery->whereRaw("NOT FIND_IN_SET('" . (int)$pid . "', dating_purpose)");
+                }
+            }
+            $profileQuery->where('dating_purpose', '<>', '');
+        }
+
         return $profileQuery->column('uid');
+    }
+
+    /** @param int[]|null ...$sets */
+    protected function intersectUidSets(...$sets): ?array
+    {
+        $parts = [];
+        foreach ($sets as $set) {
+            if ($set !== null) {
+                $parts[] = $set;
+            }
+        }
+        if (!$parts) {
+            return null;
+        }
+        $out = $parts[0];
+        for ($i = 1, $n = count($parts); $i < $n; $i++) {
+            $out = array_values(array_intersect($out, $parts[$i]));
+        }
+        return $out;
+    }
+
+    protected function hasDynamicProfileFilter(array $where): bool
+    {
+        return app()->make(UserProfileFieldFilter::class)->hasProfileFilterInput($where);
     }
 
     protected function communityUserFilterParams(): array
@@ -223,6 +259,7 @@ trait UserProfileFilterTrait
             'dating_purpose', 'car_has', 'house_has', 'total_assets', 'asset_tier',
             'want_kids', 'smoking', 'drinking', 'tattoo', 'only_child', 'accept_cat', 'accept_dog',
             'hobby',
+            'profile_filter',
         ];
     }
 }
