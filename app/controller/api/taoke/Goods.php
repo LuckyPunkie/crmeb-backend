@@ -11,6 +11,7 @@ use crmeb\services\taoke\DingDanXiaService;
 use crmeb\services\taoke\JdOfficialService;
 use crmeb\services\taoke\JuTuiKeService;
 use crmeb\services\taoke\PddOfficialService;
+use crmeb\services\taoke\TaokeUserTrackService;
 use think\App;
 use think\facade\Cache;
 use think\facade\Log;
@@ -1278,6 +1279,9 @@ class Goods extends BaseController
             'genPoster' => (bool) $this->request->post('gen_poster', false),
             'customContent' => (string) $this->request->post('custom_content', ''),
         ];
+        if ($this->request->isLogin()) {
+            $context = TaokeUserTrackService::applyKuaishouTrack((int) $this->request->uid(), $context);
+        }
         try {
             $result = $this->serviceGoodsRepository->createKuaishouPromotion($goodsId, $context);
             if (empty($result)) {
@@ -1562,14 +1566,15 @@ class Goods extends BaseController
         $customParameters = (string) $this->request->post('custom_parameters', '');
 
         if ($this->request->isLogin()) {
-            $user = \app\common\model\user\User::find((int) $this->request->uid());
+            $uid = (int) $this->request->uid();
+            $user = $uid > 0 ? \app\common\model\user\User::find($uid) : null;
             if ($user) {
                 if ($pid === '' && !empty($user->pdd_pid)) {
                     $pid = (string) $user->pdd_pid;
                 }
-                if ($customParameters === '' && !empty($user->pdd_custom_params)) {
-                    $customParameters = (string) $user->pdd_custom_params;
-                }
+            }
+            if ($customParameters === '' && $uid > 0) {
+                $customParameters = TaokeUserTrackService::pddCustomForUser($uid);
             }
         }
 
@@ -1703,6 +1708,7 @@ class Goods extends BaseController
     {
         $uid = (int) ($this->request->uid() ?? 0);
         $materialUrl = $this->request->post('materialUrl', '');
+        $skuId = trim((string) $this->request->post('skuId', ''));
 
         if (empty($materialUrl)) {
             return app('json')->fail('商品物料不能为空');
@@ -1745,6 +1751,9 @@ class Goods extends BaseController
             $normalizedMaterial = $this->normalizeJdMaterialUrl($materialUrl);
             if ($normalizedMaterial === '') {
                 return app('json')->fail('商品物料不能为空');
+            }
+            if ($skuId !== '' && ctype_digit($skuId) && stripos($normalizedMaterial, 'jingfen.jd.com') !== false) {
+                $normalizedMaterial = 'https://item.jd.com/' . $skuId . '.html';
             }
 
             $officialLink = $this->resolveJdOfficialPromotionLink($normalizedMaterial, (int) $uid);
@@ -1953,11 +1962,16 @@ class Goods extends BaseController
         }
         try {
             $openId = $this->resolveVipOpenId();
-            $result = $this->serviceGoodsRepository->createVipPromotion($goods_id, $openId, [
+            $vipContext = [
                 'ad_code' => (string) $this->request->post('ad_code', ''),
                 'dest_url' => (string) $this->request->post('url', ''),
                 'goods_name' => (string) $this->request->post('goods_name', ''),
-            ]);
+                'stat_param' => (string) $this->request->post('stat_param', ''),
+            ];
+            if ($vipContext['stat_param'] === '' && $this->request->isLogin()) {
+                $vipContext['stat_param'] = TaokeUserTrackService::trackTokenForUser((int) $this->request->uid());
+            }
+            $result = $this->serviceGoodsRepository->createVipPromotion($goods_id, $openId, $vipContext);
 
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');

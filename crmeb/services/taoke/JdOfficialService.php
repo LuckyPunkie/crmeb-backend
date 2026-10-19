@@ -299,6 +299,46 @@ class JdOfficialService extends BaseServices
     }
 
     /**
+     * 订单行查询（startTime/endTime 间隔不超过 1 小时，毫秒时间戳入参）
+     * method: jd.union.open.order.row.query
+     */
+    public function orderRowQuery(int $startTimeMs, int $endTimeMs, int $page = 1, int $pageSize = 20, int $timeType = 1): array
+    {
+        $pageSize = max(1, min(500, $pageSize));
+        $data = [
+            'orderReq' => [
+                'pageIndex' => max(1, $page),
+                'pageSize'  => $pageSize,
+                'type'      => $timeType,
+                'startTime' => date('Y-m-d H:i:s', (int) floor($startTimeMs / 1000)),
+                'endTime'   => date('Y-m-d H:i:s', (int) floor($endTimeMs / 1000)),
+            ],
+        ];
+        return $this->call('jd.union.open.order.row.query', $data);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function parseOrderRowList(array $response): array
+    {
+        $data = $this->parseBizPayload($response);
+        if (!is_array($data)) {
+            return [];
+        }
+        if (isset($data[0]) && is_array($data[0])) {
+            return $data;
+        }
+        foreach (['orderList', 'orderRowResp', 'data'] as $key) {
+            if (isset($data[$key]) && is_array($data[$key])) {
+                return $data[$key];
+            }
+        }
+
+        return [];
+    }
+
+    /**
      * 查询本账号已建推广位列表（低门槛诊断接口）
      * method: jd.union.open.position.query
      */

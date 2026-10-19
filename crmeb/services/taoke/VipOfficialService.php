@@ -20,6 +20,7 @@ class VipOfficialService extends BaseServices
 
     protected string $goodsService = 'com.vip.adp.api.open.service.UnionGoodsV2Service';
     protected string $urlService = 'com.vip.adp.api.open.service.UnionUrlV2Service';
+    protected string $orderService = 'com.vip.adp.api.open.service.UnionOrderService';
     protected string $apiVersion = '2.0.0';
 
     public function __construct()
@@ -55,6 +56,53 @@ class VipOfficialService extends BaseServices
     {
         $this->syncConfig();
         return $this->defaultChanTag;
+    }
+
+    /**
+     * 订单列表（orderTime 窗口 ≤1h，毫秒时间戳）
+     *
+     * @return array{list: array<int, array<string, mixed>>, total: int, raw: array}
+     */
+    public function fetchOrderList(int $orderTimeStartMs, int $orderTimeEndMs, int $page = 1, int $pageSize = 20): array
+    {
+        $request = [
+            'page' => max(1, $page),
+            'pageSize' => max(1, min(100, $pageSize)),
+            'orderTimeStart' => $orderTimeStartMs,
+            'orderTimeEnd' => $orderTimeEndMs,
+        ];
+        $chanTag = trim($this->getDefaultChanTag());
+        if ($chanTag !== '' && $chanTag !== 'default_pid') {
+            $request['chanTag'] = $chanTag;
+        }
+        $raw = $this->invoke($this->orderService, 'orderList', ['request' => $request]);
+        return [
+            'list' => $this->parseOrderListResponse($raw),
+            'total' => (int) (($raw['result']['total'] ?? 0)),
+            'raw' => $raw,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function parseOrderListResponse(array $raw): array
+    {
+        if (($raw['returnCode'] ?? '') !== '0') {
+            Log::warning('唯品会订单列表失败', [
+                'returnCode' => $raw['returnCode'] ?? '',
+                'returnMessage' => is_scalar($raw['returnMessage'] ?? null)
+                    ? (string) ($raw['returnMessage'] ?? '')
+                    : '',
+            ]);
+            return [];
+        }
+        $result = $raw['result'] ?? [];
+        if (!is_array($result)) {
+            return [];
+        }
+        $list = $result['orderInfoList'] ?? [];
+        return is_array($list) ? $list : [];
     }
 
     public function isConfigured(): bool

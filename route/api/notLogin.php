@@ -80,6 +80,11 @@ Route::get('common/pay_key/:key', [app\controller\api\Common::class, 'pay_key'])
 Route::get('common/feedback_type', [app\controller\api\user\FeedBackCategory::class, 'lst']);
 //交友资料字段选项（运营后台可编辑；筛选面板/资料页读取）
 Route::get('user/profile/field_options', 'api.user.UserProfile/fieldOptions');
+Route::get('user/profile/filter_schema', 'api.user.UserProfile/filterSchema');
+//找人查询页：banner + 套餐 + 会员状态（登录可选，未登录只返回 banner / 套餐）
+Route::group(function () {
+    Route::get('user/find_me/pay_info', 'api.user.UserProfile/findMePayInfo');
+})->middleware(\app\common\middleware\UserTokenMiddleware::class, false);
 //登录
 Route::post('auth/login', [app\controller\api\Auth::class, 'login']);
 //获取小程序登录是否需绑定手机号处理

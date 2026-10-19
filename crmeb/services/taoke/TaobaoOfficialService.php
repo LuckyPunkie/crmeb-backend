@@ -74,7 +74,7 @@ class TaobaoOfficialService extends BaseServices
             'url'  => $url,
         ];
         if ($logo !== '') $params['logo'] = $logo;
-        return $this->call('taobao.tbk.tpwd.create', $params);
+        return $this->call('taobao.tbk.tpwd.create', $params, true);
     }
 
     /**
@@ -238,16 +238,65 @@ class TaobaoOfficialService extends BaseServices
      * 订单查询
      * method: taobao.tbk.order.details.get
      */
-    public function orderDetailsGet(string $startTime, string $endTime, int $span = 600, int $page = 1, int $pageSize = 100, int $queryType = 1): array
+    public function orderDetailsGet(string $startTime, string $endTime, int $span = 600, int $page = 1, int $pageSize = 100, int $queryType = 1, array $extra = []): array
     {
-        return $this->call('taobao.tbk.order.details.get', [
+        $params = [
             'start_time' => $startTime,
             'end_time'   => $endTime,
             'span'       => $span,
             'page_no'    => $page,
             'page_size'  => $pageSize,
             'query_type' => $queryType,
-        ], true);
+        ];
+        foreach (['position_index', 'jump_type', 'order_scene'] as $key) {
+            if (isset($extra[$key]) && $extra[$key] !== '' && $extra[$key] !== null) {
+                $params[$key] = $extra[$key];
+            }
+        }
+
+        return $this->call('taobao.tbk.order.details.get', $params, true);
+    }
+
+    /**
+     * @return array{list: array<int, array<string, mixed>>, has_next: bool, position_index: string}
+     */
+    public function parseOrderList(array $response): array
+    {
+        $out = ['list' => [], 'has_next' => false, 'position_index' => ''];
+        if (isset($response['error_response']) || !is_array($response)) {
+            return $out;
+        }
+        foreach ($response as $key => $inner) {
+            if (!is_array($inner) || strpos((string) $key, '_response') === false) {
+                continue;
+            }
+            $data = $inner['data'] ?? $inner;
+            if (!is_array($data)) {
+                continue;
+            }
+            if (array_key_exists('has_next', $data)) {
+                $out['has_next'] = (bool) $data['has_next'];
+            }
+            if (!empty($data['position_index']) && is_scalar($data['position_index'])) {
+                $out['position_index'] = (string) $data['position_index'];
+            }
+            $results = $data['results'] ?? [];
+            if (is_array($results)) {
+                if (isset($results['publisher_order_dto']) && is_array($results['publisher_order_dto'])) {
+                    $dto = $results['publisher_order_dto'];
+                    if (isset($dto['trade_id']) || isset($dto['trade_parent_id']) || isset($dto['item_title'])) {
+                        $out['list'] = [$dto];
+                    } else {
+                        $out['list'] = $dto;
+                    }
+                } elseif (isset($results[0]) && is_array($results[0])) {
+                    $out['list'] = $results;
+                }
+            }
+            break;
+        }
+
+        return $out;
     }
 
     /**
@@ -469,8 +518,8 @@ class TaobaoOfficialService extends BaseServices
         if (!empty($payload['tpwd']) || !empty($payload['item_tpwd']) || !empty($payload['taoke_item_tpwd'])) {
             return $payload;
         }
-        $url = trim((string) ($payload['coupon_click_url'] ?? ($payload['item_url'] ?? '')));
-        if ($url === '') {
+        $urls = $this->collectTpwdCandidateUrls($payload);
+        if ($urls === []) {
             return $payload;
         }
         $text = trim($title);
@@ -485,34 +534,106 @@ class TaobaoOfficialService extends BaseServices
         } else {
             $text = substr($text, 0, 20);
         }
-        $model = $this->parseTpwdModel($this->tpwdCreate($text, $url));
+        $lastError = '';
+        $model = '';
+        foreach ($urls as $url) {
+            $raw = $this->tpwdCreate($text, $url);
+            $model = $this->parseTpwdModel($raw);
+            if ($model !== '') {
+                break;
+            }
+            $lastError = $this->formatTopError($raw);
+            Log::warning('淘宝 tpwd.create 未返回口令', [
+                'item_id' => $payload['item_id'] ?? '',
+                'url'     => $url,
+                'error'   => $lastError,
+            ]);
+        }
         if ($model === '') {
+            $payload['_tpwd_missing'] = true;
+            if ($lastError !== '') {
+                $payload['_tpwd_error'] = $lastError;
+            }
             return $payload;
         }
         $payload['tpwd'] = $model;
         $payload['item_tpwd'] = $model;
         $payload['taoke_item_tpwd'] = $model;
         $payload['_tpwd_via'] = 'taobao.tbk.tpwd.create';
+        unset($payload['_tpwd_missing'], $payload['_tpwd_error']);
         return $payload;
+    }
+
+    /**
+     * tpwd.create 更认 s.click 短链；uland/edetail 常失败，故优先尝试 click 域
+     *
+     * @return list<string>
+     */
+    protected function collectTpwdCandidateUrls(array $payload): array
+    {
+        $raw = [
+            trim((string) ($payload['coupon_click_url'] ?? '')),
+            trim((string) ($payload['item_url'] ?? '')),
+        ];
+        $urls = [];
+        foreach ($raw as $u) {
+            if ($u === '' || in_array($u, $urls, true)) {
+                continue;
+            }
+            $urls[] = $u;
+        }
+        usort($urls, static function (string $a, string $b): int {
+            $score = static function (string $url): int {
+                if (stripos($url, 's.click.taobao.com') !== false) {
+                    return 0;
+                }
+                if (stripos($url, 'uland.taobao.com') !== false) {
+                    return 2;
+                }
+                return 1;
+            };
+            return $score($a) <=> $score($b);
+        });
+        return $urls;
+    }
+
+    protected function formatTopError(array $response): string
+    {
+        if (!isset($response['error_response']) || !is_array($response['error_response'])) {
+            return '';
+        }
+        $err = $response['error_response'];
+        return trim((string) (($err['sub_msg'] ?? '') . ' ' . ($err['msg'] ?? '') . ' (' . ($err['code'] ?? '') . ')'));
     }
 
     protected function parseTpwdModel(array $response): string
     {
-        if (isset($response['error_response']) || !is_array($response)) {
+        if (!is_array($response) || $response === []) {
+            return '';
+        }
+        if (isset($response['error_response'])) {
             return '';
         }
         foreach ($response as $key => $inner) {
             if (!is_array($inner) || strpos((string) $key, '_response') === false) {
                 continue;
             }
-            if (isset($inner['data']['model'])) {
+            if (isset($inner['data']['model']) && (string) $inner['data']['model'] !== '') {
                 return (string) $inner['data']['model'];
             }
-            if (isset($inner['model'])) {
+            if (isset($inner['result']['model']) && (string) $inner['result']['model'] !== '') {
+                return (string) $inner['result']['model'];
+            }
+            if (isset($inner['model']) && (string) $inner['model'] !== '') {
                 return (string) $inner['model'];
             }
         }
         return '';
+    }
+
+    public function linkPayloadHasTpwd(array $payload): bool
+    {
+        return trim((string) ($payload['tpwd'] ?? ($payload['item_tpwd'] ?? ($payload['taoke_item_tpwd'] ?? '')))) !== '';
     }
 
     /**

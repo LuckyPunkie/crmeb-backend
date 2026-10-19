@@ -195,6 +195,47 @@ class PddOfficialService extends BaseServices
         return $this->defaultPid;
     }
 
+    /**
+     * 推广订单增量列表（更新时间窗口 ≤24h）
+     *
+     * @return array{list: array<int, array<string, mixed>>, raw: array}
+     */
+    public function fetchOrderListIncrement(int $startUpdateTime, int $endUpdateTime, int $page = 1, int $pageSize = 20): array
+    {
+        $pageSize = max(10, min(100, $pageSize));
+        $raw = $this->call('pdd.ddk.order.list.increment.get', [
+            'start_update_time' => $startUpdateTime,
+            'end_update_time' => $endUpdateTime,
+            'page' => max(1, $page),
+            'page_size' => $pageSize,
+            'return_count' => false,
+        ]);
+        return [
+            'list' => $this->parseOrderIncrementList($raw),
+            'raw' => $raw,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function parseOrderIncrementList(array $raw): array
+    {
+        if (isset($raw['error_response'])) {
+            return [];
+        }
+        $key = $this->responseKey($raw);
+        if ($key === '') {
+            return [];
+        }
+        $block = $raw[$key] ?? [];
+        if (!is_array($block)) {
+            return [];
+        }
+        $list = $block['order_list'] ?? $block['order_list_get_response']['order_list'] ?? [];
+        return is_array($list) ? $list : [];
+    }
+
     protected function call(string $type, array $bizParams): array
     {
         if ($this->clientId === '' || $this->clientSecret === '') {

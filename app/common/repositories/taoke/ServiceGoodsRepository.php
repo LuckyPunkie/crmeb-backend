@@ -748,19 +748,28 @@ class ServiceGoodsRepository
     public function createTaobaoLink(string $goodsId, string $relateId = '', string $title = '', array $hints = []): array
     {
         if ($this->isTaobaoOfficial()) {
+            $payloads = [];
+            $fromMaterial = $this->taobaoOfficial->createPromotionLink($goodsId, $title);
+            if (!empty($fromMaterial['item_url']) || !empty($fromMaterial['coupon_click_url'])) {
+                $payloads[] = $fromMaterial;
+            }
             $cached = $this->buildTaobaoLinkFromHints($goodsId, $hints);
             if ($cached !== []) {
-                return $this->taobaoOfficial->attachTpwdToLinkPayload($cached, $title);
+                $payloads[] = $cached;
             }
-            $link = $this->taobaoOfficial->createPromotionLink($goodsId, $title);
-            if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
-                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
+            $fromItemInfo = $this->taobaoOfficial->createLinkFromItemInfo($goodsId);
+            if (!empty($fromItemInfo['item_url']) || !empty($fromItemInfo['coupon_click_url'])) {
+                $payloads[] = $fromItemInfo;
             }
-            $link = $this->taobaoOfficial->createLinkFromItemInfo($goodsId);
-            if (!empty($link['item_url']) || !empty($link['coupon_click_url'])) {
-                return $this->taobaoOfficial->attachTpwdToLinkPayload($link, $title);
+
+            $last = [];
+            foreach ($payloads as $base) {
+                $last = $this->taobaoOfficial->attachTpwdToLinkPayload($base, $title);
+                if ($this->taobaoOfficial->linkPayloadHasTpwd($last)) {
+                    return $last;
+                }
             }
-            return [];
+            return $last;
         }
         return [];
     }
