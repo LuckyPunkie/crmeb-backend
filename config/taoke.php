@@ -26,6 +26,7 @@ return [
         'refresh_token' => env('taoke.taobao_refresh_token', ''),
         // access_token 过期 Unix 时间戳（OAuth 回调或 refresh 时自动写入 .env）
         'session_expire_at' => (int) env('taoke.taobao_session_expire_at', 0),
+        'refresh_expire_at' => (int) env('taoke.taobao_refresh_expire_at', 0),
         'pid' => env('taoke.taobao_pid', ''),
         'adzone_id' => env('taoke.taobao_adzone_id', ''),
         // OAuth 回调（须与开放平台「回调URL」完全一致，且不能为阿里系域名）
@@ -35,14 +36,35 @@ return [
     ],
 
     // ==================== 京东联盟配置 ====================
+    // 小程序 / App 各一套开放平台应用；jd 默认指向小程序（兼容旧 DI）
+    'jd_mp' => [
+        'appkey' => env('JD_MP_APPKEY', env('taoke.jd_mp_appkey', '')),
+        'secret' => env('JD_MP_SECRET', env('taoke.jd_mp_secret', '')),
+        'unionid' => env('JD_UNIONID', env('taoke.jd_unionid', '')),
+        'site_id' => env('JD_MP_SITE_ID', env('taoke.jd_mp_site_id', '')),
+        'pid' => env('JD_MP_PID', env('taoke.jd_mp_pid', '')),
+        'full_pid' => env('JD_MP_FULL_PID', env('taoke.jd_mp_full_pid', '')),
+        'access_token' => env('JD_MP_ACCESS_TOKEN', env('taoke.jd_access_token', '')),
+        'api_url' => 'https://api.jd.com/routerjson',
+    ],
+    'jd_app' => [
+        'appkey' => env('JD_APP_APPKEY', env('taoke.jd_app_appkey', '')),
+        'secret' => env('JD_APP_SECRET', env('taoke.jd_app_secret', '')),
+        'unionid' => env('JD_UNIONID', env('taoke.jd_unionid', '')),
+        'site_id' => env('JD_APP_SITE_ID', env('taoke.jd_app_site_id', '')),
+        'pid' => env('JD_APP_PID', env('taoke.jd_app_pid', '')),
+        'full_pid' => env('JD_APP_FULL_PID', env('taoke.jd_app_full_pid', '')),
+        'access_token' => env('JD_APP_ACCESS_TOKEN', env('taoke.jd_access_token', '')),
+        'api_url' => 'https://api.jd.com/routerjson',
+    ],
     'jd' => [
-        'appkey' => env('taoke.jd_appkey', ''),
-        'secret' => env('taoke.jd_secret', ''),
-        'unionid' => env('taoke.jd_unionid', ''),
-        'site_id' => env('taoke.jd_site_id', ''),         // 媒体ID第2段, promotion.common.get 的 siteId
-        'pid' => env('taoke.jd_pid', ''),                 // 推广位ID第3段
-        'full_pid' => env('taoke.jd_full_pid', ''),       // 完整 unionId_siteId_positionId, 商品发现类接口的 pid 参数
-        'access_token' => env('taoke.jd_access_token', ''),
+        'appkey' => env('JD_MP_APPKEY', env('taoke.jd_appkey', '')),
+        'secret' => env('JD_MP_SECRET', env('taoke.jd_secret', '')),
+        'unionid' => env('JD_UNIONID', env('taoke.jd_unionid', '')),
+        'site_id' => env('JD_MP_SITE_ID', env('taoke.jd_site_id', '')),
+        'pid' => env('JD_MP_PID', env('taoke.jd_pid', '')),
+        'full_pid' => env('JD_MP_FULL_PID', env('taoke.jd_full_pid', '')),
+        'access_token' => env('JD_MP_ACCESS_TOKEN', env('taoke.jd_access_token', '')),
         'api_url' => 'https://api.jd.com/routerjson',
     ],
 
@@ -68,6 +90,7 @@ return [
         'access_token' => env('taoke.kuaishou_access_token', ''),
         'refresh_token' => env('taoke.kuaishou_refresh_token', ''),
         'access_token_expire_at' => (int) env('taoke.kuaishou_access_token_expire_at', 0),
+        'refresh_token_expire_at' => (int) env('taoke.kuaishou_refresh_token_expire_at', 0),
         'pid' => env('taoke.kuaishou_pid', ''),
         'api_url' => 'https://openapi.kwaixiaodian.com',
         'oauth_callback' => env('taoke.kuaishou_oauth_callback', 'https://0626tbcs.ohlegend.com/api/taoke/oauth/kuaishou/callback'),

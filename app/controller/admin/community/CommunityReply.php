@@ -106,6 +106,7 @@ class CommunityReply extends BaseController
             return app('json')->fail('数据不存在');
 
         $this->repository->update($id, $data);
+        repository::syncCommunityReplyCount((int)$this->repository->get($id)['community_id']);
         return app('json')->success('审核成功');
     }
 }

@@ -192,6 +192,8 @@ class ScanOrderOrder extends BaseController
         foreach ($orders as $order) {
             $update = [
                 'is_scan_order' => 1,
+                'order_source' => StoreOrderRepository::ORDER_SOURCE_SCAN,
+                'order_source' => StoreOrderRepository::ORDER_SOURCE_SCAN,
                 'scan_table_id' => $tableId,
                 'scan_table_label' => (string)$table['table_label'],
                 'remark' => $orderRemark,

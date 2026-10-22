@@ -74,6 +74,10 @@ class UserTokenMiddleware extends BaseMiddleware
         } catch (Throwable $e) {
             if ($force)
                 throw  $e;
+            if ($this->allowsTaokeGuest($request)) {
+                $this->bindGuestUserMacros($request);
+                return;
+            }
             $request->macro('isLogin', function () {
                 return false;
             });
@@ -107,5 +111,32 @@ class UserTokenMiddleware extends BaseMiddleware
     public function after(Response $response)
     {
         // TODO: Implement after() method.
+    }
+
+    /** 未登录/无效 token 仍允许访问的淘客转链（京东 subUnionId=guest） */
+    protected function allowsTaokeGuest(Request $request): bool
+    {
+        $path = strtolower(str_replace('\\', '/', trim($request->pathinfo(), '/')));
+        return str_ends_with($path, 'taoke/goods/create_jd_link')
+            || str_ends_with($path, 'taoke/official/goods/create_jd_link');
+    }
+
+    protected function bindGuestUserMacros(Request $request): void
+    {
+        $request->macro('isLogin', function () {
+            return false;
+        });
+        $request->macro('uid', function () {
+            return 0;
+        });
+        $request->macro('userInfo', function () {
+            return null;
+        });
+        $request->macro('token', function () {
+            return '';
+        });
+        $request->macro('tokenInfo', function () {
+            return null;
+        });
     }
 }

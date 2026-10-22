@@ -32,18 +32,38 @@ class JdOfficialService extends BaseServices
             'connect_timeout' => 8,
             'verify' => false,
         ]));
-        $this->apiUrl    = config('taoke.jd.api_url') ?: 'https://api.jd.com/routerjson';
-        $this->appKey    = (string) config('taoke.jd.appkey');
-        $this->appSecret = (string) config('taoke.jd.secret');
-        $this->unionId   = (string) config('taoke.jd.unionid');
-        $this->siteId    = (string) config('taoke.jd.site_id');
-        $this->pid       = (string) config('taoke.jd.pid');
-        $this->fullPid   = (string) config('taoke.jd.full_pid');
+        $this->applyConfig(config('taoke.jd') ?: []);
+    }
+
+    /** @param 'mp'|'app' $profile */
+    public static function forProfile(string $profile): self
+    {
+        $profile = strtolower(trim($profile)) === 'app' ? 'app' : 'mp';
+        $cfgKey = $profile === 'app' ? 'taoke.jd_app' : 'taoke.jd_mp';
+        $cfg = config($cfgKey) ?: config('taoke.jd') ?: [];
+        $svc = new self();
+        $svc->applyConfig(is_array($cfg) ? $cfg : []);
+        return $svc;
+    }
+
+    protected function applyConfig(array $cfg): void
+    {
+        $this->apiUrl    = (string) ($cfg['api_url'] ?? 'https://api.jd.com/routerjson');
+        $this->appKey    = (string) ($cfg['appkey'] ?? '');
+        $this->appSecret = (string) ($cfg['secret'] ?? '');
+        $this->unionId   = (string) ($cfg['unionid'] ?? '');
+        $this->siteId    = (string) ($cfg['site_id'] ?? '');
+        $this->pid       = (string) ($cfg['pid'] ?? '');
+        $this->fullPid   = (string) ($cfg['full_pid'] ?? '');
         if ($this->fullPid !== '' && $this->siteId === '') {
             $parts = explode('_', $this->fullPid);
             if (count($parts) >= 2) {
-                $this->siteId = $parts[1];
+                $this->siteId = (string) $parts[1];
             }
+        }
+        if ($this->fullPid !== '' && $this->pid === '' && count(explode('_', $this->fullPid)) >= 3) {
+            $parts = explode('_', $this->fullPid);
+            $this->pid = (string) end($parts);
         }
     }
 
@@ -383,6 +403,89 @@ class JdOfficialService extends BaseServices
     /**
      * 解析联盟 API 业务层 payload（code=200 时返回 data 数组）
      */
+    /**
+     * 网关/业务层错误摘要（create_jd_link 兜底 _note）
+     *
+     * @return array{layer:string, code:string|int, message:string}
+     */
+    public function describeApiResponse(array $response): array
+    {
+        if ($response === []) {
+            return ['layer' => 'local', 'code' => 0, 'message' => '空响应或请求异常'];
+        }
+        if (isset($response['error_response']) && is_array($response['error_response'])) {
+            $er = $response['error_response'];
+
+            return [
+                'layer'   => 'gateway',
+                'code'    => $er['code'] ?? '',
+                'message' => trim((string) ($er['zh_desc'] ?? $er['en_desc'] ?? $er['msg'] ?? '')),
+            ];
+        }
+        foreach ($response as $key => $inner) {
+            if (!is_array($inner) || (substr($key, -9) !== '_response' && substr($key, -9) !== '_responce')) {
+                continue;
+            }
+            foreach ($inner as $field => $value) {
+                if (substr($field, -6) !== 'result' && substr($field, -6) !== 'Result') {
+                    continue;
+                }
+                $parsed = is_string($value) ? json_decode($value, true) : $value;
+                if (!is_array($parsed)) {
+                    return ['layer' => 'biz', 'code' => '', 'message' => 'result 解析失败'];
+                }
+                $code = $parsed['code'] ?? ($parsed['Code'] ?? '');
+                $msg = trim((string) ($parsed['message'] ?? $parsed['msg'] ?? $parsed['Message'] ?? ''));
+
+                return [
+                    'layer'   => 'biz',
+                    'code'    => $code,
+                    'message' => $msg !== '' ? $msg : ((int) $code === 200 ? 'code=200' : '业务层非 200'),
+                ];
+            }
+        }
+
+        return ['layer' => 'unknown', 'code' => '', 'message' => '无法解析响应结构'];
+    }
+
+    public function formatPromotionAttemptNote(string $method, int $sceneId, array $response, string $suffix = ''): string
+    {
+        $d = $this->describeApiResponse($response);
+        $msg = $d['message'];
+        if (mb_strlen($msg) > 480) {
+            $msg = mb_substr($msg, 0, 480) . '…';
+        }
+        $note = sprintf(
+            '官方 %s sceneId=%d [%s] code=%s %s',
+            $method,
+            $sceneId,
+            $d['layer'],
+            (string) $d['code'],
+            $msg
+        );
+        if ($suffix !== '') {
+            $note .= '；' . $suffix;
+        }
+
+        return $note;
+    }
+
+    /**
+     * 联盟转链联调包（完整网关 JSON，供前端 console / Network Preview）
+     *
+     * @param array<string, mixed> $requestMeta
+     */
+    public function buildPromotionApiDebug(string $method, int $sceneId, array $requestMeta, array $response): array
+    {
+        return [
+            'method'   => $method,
+            'sceneId'  => $sceneId,
+            'request'  => $requestMeta,
+            'summary'  => $this->describeApiResponse($response),
+            'response' => $response,
+        ];
+    }
+
     public function parseBizPayload(array $response): ?array
     {
         if (isset($response['error_response'])) {

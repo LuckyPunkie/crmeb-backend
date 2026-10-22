@@ -4,6 +4,7 @@ namespace app\controller\admin\taoke;
 
 use app\common\model\system\config\SystemConfigValue;
 use app\common\repositories\taoke\ServiceTabConfigRepository;
+use app\common\repositories\taoke\TaokeOAuthStatusRepository;
 use crmeb\basic\BaseController;
 use think\App;
 
@@ -13,17 +14,26 @@ use think\App;
 class OfficialServiceTabConfig extends BaseController
 {
     protected ServiceTabConfigRepository $repository;
+    protected TaokeOAuthStatusRepository $oauthStatus;
 
-    public function __construct(App $app, ServiceTabConfigRepository $repository)
-    {
+    public function __construct(
+        App $app,
+        ServiceTabConfigRepository $repository,
+        TaokeOAuthStatusRepository $oauthStatus
+    ) {
         parent::__construct($app);
         $this->repository = $repository;
+        $this->oauthStatus = $oauthStatus;
     }
 
     public function index()
     {
+        $list = $this->repository->listAll(ServiceTabConfigRepository::CHANNEL_OFFICIAL);
+        $list = $this->oauthStatus->mergeIntoTabList($list);
+
         return app('json')->success([
-            'list' => $this->repository->listAll(ServiceTabConfigRepository::CHANNEL_OFFICIAL),
+            'list'         => $list,
+            'oauth_alerts' => $this->oauthStatus->expiringAlerts(7),
         ]);
     }
 

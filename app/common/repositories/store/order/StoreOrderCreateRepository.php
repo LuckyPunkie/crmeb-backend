@@ -1431,6 +1431,10 @@ class StoreOrderCreateRepository extends StoreOrderRepository
                 'welfare_scan_mer_id' => $_welfareScanMerId,
                 'welfare_commission' => $_welfareCommission,
                 'welfare_bill_sn' => '',
+                // 订单来源：公益商品 / 盲盒商品 / 商城下单；扫码、线上下单在 ScanOrder 下单后改写
+                'order_source' => $_isWelfare
+                    ? StoreOrderRepository::ORDER_SOURCE_WELFARE
+                    : ($_isBlindbox ? StoreOrderRepository::ORDER_SOURCE_BLINDBOX : StoreOrderRepository::ORDER_SOURCE_MALL),
                 'share_mer_id' => $_shareMerId,
                 'commission_rate' => (float)$rate,
                 'order_type' => $merchantCart['order']['isTake'] ? 1 : ($merchantCart['order']['isCityTake'] ? 2 : 0),

@@ -70,16 +70,20 @@ class WelfareFreeOrderRepository
         if ($hit <= 0 || $billAmount > $hit) {
             throw new ValidateException('当前消费金额未命中该公益商品');
         }
-        if ($hit > $price) {
+        if ($hit >= $price) {
             throw new ValidateException('公益商品配置异常');
         }
+
+        // 商品的「分销金额」= 公益商家拿出来给扫码商户的总额（含买单金额）：
+        // 扫码商户得 买单金额（可用余额）+ (分销金额 - 买单金额)（分销余额）；订单上只记后者
+        $reward = max(0, round((float)$product['welfare_commission'] - $billAmount, 2));
 
         return [
             'scan_mer_id' => $scanMerId,
             'bill_amount' => round($billAmount, 2),
             'product_id' => $productId,
             'welfare_mer_id' => (int)$product['mer_id'],
-            'welfare_commission' => round((float)$product['welfare_commission'], 2),
+            'welfare_commission' => $reward,
             'product_price' => $price,
         ];
     }
@@ -177,7 +181,7 @@ class WelfareFreeOrderRepository
             app()->make(\app\common\dao\system\merchant\FinancialRecordDao::class)->inc([
                 'order_id' => (int)$billOrder['id'],
                 'order_sn' => $billSn,
-                'user_info' => 'uid:' . $uid,
+                'user_info' => $this->userNickname($uid),
                 'user_id' => $uid,
                 'financial_type' => 'nearby_bill_welfare',
                 'type' => 1,
@@ -190,7 +194,7 @@ class WelfareFreeOrderRepository
 
         // 2) 分销金额入锁定分销余额（30天）
         try {
-            $this->addWelfareLockMoney($scanMerId, (int)$storeOrder['order_id'], $commission);
+            $this->addWelfareLockMoney($scanMerId, (int)$storeOrder['order_id'], $commission, $uid);
         } catch (\Throwable $e) {
             Log::error('Welfare settle commission failed: ' . $e->getMessage());
         }
@@ -206,7 +210,7 @@ class WelfareFreeOrderRepository
         Log::info('Welfare settle ok: order_id=' . $storeOrder['order_id'] . ' bill_sn=' . $billSn);
     }
 
-    public function addWelfareLockMoney(int $merId, int $orderId, float $money): void
+    public function addWelfareLockMoney(int $merId, int $orderId, float $money, int $uid = 0): void
     {
         if ($money <= 0 || $merId <= 0) {
             return;
@@ -224,13 +228,22 @@ class WelfareFreeOrderRepository
         app()->make(\app\common\dao\system\merchant\FinancialRecordDao::class)->inc([
             'order_id' => $orderId,
             'order_sn' => (string)$orderId,
-            'user_info' => 'welfare',
-            'user_id' => 0,
+            'user_info' => $this->userNickname($uid),
+            'user_id' => $uid,
             'financial_type' => 'welfare_commission',
             'type' => 1,
             'number' => $money,
             'pay_type' => 0,
         ], $merId);
+    }
+
+    /**
+     * 资金流水「对方信息」：买家昵称，取不到时用 uid
+     */
+    protected function userNickname(int $uid): string
+    {
+        $nick = $uid > 0 ? (string)Db::name('user')->where('uid', $uid)->value('nickname') : '';
+        return $nick !== '' ? mb_substr($nick, 0, 32) : ($uid > 0 ? 'uid:' . $uid : '用户');
     }
 
     /**

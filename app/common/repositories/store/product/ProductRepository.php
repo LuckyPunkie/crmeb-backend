@@ -3970,8 +3970,18 @@ class ProductRepository extends BaseRepository
                     }
                 }
             }
-            if ($minPrice > 0 && $hitAmount > $minPrice) {
-                throw new ValidateException('命中金额不能大于商品售价');
+            // 0 ≤ 命中金额 < 售价；命中金额 < 分销金额 < 售价（都不取等）
+            if ($minPrice > 0 && $hitAmount >= $minPrice) {
+                throw new ValidateException('命中金额必须小于商品售价');
+            }
+            // 分销金额 = 公益商家付给扫码商户的总额（含买单金额）
+            if ($hitAmount > 0 || $welfareCommission > 0) {
+                if ($welfareCommission <= $hitAmount) {
+                    throw new ValidateException('分销金额必须大于命中金额');
+                }
+                if ($minPrice > 0 && $welfareCommission >= $minPrice) {
+                    throw new ValidateException('分销金额必须小于商品售价');
+                }
             }
         } else {
             $data['hit_amount'] = 0;

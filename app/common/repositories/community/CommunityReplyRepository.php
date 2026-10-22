@@ -289,6 +289,8 @@ class CommunityReplyRepository extends BaseRepository
             if ($replyId) $this->dao->incField($data['pid'], 'count_reply', 1);
             return $res;
         });
+        // 原来只加了父评论的 count_reply，笔记的从没加过；只有审核通过的计入
+        self::syncCommunityReplyCount((int)$data['community_id']);
 
         $ret = $this->dao->getWhere(['reply_id' => $res->reply_id], '*', [
             'author' => function ($query) {
@@ -371,17 +373,30 @@ class CommunityReplyRepository extends BaseRepository
         Db::transaction(function () use ($id) {
             // 获取要删除的帖子评论
             $get = $this->dao->get($id);
-            // 实例化社区仓库类
-            $make = app()->make(CommunityRepository::class);
 
             // 如果帖子有父帖子，减少父帖子的回复计数
             if ($get->pid) $this->dao->decField($get['pid'], 'count_reply', 1);
-            // 减少帖子的回复计数
-            $make->decField($get['community_id'], 'count_reply', 1);
 
             // 删除帖子的评论
             $get->delete();
+            // 笔记评论数按实际重算（原逐条 -1，待审评论被删也会减，导致计数漂移）
+            self::syncCommunityReplyCount((int)$get['community_id']);
         });
+    }
+
+    /**
+     * 笔记 count_reply 按实际重算：审核通过（status=1）且未删除的评论数（含楼中楼，同评论列表的 all）
+     * 发评论 / 删评论 / 后台审核 / 配图审核回写后调用，不再逐处加减
+     */
+    public static function syncCommunityReplyCount(int $communityId): void
+    {
+        if ($communityId <= 0) return;
+        $count = Db::name('community_reply')
+            ->where('community_id', $communityId)
+            ->where('status', 1)
+            ->where('is_del', 0)
+            ->count();
+        Db::name('community')->where('community_id', $communityId)->update(['count_reply' => $count]);
     }
 
 

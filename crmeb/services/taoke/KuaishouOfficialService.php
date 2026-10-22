@@ -20,6 +20,7 @@ class KuaishouOfficialService extends BaseServices
     protected $refreshToken;
     protected $pid;
     protected $apiUrl;
+    protected int $accessTokenExpireAt = 0;
 
     protected int $tokenRefreshLeeway = 600;
 
@@ -39,8 +40,32 @@ class KuaishouOfficialService extends BaseServices
         }
         $this->accessToken = (string) config('taoke.kuaishou.access_token');
         $this->refreshToken = (string) config('taoke.kuaishou.refresh_token');
+        $this->accessTokenExpireAt = (int) config('taoke.kuaishou.access_token_expire_at');
         $this->pid = (string) config('taoke.kuaishou.pid');
         $this->apiUrl = (string) (config('taoke.kuaishou.api_url') ?: 'https://openapi.kwaixiaodian.com');
+        $this->syncTokensFromEnvFile();
+    }
+
+    /**
+     * 以 .env 文件里的最新 token 覆盖启动时读入的 config（见 TaokeEnvFile）。
+     * 否则某个 worker 刷新后，其它 worker 拿已作废的旧 refresh_token 去刷 → 全部失败、列表为空。
+     */
+    protected function syncTokensFromEnvFile(): void
+    {
+        $env = TaokeEnvFile::read([
+            'KUAISHOU_ACCESS_TOKEN',
+            'KUAISHOU_REFRESH_TOKEN',
+            'KUAISHOU_ACCESS_TOKEN_EXPIRE_AT',
+        ]);
+        if (($env['KUAISHOU_ACCESS_TOKEN'] ?? '') !== '') {
+            $this->accessToken = $env['KUAISHOU_ACCESS_TOKEN'];
+        }
+        if (($env['KUAISHOU_REFRESH_TOKEN'] ?? '') !== '') {
+            $this->refreshToken = $env['KUAISHOU_REFRESH_TOKEN'];
+        }
+        if ((int) ($env['KUAISHOU_ACCESS_TOKEN_EXPIRE_AT'] ?? 0) > 0) {
+            $this->accessTokenExpireAt = (int) $env['KUAISHOU_ACCESS_TOKEN_EXPIRE_AT'];
+        }
     }
 
     public function getOAuthCallbackUrl(): string
@@ -100,6 +125,9 @@ class KuaishouOfficialService extends BaseServices
         }
 
         try {
+            // 等锁期间可能已有其它 worker 刷新并写回 .env
+            $this->syncTokensFromEnvFile();
+            $refresh = trim($this->refreshToken);
             if (!$force && !$this->isAccessTokenExpired() && $this->accessToken !== '') {
                 return [
                     'result' => 1,
@@ -137,13 +165,15 @@ class KuaishouOfficialService extends BaseServices
         $expiresIn = (int) ($token['expires_in'] ?? 172800);
         $expireAt = time() + max(60, $expiresIn);
         $refresh = trim((string) ($token['refresh_token'] ?? $this->refreshToken));
+        $refreshExpireAt = $this->resolveRefreshExpireAt($token);
 
         $this->accessToken = $accessToken;
+        $this->accessTokenExpireAt = $expireAt;
         if ($refresh !== '') {
             $this->refreshToken = $refresh;
         }
 
-        return $this->persistOAuthTokensToEnv($this->accessToken, $this->refreshToken, $expireAt);
+        return $this->persistOAuthTokensToEnv($this->accessToken, $this->refreshToken, $expireAt, $refreshExpireAt);
     }
 
     public function ensureAccessToken(bool $required = false): bool
@@ -161,7 +191,7 @@ class KuaishouOfficialService extends BaseServices
 
     protected function isAccessTokenExpired(): bool
     {
-        $expireAt = (int) config('taoke.kuaishou.access_token_expire_at');
+        $expireAt = $this->accessTokenExpireAt;
         if ($expireAt <= 0) {
             return false;
         }
@@ -196,8 +226,24 @@ class KuaishouOfficialService extends BaseServices
         }
     }
 
-    protected function persistOAuthTokensToEnv(string $accessToken, string $refreshToken, int $expireAt): bool
+    /**
+     * @param array<string, mixed> $token
+     */
+    protected function resolveRefreshExpireAt(array $token): int
     {
+        $seconds = (int) ($token['refresh_token_expires_in'] ?? 0);
+        if ($seconds <= 0) {
+            return 0;
+        }
+        return time() + $seconds;
+    }
+
+    protected function persistOAuthTokensToEnv(
+        string $accessToken,
+        string $refreshToken,
+        int $expireAt,
+        int $refreshExpireAt = 0
+    ): bool {
         $envPath = app()->getRootPath() . '.env';
         if (!is_file($envPath) || !is_writable($envPath)) {
             Log::warning('快手 OAuth 无法写入 .env', ['path' => $envPath]);
@@ -214,6 +260,9 @@ class KuaishouOfficialService extends BaseServices
             'KUAISHOU_REFRESH_TOKEN' => $refreshToken,
             'KUAISHOU_ACCESS_TOKEN_EXPIRE_AT' => (string) $expireAt,
         ];
+        if ($refreshExpireAt > 0) {
+            $updates['KUAISHOU_REFRESH_TOKEN_EXPIRE_AT'] = (string) $refreshExpireAt;
+        }
 
         foreach ($updates as $key => $value) {
             $quoted = '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $value) . '"';
@@ -238,6 +287,8 @@ class KuaishouOfficialService extends BaseServices
             Log::info('快手 OAuth token 已写入 .env', [
                 'expire_at' => $expireAt,
                 'expire_at_human' => date('Y-m-d H:i:s', $expireAt),
+                'refresh_expire_at' => $refreshExpireAt > 0 ? $refreshExpireAt : null,
+                'refresh_expire_at_human' => $refreshExpireAt > 0 ? date('Y-m-d H:i:s', $refreshExpireAt) : null,
             ]);
         }
         return $ok;

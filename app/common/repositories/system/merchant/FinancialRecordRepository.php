@@ -76,7 +76,7 @@ class FinancialRecordRepository extends BaseRepository
             //商户收入（含扫码买单 / 网购免单）
             $income = $this->dao->search($where)->where('financial_type', 'in', ['order', 'mer_presell', 'nearby_bill', 'nearby_bill_welfare', 'welfare_commission'])->sum('number');
             //商户支出
-            $expend_ = $this->dao->search($where)->where('financial_type', 'in', ['refund_order', 'brokerage_one', 'brokerage_two', 'order_charge', 'presell_charge'])->sum('number');
+            $expend_ = $this->dao->search($where)->where('financial_type', 'in', ['refund_order', 'brokerage_one', 'brokerage_two', 'order_charge', 'presell_charge', 'welfare_cost'])->sum('number');
             $_expend = $this->dao->search($where)->where('financial_type', 'in', ['refund_charge', 'refund_brokerage_two', 'refund_brokerage_one'])->sum('number');
             $expend = bcsub($expend_, $_expend, 2);
             $msg = '商户';

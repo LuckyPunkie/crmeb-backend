@@ -2829,9 +2829,10 @@ class StoreRefundOrderRepository extends BaseRepository
     {
         try {
             $orderType = isset($item['presell']) && $item['presell'] ? 'presell' : 'order';
+            $merRefundPrice = $this->welfareMerchantRefundPrice($refundOrder, $refundPrice);
             if ($item['type'] == 0) {
                 $this->refundBill($item, $refundOrder->uid, $refundOrder->refund_order_id);
-                $merchantRepository->subLockMoney($refundOrder->mer_id, $orderType, $item['id'], $refundPrice);
+                $merchantRepository->subLockMoney($refundOrder->mer_id, $orderType, $item['id'], $merRefundPrice);
             } elseif ($item['type'] == array_search(ShoppingCreditsRepository::PAY_TYPE, StoreOrderRepository::PAY_TYPE, true)) {
                 $shoppingCreditsRepository = app()->make(ShoppingCreditsSettlementRepository::class);
                 $shoppingCreditsRepository->refundStoreOrder(
@@ -2855,14 +2856,33 @@ class StoreRefundOrderRepository extends BaseRepository
                     $refundOrder->order->pay_type
                 ));
                 if (in_array($item['type'],[self::TYPE_IS_COMBINE,self::TYPE_IS_PARTNER])) {
-                    $this->handleCombineRefund($refundOrder, $item, $orderType, $refundPrice);
+                    $this->handleCombineRefund($refundOrder, $item, $orderType, $merRefundPrice);
                 } else {
-                    $merchantRepository->subLockMoney($refundOrder->mer_id, $orderType, $item['id'], $refundPrice);
+                    $merchantRepository->subLockMoney($refundOrder->mer_id, $orderType, $item['id'], $merRefundPrice);
                 }
             }
         } catch (Exception $e) {
             throw new ValidateException($e->getMessage());
         }
+    }
+
+    /**
+     * 公益免单：用户可退 = 实付 - 买单金额，其中分销金额从扫码商户收回（WelfareFreeOrderRepository::handleRefund），
+     * 商品商家只按自己实得部分（实付 - 买单金额 - 分销金额）的比例扣回；非公益订单原样返回
+     */
+    private function welfareMerchantRefundPrice($refundOrder, $refundPrice)
+    {
+        $order = $refundOrder->order;
+        $cost = StoreOrderRepository::welfareMerchantCost($order);
+        if ($cost <= 0) {
+            return $refundPrice;
+        }
+        $refundable = round((float)$order['pay_price'] - (float)$order['welfare_bill_amount'], 2);
+        if ($refundable <= 0) {
+            return 0;
+        }
+        $merShare = max(0, round((float)$order['pay_price'] - $cost, 2));
+        return min((float)$refundPrice, round((float)$refundPrice * $merShare / $refundable, 2));
     }
 
     /**

@@ -8,21 +8,31 @@ namespace crmeb\services\taoke;
 class TaokeUserTrackService
 {
     public const PDD_UID_KEY = 'uid';
+    public const PDD_SID_KEY = 'sid';
 
     public static function trackTokenForUser(int $uid): string
     {
         return $uid > 0 ? (string) $uid : '';
     }
 
-    /** 拼多多 custom_parameters（JSON 字符串） */
+    /**
+     * 拼多多 custom_parameters（JSON 字符串）
+     *
+     * 拼多多要求 uid 是已授权备案的值，否则转链报 60001（普通买家不可能逐个备案）。
+     * 所以 uid 固定用平台已备案的默认值，用户标识放不需要备案的 sid。
+     */
     public static function pddCustomForUser(int $uid): string
     {
         $token = self::trackTokenForUser($uid);
         if ($token === '') {
             return '';
         }
+        $registered = trim((string) config('taoke.pdd.default_custom_parameters')) ?: 'naimeng01';
+        $decoded = json_decode($registered, true);
+        $payload = is_array($decoded) ? $decoded : [self::PDD_UID_KEY => $registered];
+        $payload[self::PDD_SID_KEY] = $token;
 
-        return json_encode([self::PDD_UID_KEY => $token], JSON_UNESCAPED_UNICODE);
+        return json_encode($payload, JSON_UNESCAPED_UNICODE);
     }
 
     /**
@@ -89,8 +99,10 @@ class TaokeUserTrackService
         if ($raw === '' || $raw === null) {
             return false;
         }
+        // 新格式 {"uid":"naimeng01","sid":"<用户>"}；旧订单是 {"uid":"<用户>"}
+        $keys = [self::PDD_SID_KEY, self::PDD_UID_KEY, 'user_id'];
         if (is_array($raw)) {
-            foreach ([self::PDD_UID_KEY, 'uid', 'user_id'] as $key) {
+            foreach ($keys as $key) {
                 if (isset($raw[$key]) && (string) $raw[$key] === $token) {
                     return true;
                 }
@@ -104,19 +116,20 @@ class TaokeUserTrackService
         }
         $decoded = json_decode($str, true);
         if (is_array($decoded)) {
-            foreach ([self::PDD_UID_KEY, 'uid', 'user_id'] as $key) {
+            foreach ($keys as $key) {
                 if (isset($decoded[$key]) && (string) $decoded[$key] === $token) {
                     return true;
                 }
             }
+
+            return false;
         }
         if ($str === $token) {
             return true;
         }
 
-        return str_contains($str, '"uid":"' . $token . '"')
-            || str_contains($str, '"uid":' . $token)
-            || str_contains($str, (string) $uid);
+        // JSON 被截断/转义时的兜底：必须带引号边界，避免 uid=1 误配 naimeng01、sid=12 误配 123
+        return preg_match('/"(?:sid|uid)"\s*:\s*"?' . preg_quote($token, '/') . '(?:"|[,}]|$)/', $str) === 1;
     }
 
     /**

@@ -141,7 +141,7 @@ class NearbyBill extends BaseController
             ->where('p.status', 1)
             ->where('p.mer_status', 1)
             ->where('p.hit_amount', '>', 0)
-            ->whereRaw('p.hit_amount <= p.price')
+            ->whereRaw('p.hit_amount < p.price')
             ->field('p.product_id,p.mer_id,p.store_name,p.store_info,p.image,p.price,p.hit_amount,p.welfare_commission,p.sales');
 
         if ($payPrice > 0) {

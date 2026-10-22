@@ -54,14 +54,14 @@ class FinancialRecord extends BaseController
                 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
                 'order_platform_coupon', 'order_svip_coupon', 'svip',
                 // 扫码买单 / 网购享免单入账
-                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission', 'welfare_cost',
             ];
         } else {
             $where['financial_type'] = [
                 'order', 'sys_accoubts', 'brokerage_one', 'brokerage_two',
                 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
                 'order_platform_coupon', 'order_svip_coupon', 'svip',
-                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission', 'welfare_cost',
             ];
         }
         return app('json')->success($this->repository->getList($where, $page, $limit));
@@ -83,14 +83,14 @@ class FinancialRecord extends BaseController
                 'order', 'mer_accoubts', 'brokerage_one', 'brokerage_two',
                 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
                 'order_platform_coupon', 'order_svip_coupon', 'svip',
-                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission', 'welfare_cost',
             ];
         } else {
             $where['financial_type'] = [
                 'order', 'sys_accoubts', 'brokerage_one', 'brokerage_two',
                 'refund_brokerage_one', 'refund_brokerage_two', 'refund_order',
                 'order_platform_coupon', 'order_svip_coupon', 'svip',
-                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission',
+                'nearby_bill', 'nearby_bill_welfare', 'welfare_commission', 'welfare_cost',
             ];
         }
 

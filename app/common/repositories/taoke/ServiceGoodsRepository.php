@@ -68,6 +68,31 @@ class ServiceGoodsRepository
         return $this->driverChannel;
     }
 
+    protected function resolveJdClientChannel(): string
+    {
+        $req = request();
+        $c = strtolower(trim((string) $req->post('jdClient', $req->get('jdClient', ''))));
+        if (in_array($c, ['app', 'android', 'ios'], true)) {
+            return 'app';
+        }
+        if (in_array($c, ['mp', 'mini', 'miniprogram', 'wx', 'weixin'], true)) {
+            return 'mp';
+        }
+        $form = strtolower((string) ($req->header('Form-type') ?: $req->header('form-type') ?: ''));
+        if (strpos($form, 'app') !== false) {
+            return 'app';
+        }
+        if (strpos($form, 'routine') !== false || strpos($form, 'wechat') !== false) {
+            return 'mp';
+        }
+        return 'mp';
+    }
+
+    protected function jdOfficialForRequest(): JdOfficialService
+    {
+        return JdOfficialService::forProfile($this->resolveJdClientChannel());
+    }
+
     /** 官方通道下禁止回退订单侠/聚推客 */
     protected function allowLegacyFallback(): bool
     {
@@ -584,7 +609,7 @@ class ServiceGoodsRepository
             } else {
                 $meta['pipeline'][] = 'JdOfficialService::fetchDetail(bigfield itemIds/skuIds；无 summary 时价图可能偏少)';
             }
-            $raw = $this->jdOfficial->fetchDetail($itemIds, $summary, $hints);
+            $raw = $this->jdOfficialForRequest()->fetchDetail($itemIds, $summary, $hints);
             $beforeRows = $this->normalizeJdDetailRowsForMerge($raw);
             $meta['official_before_supplement'] = $beforeRows[0] ?? null;
             if ($beforeRows !== [] && $this->isJdNewUserExclusiveRow($beforeRows[0])) {
@@ -1082,7 +1107,7 @@ class ServiceGoodsRepository
                             return [];
                         }
                         $list = $this->normalizeJd(
-                            $this->jdOfficial->fetchFeed($page, $limit, $cateInt)
+                            $this->jdOfficialForRequest()->fetchFeed($page, $limit, $cateInt)
                         );
                         if (!empty($list)) {
                             return $list;
@@ -1186,11 +1211,11 @@ class ServiceGoodsRepository
                         ? min(50, max($limit * 3, $limit))
                         : $limit;
                     if ($this->isJdOfficial()) {
-                        $raw = $this->jdOfficial->fetchSearch($keyword, $page, $fetchLimit);
+                        $raw = $this->jdOfficialForRequest()->fetchSearch($keyword, $page, $fetchLimit);
                         // 线上账号 goods.query 常未开通；价格 pill 改京粉池 + 券后价分档
                         if ($raw === [] && $tierLabel !== null) {
                             $poolSize = min(150, max(80, $fetchLimit * 5));
-                            $raw = $this->jdOfficial->fetchFeedPool($page, $poolSize);
+                            $raw = $this->jdOfficialForRequest()->fetchFeedPool($page, $poolSize);
                         }
                         $list = $this->normalizeJd($raw);
                     } else {
@@ -2328,7 +2353,21 @@ class ServiceGoodsRepository
      */
     public function fetchDouyinListWithFilters(string $keyword, int $page, int $limit, array $filters = []): array
     {
-        return $this->fetchDouyinList($keyword, $page, $limit, $filters);
+        // 好单库价格筛选每页会漏 1~4 个区间外商品，按展示的券后价再兜底一次
+        $min = isset($filters['price_min']) && is_numeric($filters['price_min']) ? (float) $filters['price_min'] : 0.0;
+        $max = isset($filters['price_max']) && is_numeric($filters['price_max']) ? (float) $filters['price_max'] : 0.0;
+        if ($min <= 0 && $max <= 0) {
+            return $this->fetchDouyinList($keyword, $page, $limit, $filters);
+        }
+        // min_id 按页码分页：每页拉 2 倍再过滤，窗口连续不丢数据，且过滤后仍满页，前端「满页才加载更多」不会提前停
+        $list = $this->fetchDouyinList($keyword, $page, $limit * 2, $filters);
+        return array_values(array_filter($list, function ($item) use ($min, $max) {
+            $yuan = is_array($item) ? $this->extractItemPriceYuan($item, 'douyin') : null;
+            if ($yuan === null || $yuan <= 0) {
+                return false;
+            }
+            return $yuan >= $min - 0.001 && ($max <= 0 || $yuan <= $max + 0.001);
+        }));
     }
 
     protected function fetchDouyinList(string $keyword, int $page, int $limit, array $extra = []): array

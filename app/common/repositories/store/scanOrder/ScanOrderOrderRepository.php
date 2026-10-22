@@ -115,6 +115,8 @@ class ScanOrderOrderRepository
         foreach ($orders as $order) {
             $update = [
                 'is_scan_order' => $isScan ? 1 : 2,
+                'order_source' => $isScan ? StoreOrderRepository::ORDER_SOURCE_SCAN : StoreOrderRepository::ORDER_SOURCE_ONLINE,
+                'order_source' => $isScan ? StoreOrderRepository::ORDER_SOURCE_SCAN : StoreOrderRepository::ORDER_SOURCE_ONLINE,
                 'scan_table_id' => $ctx['table_id'],
                 'scan_table_label' => $ctx['table_label'],
                 'remark' => $orderRemark,

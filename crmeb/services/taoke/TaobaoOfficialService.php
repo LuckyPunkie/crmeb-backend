@@ -22,6 +22,7 @@ class TaobaoOfficialService extends BaseServices
     protected $pid;
     protected $session;
     protected $refreshToken;
+    protected int $sessionExpireAt = 0;
 
     /** 过期前多少秒主动 refresh */
     protected int $sessionRefreshLeeway = 300;
@@ -39,8 +40,10 @@ class TaobaoOfficialService extends BaseServices
         $this->appSecret = (string) config('taoke.taobao.appsecret');
         $this->session       = (string) config('taoke.taobao.session');
         $this->refreshToken  = (string) config('taoke.taobao.refresh_token');
+        $this->sessionExpireAt = (int) config('taoke.taobao.session_expire_at');
         $this->pid       = (string) config('taoke.taobao.pid');
         $this->adzoneId  = (string) config('taoke.taobao.adzone_id');
+        $this->syncTokensFromEnvFile();
 
         // pid 格式 mm_uid_siteid_adzoneid，若 adzone 未单独配则从 pid 拆出
         if ($this->adzoneId === '' && $this->pid !== '') {
@@ -870,6 +873,28 @@ class TaobaoOfficialService extends BaseServices
     }
 
     /**
+     * 以 .env 文件里的最新 session 覆盖启动时读入的 config（见 TaokeEnvFile）。
+     * 否则 Swoole 下每个 worker 都按旧过期时间判断、反复 refresh。
+     */
+    protected function syncTokensFromEnvFile(): void
+    {
+        $env = TaokeEnvFile::read([
+            'TAOBAO_SESSION',
+            'TAOBAO_REFRESH_TOKEN',
+            'TAOBAO_SESSION_EXPIRE_AT',
+        ]);
+        if (($env['TAOBAO_SESSION'] ?? '') !== '') {
+            $this->session = $env['TAOBAO_SESSION'];
+        }
+        if (($env['TAOBAO_REFRESH_TOKEN'] ?? '') !== '') {
+            $this->refreshToken = $env['TAOBAO_REFRESH_TOKEN'];
+        }
+        if ((int) ($env['TAOBAO_SESSION_EXPIRE_AT'] ?? 0) > 0) {
+            $this->sessionExpireAt = (int) $env['TAOBAO_SESSION_EXPIRE_AT'];
+        }
+    }
+
+    /**
      * 用 refresh_token 续期 access_token
      */
     public function refreshAccessToken(bool $force = false): array
@@ -889,6 +914,9 @@ class TaobaoOfficialService extends BaseServices
         }
 
         try {
+            // 等锁期间可能已有其它 worker 刷新并写回 .env
+            $this->syncTokensFromEnvFile();
+            $refresh = trim($this->refreshToken);
             if (!$force && !$this->isSessionExpired() && $this->session !== '') {
                 return [
                     'access_token'  => $this->session,
@@ -926,13 +954,15 @@ class TaobaoOfficialService extends BaseServices
         $expiresIn = (int) ($token['expires_in'] ?? 86400);
         $expireAt = time() + max(60, $expiresIn);
         $refresh = trim((string) ($token['refresh_token'] ?? $this->refreshToken));
+        $refreshExpireAt = $this->resolveRefreshExpireAt($token);
 
         $this->session = $accessToken;
+        $this->sessionExpireAt = $expireAt;
         if ($refresh !== '') {
             $this->refreshToken = $refresh;
         }
 
-        return $this->persistOAuthTokensToEnv($this->session, $this->refreshToken, $expireAt);
+        return $this->persistOAuthTokensToEnv($this->session, $this->refreshToken, $expireAt, $refreshExpireAt);
     }
 
     /**
@@ -953,7 +983,7 @@ class TaobaoOfficialService extends BaseServices
 
     protected function isSessionExpired(): bool
     {
-        $expireAt = (int) config('taoke.taobao.session_expire_at');
+        $expireAt = $this->sessionExpireAt;
         if ($expireAt <= 0) {
             return false;
         }
@@ -1000,8 +1030,24 @@ class TaobaoOfficialService extends BaseServices
         }
     }
 
-    protected function persistOAuthTokensToEnv(string $session, string $refreshToken, int $expireAt): bool
+    /**
+     * @param array<string, mixed> $token
+     */
+    protected function resolveRefreshExpireAt(array $token): int
     {
+        $seconds = (int) ($token['re_expires_in'] ?? 0);
+        if ($seconds <= 0) {
+            return 0;
+        }
+        return time() + $seconds;
+    }
+
+    protected function persistOAuthTokensToEnv(
+        string $session,
+        string $refreshToken,
+        int $expireAt,
+        int $refreshExpireAt = 0
+    ): bool {
         $envPath = app()->getRootPath() . '.env';
         if (!is_file($envPath) || !is_writable($envPath)) {
             Log::warning('淘宝 OAuth 无法写入 .env', ['path' => $envPath]);
@@ -1018,6 +1064,9 @@ class TaobaoOfficialService extends BaseServices
             'TAOBAO_REFRESH_TOKEN'      => $refreshToken,
             'TAOBAO_SESSION_EXPIRE_AT'    => (string) $expireAt,
         ];
+        if ($refreshExpireAt > 0) {
+            $updates['TAOBAO_REFRESH_EXPIRE_AT'] = (string) $refreshExpireAt;
+        }
 
         foreach ($updates as $key => $value) {
             $quoted = '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], $value) . '"';
@@ -1042,6 +1091,8 @@ class TaobaoOfficialService extends BaseServices
             Log::info('淘宝 OAuth token 已写入 .env', [
                 'expire_at' => $expireAt,
                 'expire_at_human' => date('Y-m-d H:i:s', $expireAt),
+                'refresh_expire_at' => $refreshExpireAt > 0 ? $refreshExpireAt : null,
+                'refresh_expire_at_human' => $refreshExpireAt > 0 ? date('Y-m-d H:i:s', $refreshExpireAt) : null,
             ]);
         }
         return $ok;

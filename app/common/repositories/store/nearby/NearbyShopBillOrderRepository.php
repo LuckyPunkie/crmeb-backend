@@ -502,6 +502,11 @@ class NearbyShopBillOrderRepository extends BaseRepository
             : time();
 
         $payTimeStr = date('Y-m-d H:i:s', $payTime);
+        // 收货人/订购人显示用户昵称，取不到再用「扫码顾客」
+        $realName = trim((string)Db::name('user')->where('uid', $uid)->value('nickname'));
+        if ($realName === '') {
+            $realName = '扫码顾客';
+        }
 
         return Db::transaction(function () use (
             $orderRepository,
@@ -511,7 +516,8 @@ class NearbyShopBillOrderRepository extends BaseRepository
             $payTypeIndex,
             $image,
             $storeName,
-            $payTimeStr
+            $payTimeStr,
+            $realName
         ) {
             $groupOrderSn = $orderRepository->getNewOrderId(StoreOrderRepository::TYPE_SN_ORDER) . '0';
             $orderSn = $orderRepository->getNewOrderId(StoreOrderRepository::TYPE_SN_ORDER) . '1';
@@ -526,7 +532,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
                 'coupon_price' => 0,
                 'pay_postage' => 0,
                 'cost' => 0,
-                'real_name' => '扫码顾客',
+                'real_name' => $realName,
                 'user_phone' => '',
                 'user_address' => '',
                 'paid' => 1,
@@ -543,7 +549,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
                 'spread_uid' => 0,
                 'group_order_id' => $group['group_order_id'],
                 'mer_id' => (int)$billOrder['mer_id'],
-                'real_name' => '扫码顾客',
+                'real_name' => $realName,
                 'user_phone' => '',
                 'user_address' => '',
                 'cart_id' => '',
@@ -574,6 +580,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
                 'is_system_del' => 0,
                 'mark' => '扫码买单:' . ($billOrder['order_sn'] ?? ''),
                 'remark' => '扫码买单',
+                'order_source' => StoreOrderRepository::ORDER_SOURCE_BILL,
                 'task_id' => '',
                 'kuaidi_order_id' => '',
                 'merchant_take_info' => '',

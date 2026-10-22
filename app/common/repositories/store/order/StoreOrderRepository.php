@@ -84,6 +84,13 @@ class StoreOrderRepository extends BaseRepository
     // 10 = mock（我们的模拟支付，已有历史订单），11 = shoppingCredits（官方 v4.2 购物金，官方原为 10）
     const PAY_TYPE = ['balance', 'weixin', 'routine', 'h5', 'alipay', 'alipayQr', 'weixinQr', 'offline', 'weixinBarCode', 'alipayBarCode', 'mock', 'shoppingCredits'];
     const PAY_TYPE_FILTEER = [0 => 0, 1 => '1,2,3,6,8', 2 => '4,5,9', 3 => 7, 4 => 11];
+    // 订单来源 eb_store_order.order_source（与订单类别 is_behalf 用户下单/代客下单 无关）
+    const ORDER_SOURCE_SCAN = 1;      // 扫码下单（有台号）
+    const ORDER_SOURCE_ONLINE = 2;    // 线上下单（店铺详情页，无台号）
+    const ORDER_SOURCE_BILL = 3;      // 线下买单（详情页买单 / 扫收款码）
+    const ORDER_SOURCE_WELFARE = 4;   // 公益商品（网购享免单）
+    const ORDER_SOURCE_BLINDBOX = 5;  // 盲盒商品
+    const ORDER_SOURCE_MALL = 6;      // 商城下单（默认，含平台分红订单）
     const TYPE_SN_ORDER = 'wxo';
     const TYPE_SN_PRESELL = 'wxp';
     const TYPE_SN_USER_ORDER = 'wxs';
@@ -262,6 +269,17 @@ class StoreOrderRepository extends BaseRepository
         }
     }
 
+
+    /**
+     * 公益免单订单商品商家的让利金额 = 买单金额 + 订单分销奖励（下单时已按 商品分销金额 - 买单金额 算好），非公益订单为 0
+     */
+    public static function welfareMerchantCost($order): float
+    {
+        if (empty($order['is_welfare_order'])) {
+            return 0;
+        }
+        return round((float)($order['welfare_bill_amount'] ?? 0) + (float)($order['welfare_commission'] ?? 0), 2);
+    }
 
     /**
      *  支付成功后
@@ -457,6 +475,26 @@ class StoreOrderRepository extends BaseRepository
                             'pay_type' => $order->pay_type,
                         ];
                     }
+                    // 公益免单：买单金额 + 分销金额由商品商家让利（转给扫码商户，见 WelfareFreeOrderRepository::settleOnPaySuccess）
+                    $welfareCost = self::welfareMerchantCost($order);
+                    if ($welfareCost > 0) {
+                        $welfareCost = min($welfareCost, (float)$_payPrice);
+                        $_payPrice = bcsub($_payPrice, (string)$welfareCost, 2);
+                        $finance[] = [
+                            'order_id' => $order->order_id,
+                            'order_sn' => $order->order_sn,
+                            'user_info' => $groupOrder->user->nickname ?? '游客',
+                            'user_id' => $uid,
+                            'financial_type' => 'welfare_cost',
+                            'financial_pm' => 0,
+                            'type' => 1,
+                            'number' => $welfareCost,
+                            'mer_id' => $order->mer_id,
+                            'financial_record_sn' => $financeSn . ($i++),
+                            'pay_type' => $groupOrder->pay_type
+                        ];
+                    }
+
                     // 2026-09-24：手续费（order_charge）流水不再在订单支付时生成，改为提现时记 withdraw_charge，见 FinancialRepository::saveApply
                     $finance[] = [
                         'order_id' => $order->order_id,

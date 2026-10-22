@@ -162,7 +162,8 @@ class FinancialRepository extends BaseRepository
         $merchant = app()->make(MerchantRepository::class)->search(['mer_id' => $merId])->field('mer_id,mer_name,mer_money,mer_welfare_money,financial_bank,financial_wechat,financial_alipay,financial_type,commission_rate,commission_switch,category_id')->with(['merchantCategory'])->find();
         $extract_minimum_line = systemConfig('extract_minimum_line') ?: 0;
         $extract_minimum_num = systemConfig('extract_minimum_num');
-        $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
+        $todayBill = $this->todayBillIncome($merId);
+        $_line = bcsub(bcsub($merchant->mer_money, $extract_minimum_line, 2), $todayBill, 2);
         $_extract = ($_line < 0) ? 0 : $_line;
         $welfareMoney = (float)($merchant->mer_welfare_money ?? 0);
         // 2026-09-24：手续费改在提现环节收取，这里只做展示，真正计算在 saveApply() 里
@@ -190,7 +191,7 @@ class FinancialRepository extends BaseRepository
                 'type' => 'span',
                 'title' => '提示：',
                 'native' => false,
-                'children' => ['商户余额押金:' . $extract_minimum_line . '元;最低提现金额：' . $extract_minimum_num . '元；公益分销余额入账30天后可提']
+                'children' => ['商户余额押金:' . $extract_minimum_line . '元;最低提现金额：' . $extract_minimum_num . '元；买单收入次日可提，今日买单收入' . $todayBill . '元；公益分销余额入账30天后可提']
             ],
             [
                 'type' => 'span',
@@ -306,6 +307,19 @@ class FinancialRepository extends BaseRepository
     }
 
     /**
+     * 今日买单收入（直接买单 nearby_bill + 网购享免单买单金额 nearby_bill_welfare），PRD：次日可提现
+     */
+    public function todayBillIncome(int $merId): string
+    {
+        $sum = Db::name('financial_record')
+            ->where('mer_id', $merId)
+            ->whereIn('financial_type', ['nearby_bill', 'nearby_bill_welfare'])
+            ->where('create_time', '>=', date('Y-m-d 00:00:00'))
+            ->sum('number');
+        return bcadd((string)$sum, '0', 2);
+    }
+
+    /**
      * 解析商户提现应使用的手续费率（百分比，0-100）
      *
      * 规则与下单时商户手续费的解析口径一致（见 StoreOrderCreateRepository::createOrder 里的 commission_rate 解析）：
@@ -372,7 +386,9 @@ class FinancialRepository extends BaseRepository
             $extract_minimum_line = systemConfig('extract_minimum_line') ? systemConfig('extract_minimum_line') : 0;
             $_line = bcsub($merchant->mer_money, $extract_minimum_line, 2);
             if ($_line < 0) throw new ValidateException('余额大于' . $extract_minimum_line . '才可提现');
-            if ($data['extract_money'] > $_line) throw new ValidateException('提现金额大于可提现金额');
+            // 买单收入（直接买单 / 网购享免单的买单金额）实时入可用余额，次日才可提现
+            $_line = bcsub($_line, $this->todayBillIncome($merId), 2);
+            if ($data['extract_money'] > $_line) throw new ValidateException('提现金额大于可提现金额（今日买单收入次日可提）');
             if ($_line < $extract_minimum_num) throw new ValidateException('提现金额不足');
             $_money = bcsub($merchant['mer_money'], $data['extract_money'], 2);
         }

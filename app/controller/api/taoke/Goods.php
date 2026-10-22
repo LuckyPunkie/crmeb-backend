@@ -114,8 +114,34 @@ class Goods extends BaseController
             }
         }
 
-        return app('json')->success($data);
+        return app('json')->success($this->normalizeTaokeCategoryTagLabels($data));
         
+    }
+
+    /**
+     * 服务页横向标签：文案中的「佣」统一展示为「推」（如 品牌高佣→品牌高推）
+     *
+     * @param list<array<string, mixed>> $tags
+     * @return list<array<string, mixed>>
+     */
+    protected function normalizeTaokeCategoryTagLabels(array $tags): array
+    {
+        foreach ($tags as $i => $tag) {
+            if (!is_array($tag)) {
+                continue;
+            }
+            foreach (['text', 'name', 'label', 'title'] as $key) {
+                if (!isset($tag[$key]) || !is_string($tag[$key])) {
+                    continue;
+                }
+                if (strpos($tag[$key], '佣') !== false) {
+                    $tag[$key] = str_replace('佣', '推', $tag[$key]);
+                }
+            }
+            $tags[$i] = $tag;
+        }
+
+        return $tags;
     }
 
     /**
@@ -620,11 +646,46 @@ class Goods extends BaseController
             ? ServiceTabConfigRepository::CHANNEL_OFFICIAL
             : ServiceTabConfigRepository::CHANNEL_LEGACY;
         $brands = $this->serviceTabConfigRepository->getBuiltinBrands($tabKey, $channel);
-        if ($brands === []) {
-            return $defaults;
+        $built = $brands === [] ? [] : $this->buildPriceTagsFromAdminBrands($brands, $tabKey);
+        return $this->applyExclusiveRangeFrom($built !== [] ? $built : $defaults, $tabKey);
+    }
+
+    /**
+     * 抖音/快手价格 pill 走区间接口：第 n 档 → (第 n-1 档, 第 n 档]，与淘宝等关键词分档一致
+     * 下限为开区间，抖音（元）+0.01、快手（分）+1
+     */
+    protected function applyExclusiveRangeFrom(array $tags, string $tabKey): array
+    {
+        if (!in_array($tabKey, ['douyin', 'kuaishou'], true)) {
+            return $tags;
         }
-        $built = $this->buildPriceTagsFromAdminBrands($brands, $tabKey);
-        return $built !== [] ? $built : $defaults;
+        $tos = [];
+        foreach ($tags as $tag) {
+            $to = (float) ($tag['range_to'] ?? 0);
+            if ($to > 0) {
+                $tos[] = $to;
+            }
+        }
+        sort($tos);
+        foreach ($tags as &$tag) {
+            $to = (float) ($tag['range_to'] ?? 0);
+            $prev = 0.0;
+            foreach ($tos as $t) {
+                if ($t < $to - 0.0001) {
+                    $prev = $t;
+                }
+            }
+            if ($prev <= 0) {
+                $tag['range_from'] = 0;
+            } elseif ($tabKey === 'kuaishou') {
+                $tag['range_from'] = (int) $prev + 1;
+            } else {
+                $tag['range_from'] = round($prev + 0.01, 2);
+            }
+        }
+        unset($tag);
+
+        return $tags;
     }
 
     /**
@@ -869,7 +930,7 @@ class Goods extends BaseController
             ['id' => 4, 'text' => '秒杀'],
             ['id' => 7, 'text' => '百亿补贴'],
             ['id' => 31, 'text' => '品牌黑标'],
-            ['id' => 24, 'text' => '品牌高佣'],
+            ['id' => 24, 'text' => '品牌高推'],
             ['id' => 10564, 'text' => '精选爆品'],
         ];
         $excludePdd = config('taoke.exclude_new_user.pdd_activity_tags');
@@ -1362,6 +1423,14 @@ class Goods extends BaseController
         try {
             $result = $this->serviceGoodsRepository->createPddPromotion($goods_sign, $pid, $pdd_custom_parameters);
 
+            // 用户 PID / 跟单参数未备案（60001）时退回平台默认，保证能买、佣金照拿，只是不跟单
+            $defaultPid = $this->pddOfficial->getDefaultPid();
+            $defaultCustom = $this->pddOfficial->getDefaultCustomParameters() ?: 'naimeng01';
+            if (empty($result) && $defaultPid !== '' && ($pid !== $defaultPid || $pdd_custom_parameters !== $defaultCustom)) {
+                Log::warning('拼多多转链用户参数失败，改用平台默认', ['pid' => $pid, 'custom' => $pdd_custom_parameters]);
+                $result = $this->serviceGoodsRepository->createPddPromotion($goods_sign, $defaultPid, $defaultCustom);
+            }
+
             if (empty($result)) {
                 return app('json')->fail('生成推广链接失败');
             }
@@ -1706,9 +1775,12 @@ class Goods extends BaseController
      */
     public function createJdLink()
     {
-        $uid = (int) ($this->request->uid() ?? 0);
+        $uid = $this->request->isLogin() ? (int) $this->request->uid() : 0;
         $materialUrl = $this->request->post('materialUrl', '');
         $skuId = trim((string) $this->request->post('skuId', ''));
+        if ($skuId !== '' && !ctype_digit($skuId)) {
+            $skuId = '';
+        }
 
         if (empty($materialUrl)) {
             return app('json')->fail('商品物料不能为空');
@@ -1748,48 +1820,37 @@ class Goods extends BaseController
             // if (empty($pid)) {
             //     return app('json')->fail('生成推广位失败');
             // }
-            $normalizedMaterial = $this->normalizeJdMaterialUrl($materialUrl);
+            $normalizedMaterial = $this->normalizeJdPromotionMaterialForUnion($materialUrl);
             if ($normalizedMaterial === '') {
                 return app('json')->fail('商品物料不能为空');
             }
-            if ($skuId !== '' && ctype_digit($skuId) && stripos($normalizedMaterial, 'jingfen.jd.com') !== false) {
-                $normalizedMaterial = 'https://item.jd.com/' . $skuId . '.html';
-            }
 
-            $officialLink = $this->resolveJdOfficialPromotionLink($normalizedMaterial, (int) $uid);
+            $officialDebugNote = '';
+            $jdApiDebug = [];
+            $officialLink = $this->resolveJdOfficialPromotionLink($normalizedMaterial, (int) $uid, $officialDebugNote, $jdApiDebug);
             if (!empty($officialLink)) {
+                $officialLink['_promotionMaterialId'] = $normalizedMaterial;
+                $officialLink['_jd_api_debug'] = $jdApiDebug;
                 return app('json')->success($officialLink);
-            }
-
-            // [官方直连切换 2026-09-21] 订单侠高佣转链作兜底（官方/导购 API 未开通或失败时）
-            try {
-                $result = $this->dingdanxiaService->jdHighCommission($normalizedMaterial, (int) $pid);
-                if (!empty($result) && is_array($result)) {
-                    $mapped = $this->normalizeJdDingDanXiaLink($result);
-                    if (!empty($mapped['clickURL']) || !empty($mapped['shortURL'])) {
-                        $mapped['_link_via'] = 'dingdanxia.jdHighCommission';
-                        $mapped['fallback'] = false;
-                        return app('json')->success($mapped);
-                    }
-                }
-            } catch (\Throwable $ddxErr) {
-                Log::warning('京东转链订单侠兜底失败', [
-                    'materialUrl' => $normalizedMaterial,
-                    'error' => $ddxErr->getMessage(),
-                ]);
             }
 
             Log::warning('京东转链使用物料链接兜底', [
                 'materialUrl' => $materialUrl,
                 'fallbackUrl' => $normalizedMaterial,
+                'officialNote' => $officialDebugNote,
             ]);
+            $fallbackNote = $officialDebugNote !== ''
+                ? $officialDebugNote . '；已兜底为物料 URL，小程序可能无法跳京东购物小程序。'
+                : '官方转链未返回可用链接；已兜底为物料 URL，小程序可能无法跳京东购物小程序。';
             return app('json')->success([
                 'clickURL' => $normalizedMaterial,
                 'clickUrl' => $normalizedMaterial,
                 'shortURL' => $normalizedMaterial,
                 'fallback' => true,
                 '_link_via' => 'material_url',
-                '_note' => '官方/订单侠均未返回推广链，仅物料 URL；小程序可能无法跳京东购物小程序。',
+                '_note' => $fallbackNote,
+                '_promotionMaterialId' => $normalizedMaterial,
+                '_jd_api_debug' => $jdApiDebug,
             ]);
 
         } catch (\Exception $e) {
@@ -1802,45 +1863,160 @@ class Goods extends BaseController
         
     }
 
-    /**
-     * 京东官方转链：导购 bysubunionid → common(scene 2/1) → 失败返回 null
-     */
-    protected function resolveJdOfficialPromotionLink(string $materialUrl, int $uid): ?array
+    /** 小程序 mp / App app，见 post jdClient 或 Form-type 头 */
+    protected function resolveJdClientChannel(): string
     {
-        if (config('taoke.driver.jd') !== 'official') {
+        $c = strtolower(trim((string) $this->request->post('jdClient', '')));
+        if (in_array($c, ['app', 'android', 'ios'], true)) {
+            return 'app';
+        }
+        if (in_array($c, ['mp', 'mini', 'miniprogram', 'wx', 'weixin'], true)) {
+            return 'mp';
+        }
+        $form = strtolower((string) ($this->request->header('Form-type') ?: $this->request->header('form-type') ?: ''));
+        if (strpos($form, 'app') !== false) {
+            return 'app';
+        }
+        if (strpos($form, 'routine') !== false || strpos($form, 'wechat') !== false) {
+            return 'mp';
+        }
+        return 'mp';
+    }
+
+    /**
+     * 京东官方转链：App common.get(scene1)；小程序 bysubunionid + subUnionId(guest)
+     */
+    protected function resolveJdOfficialPromotionLink(string $materialUrl, int $uid, string &$debugNote = '', array &$jdApiDebug = []): ?array
+    {
+        $debugNote = '';
+        $jdApiDebug = [];
+        if ($this->goodsDriverChannel !== 'official' && config('taoke.driver.jd') !== 'official') {
+            $debugNote = '未走官方京东通道（driver 非 official）';
             return null;
         }
         $materialUrl = trim($materialUrl);
         if ($materialUrl === '') {
+            $debugNote = '物料 URL 为空';
             return null;
         }
-        $ext = $uid > 0 ? (string) $uid : '';
+        $channel = $this->resolveJdClientChannel();
+        $jd = JdOfficialService::forProfile($channel);
 
-        if ($uid > 0) {
-            $bySub = $this->jdOfficial->parseBizPayload(
-                $this->jdOfficial->promotionBySubUnionId($materialUrl, (string) $uid, 2)
-            );
-            if (!empty($bySub)) {
-                $link = $this->jdOfficial->formatPromotionLink($bySub, 'jd.promotion.bysubunionid');
-                if ($this->jdPromotionLinkUsable($link)) {
-                    return $link;
-                }
-            }
+        if ($channel === 'app') {
+            return $this->attemptJdPromotionCommonGet($jd, $materialUrl, $uid, $debugNote, $jdApiDebug);
         }
 
-        foreach ([2, 1] as $sceneId) {
-            $common = $this->jdOfficial->parseBizPayload(
-                $this->jdOfficial->promotionCommon($materialUrl, '', $ext, $sceneId)
-            );
-            if (!empty($common)) {
-                $link = $this->jdOfficial->formatPromotionLink($common, 'jd.promotion.common.get.scene' . $sceneId);
-                if ($this->jdPromotionLinkUsable($link)) {
-                    return $link;
-                }
+        return $this->attemptJdPromotionBySubUnionId($jd, $materialUrl, $uid, $channel, $debugNote, $jdApiDebug);
+    }
+
+    protected function attemptJdPromotionCommonGet(
+        JdOfficialService $jd,
+        string $materialUrl,
+        int $uid,
+        string &$debugNote,
+        array &$jdApiDebug
+    ): ?array {
+        $method = 'jd.union.open.promotion.common.get';
+        $sceneId = 1;
+        $ext1 = $uid > 0 ? (string) $uid : '';
+        $subUnionId = $this->resolveJdSubUnionId($uid);
+        $requestMeta = [
+            'materialId'  => $materialUrl,
+            'siteId'      => config('taoke.jd_app.site_id'),
+            'positionId'  => config('taoke.jd_app.pid'),
+            'unionId'     => config('taoke.jd_app.unionid'),
+            'sceneId'     => $sceneId,
+            'ext1'        => $ext1,
+            'subUnionId'  => $subUnionId,
+            '_note'       => 'App 走 common.get；subUnionId 仅联调展示，common 入参用 ext1',
+        ];
+        $raw = $jd->promotionCommon($materialUrl, '', $ext1, $sceneId);
+        $jdApiDebug = $jd->buildPromotionApiDebug($method, $sceneId, $requestMeta, $raw);
+        $payload = $jd->parseBizPayload($raw);
+        if (!empty($payload)) {
+            $link = $jd->formatPromotionLink($payload, 'jd.promotion.common.get.scene1');
+            $link['_jd_client'] = 'app';
+            $link['_subUnionId'] = $subUnionId;
+            $link['_note'] = $jd->formatPromotionAttemptNote($method, $sceneId, $raw, '转链响应已解析');
+            if ($this->jdPromotionLinkUsable($link)) {
+                return $link;
             }
+            $debugNote = $jd->formatPromotionAttemptNote(
+                $method,
+                $sceneId,
+                $raw,
+                '已返回 data 但无可用 clickURL/shortURL/weChatShortLink'
+            );
+        } else {
+            $debugNote = $jd->formatPromotionAttemptNote($method, $sceneId, $raw);
         }
+        Log::warning('京东 App common.get 转链未返回可用链接', [
+            'materialUrl' => $materialUrl,
+            'subUnionId' => $subUnionId,
+            'ext1' => $ext1,
+            'note' => $debugNote,
+            'jdApiDebug' => $jdApiDebug,
+        ]);
 
         return null;
+    }
+
+    protected function attemptJdPromotionBySubUnionId(
+        JdOfficialService $jd,
+        string $materialUrl,
+        int $uid,
+        string $channel,
+        string &$debugNote,
+        array &$jdApiDebug
+    ): ?array {
+        $method = 'jd.union.open.promotion.bysubunionid.get';
+        $sceneId = 1;
+        $subUnionId = $this->resolveJdSubUnionId($uid);
+        $cfgKey = $channel === 'app' ? 'taoke.jd_app' : 'taoke.jd_mp';
+        $requestMeta = [
+            'materialId'  => $materialUrl,
+            'subUnionId'  => $subUnionId,
+            'siteId'      => config($cfgKey . '.site_id'),
+            'positionId'  => config($cfgKey . '.pid'),
+            'unionId'     => config($cfgKey . '.unionid'),
+            'sceneId'     => $sceneId,
+        ];
+        $raw = $jd->promotionBySubUnionId($materialUrl, $subUnionId, $sceneId);
+        $jdApiDebug = $jd->buildPromotionApiDebug($method, $sceneId, $requestMeta, $raw);
+        $payload = $jd->parseBizPayload($raw);
+        if (!empty($payload)) {
+            $link = $jd->formatPromotionLink($payload, 'jd.promotion.bysubunionid.scene1');
+            $link['_jd_client'] = $channel;
+            $link['_subUnionId'] = $subUnionId;
+            $link['_note'] = $jd->formatPromotionAttemptNote($method, $sceneId, $raw, '转链响应已解析');
+            if ($this->jdPromotionLinkUsable($link)) {
+                return $link;
+            }
+            $debugNote = $jd->formatPromotionAttemptNote(
+                $method,
+                $sceneId,
+                $raw,
+                '已返回 data 但无可用 clickURL/shortURL/weChatShortLink'
+            );
+        } else {
+            $debugNote = $jd->formatPromotionAttemptNote($method, $sceneId, $raw);
+        }
+        Log::warning('京东 bysubunionid 转链未返回可用链接', [
+            'channel' => $channel,
+            'materialUrl' => $materialUrl,
+            'subUnionId' => $subUnionId,
+            'siteId' => config($cfgKey . '.site_id'),
+            'positionId' => config($cfgKey . '.pid'),
+            'note' => $debugNote,
+            'jdApiDebug' => $jdApiDebug,
+        ]);
+
+        return null;
+    }
+
+    protected function resolveJdSubUnionId(int $uid): string
+    {
+        return $uid > 0 ? (string) $uid : 'guest';
     }
 
     protected function jdPromotionLinkUsable(array $link): bool
@@ -1867,6 +2043,108 @@ class Goods extends BaseController
             'jCommand'        => (string) ($data['jCommand'] ?? $data['command'] ?? ''),
             'weChatShortLink' => (string) ($data['weChatShortLink'] ?? $data['wechatShortUrl'] ?? ''),
         ];
+    }
+
+    /**
+     * 转链 materialId：裸联盟商品 ID → jingfen 详情 URL；已是合法 URL 则规范化
+     */
+    protected function normalizeJdPromotionMaterialForUnion(string $materialUrl): string
+    {
+        $materialUrl = trim($materialUrl);
+        if ($materialUrl === '') {
+            return '';
+        }
+        $materialUrl = $this->repairMisnormalizedBareJdMaterial($materialUrl);
+        if ($this->isJdBareAffiliateMaterialId($materialUrl)) {
+            return $this->buildJingfenDetailMaterialUrl($materialUrl);
+        }
+
+        $normalized = $this->normalizeJdMaterialUrl($materialUrl);
+        $normalized = $this->repairMisnormalizedBareJdMaterial($normalized);
+        if ($this->isJdBareAffiliateMaterialId($normalized)) {
+            return $this->buildJingfenDetailMaterialUrl($normalized);
+        }
+        if (stripos($normalized, 'jingfen.jd.com') !== false) {
+            return $this->ensureJingfenDetailMaterialUrl($normalized);
+        }
+
+        return $normalized;
+    }
+
+    /** 联盟动态商品 ID（非 URL、非纯数字 sku） */
+    protected function isJdBareAffiliateMaterialId(string $value): bool
+    {
+        $value = trim($value);
+        if ($value === '' || strlen($value) < 8) {
+            return false;
+        }
+        if (preg_match('#^https?://#i', $value) || strpos($value, '//') === 0) {
+            return false;
+        }
+        if (stripos($value, 'jd.com') !== false || strpos($value, '/') !== false) {
+            return false;
+        }
+        if (ctype_digit($value)) {
+            return false;
+        }
+
+        return (bool) preg_match('/^[A-Za-z0-9_\-]+$/', $value);
+    }
+
+    protected function buildJingfenDetailMaterialUrl(string $affiliateItemId): string
+    {
+        $affiliateItemId = trim($affiliateItemId);
+        if ($affiliateItemId === '') {
+            return '';
+        }
+
+        return 'https://jingfen.jd.com/detail/' . $affiliateItemId . '.html';
+    }
+
+    /** normalizeJdMaterialUrl 误把裸 ID 加成 https://{id} 时还原 */
+    protected function repairMisnormalizedBareJdMaterial(string $url): string
+    {
+        $url = trim($url);
+        if (preg_match('#^https?://([^/?\#]+)$#i', $url, $m)) {
+            $host = $m[1];
+            if (stripos($host, '.') === false && $this->isJdBareAffiliateMaterialId($host)) {
+                return $host;
+            }
+        }
+
+        return $url;
+    }
+
+    protected function ensureJingfenDetailMaterialUrl(string $url): string
+    {
+        if (preg_match('#jingfen\.jd\.com/detail/[^/?\#]+#i', $url)) {
+            return $url;
+        }
+        $id = $this->extractJdAffiliateItemIdFromJingfenMaterial($url);
+        if ($id !== '') {
+            return $this->buildJingfenDetailMaterialUrl($id);
+        }
+
+        return $url;
+    }
+
+    protected function extractJdAffiliateItemIdFromJingfenMaterial(string $url): string
+    {
+        $url = trim($url);
+        if ($url === '' || stripos($url, 'jingfen.jd.com') === false) {
+            return '';
+        }
+        if (preg_match('#jingfen\.jd\.com/detail/([^/?\#]+?)(?:\.html)?(?:[?\#]|$)#i', $url, $m)) {
+            return trim(rawurldecode($m[1]));
+        }
+        if (preg_match('#jingfen\.jd\.com/([^/?\#]+)(?:[?\#]|$)#i', $url, $m)) {
+            $seg = trim(rawurldecode($m[1]));
+            if ($seg !== '' && !in_array(strtolower($seg), ['detail', 'item'], true)) {
+                return $seg;
+            }
+        }
+
+        return '';
     }
 
     /**

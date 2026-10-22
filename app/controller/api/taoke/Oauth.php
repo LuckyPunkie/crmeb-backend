@@ -5,6 +5,7 @@ namespace app\controller\api\taoke;
 use crmeb\basic\BaseController;
 use crmeb\services\taoke\KuaishouOfficialService;
 use crmeb\services\taoke\TaobaoOfficialService;
+use crmeb\services\taoke\TaokeEnvFile;
 use think\App;
 use think\facade\Log;
 
@@ -87,10 +88,18 @@ class Oauth extends BaseController
             Log::warning('淘宝 OAuth refresh 失败', ['result' => $result]);
         }
 
+        $reExpiresIn = isset($result['re_expires_in']) ? (int) $result['re_expires_in'] : 0;
+        $refreshExpireAt = $reExpiresIn > 0
+            ? time() + $reExpiresIn
+            : (int) (TaokeEnvFile::read(['TAOBAO_REFRESH_EXPIRE_AT'])['TAOBAO_REFRESH_EXPIRE_AT'] ?? config('taoke.taobao.refresh_expire_at'));
+
         return app('json')->success([
             'ok'      => $ok,
             'cached'  => !empty($result['cached']),
             'expires' => $result['expires_in'] ?? null,
+            're_expires_in' => $reExpiresIn > 0 ? $reExpiresIn : null,
+            'refresh_expire_at' => $refreshExpireAt > 0 ? $refreshExpireAt : null,
+            'refresh_seconds_left' => $refreshExpireAt > 0 ? max(0, $refreshExpireAt - time()) : null,
             'error'   => $ok ? null : ($result['error'] ?? ($result['error_description'] ?? 'refresh_failed')),
         ]);
     }
@@ -160,10 +169,20 @@ class Oauth extends BaseController
             $errMsg = (string) ($result['error'] ?? $result['sub_msg'] ?? $result['msg'] ?? 'refresh_failed');
         }
 
+        $refreshExpiresIn = isset($result['refresh_token_expires_in'])
+            ? (int) $result['refresh_token_expires_in']
+            : 0;
+        $refreshExpireAt = $refreshExpiresIn > 0
+            ? time() + $refreshExpiresIn
+            : (int) (TaokeEnvFile::read(['KUAISHOU_REFRESH_TOKEN_EXPIRE_AT'])['KUAISHOU_REFRESH_TOKEN_EXPIRE_AT'] ?? config('taoke.kuaishou.refresh_token_expire_at'));
+
         return app('json')->success([
             'ok' => $ok,
             'cached' => !empty($result['cached']),
             'expires' => isset($result['expires_in']) ? (int) $result['expires_in'] : null,
+            'refresh_token_expires_in' => $refreshExpiresIn > 0 ? $refreshExpiresIn : null,
+            'refresh_expire_at' => $refreshExpireAt > 0 ? $refreshExpireAt : null,
+            'refresh_seconds_left' => $refreshExpireAt > 0 ? max(0, $refreshExpireAt - time()) : null,
             'error' => $ok ? '' : $errMsg,
         ]);
     }
@@ -179,11 +198,11 @@ class Oauth extends BaseController
 
         $saved = !empty($data['_env_saved']);
         if ($platform === 'kuaishou') {
-            $envTip = 'KUAISHOU_ACCESS_TOKEN / KUAISHOU_REFRESH_TOKEN / KUAISHOU_ACCESS_TOKEN_EXPIRE_AT';
+            $envTip = 'KUAISHOU_ACCESS_TOKEN / KUAISHOU_REFRESH_TOKEN / KUAISHOU_ACCESS_TOKEN_EXPIRE_AT / KUAISHOU_REFRESH_TOKEN_EXPIRE_AT';
             $accessLabel = 'KUAISHOU_ACCESS_TOKEN';
             $refreshLabel = 'KUAISHOU_REFRESH_TOKEN';
         } else {
-            $envTip = 'TAOBAO_SESSION / TAOBAO_REFRESH_TOKEN / TAOBAO_SESSION_EXPIRE_AT';
+            $envTip = 'TAOBAO_SESSION / TAOBAO_REFRESH_TOKEN / TAOBAO_SESSION_EXPIRE_AT / TAOBAO_REFRESH_EXPIRE_AT';
             $accessLabel = 'TAOBAO_SESSION';
             $refreshLabel = 'TAOBAO_REFRESH_TOKEN';
         }

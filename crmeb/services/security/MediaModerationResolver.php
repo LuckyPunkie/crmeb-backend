@@ -6,6 +6,7 @@
 
 namespace crmeb\services\security;
 
+use app\common\repositories\community\CommunityReplyRepository;
 use app\common\repositories\community\CommunityRepository;
 use app\common\repositories\user\UserCertificationRepository;
 use app\common\repositories\user\UserMessageRepository;
@@ -140,7 +141,7 @@ class MediaModerationResolver
     /** 笔记评论配图：清除被拒图片；清完只剩空评论时整条判为未通过 */
     protected static function resolveCommunityReply(int $replyId): void
     {
-        $reply = Db::name('community_reply')->where('reply_id', $replyId)->field('uid,content,pics,status')->find();
+        $reply = Db::name('community_reply')->where('reply_id', $replyId)->field('uid,community_id,content,pics,status')->find();
         if (!$reply || (string)$reply['pics'] === '') {
             return;
         }
@@ -158,6 +159,9 @@ class MediaModerationResolver
             $update['refusal'] = '图片包含违规内容';
         }
         Db::name('community_reply')->where('reply_id', $replyId)->update($update);
+        if (isset($update['status'])) {
+            CommunityReplyRepository::syncCommunityReplyCount((int)$reply['community_id']);
+        }
         ContentSecurityService::notifyRejected((int)$reply['uid'], '评论图片');
     }
 
