@@ -266,7 +266,7 @@ class Message extends BaseController
         if (!$targetUid) {
             return app('json')->fail('被举报用户不存在');
         }
-        $data = $this->request->params(['reason', 'images']);
+        $data = $this->request->params(['reason', 'images', 'report_type']);
         try {
             $reportRepo = app()->make(CommunityReportRepository::class);
             $report = $reportRepo->createUserReport($data, $myUid, $targetUid);

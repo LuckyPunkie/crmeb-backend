@@ -44,6 +44,10 @@ class CommunityReportRepository extends BaseRepository
         $data['reporter_uid'] = $reporterUid;
         $data['target_uid'] = $community['uid'];
         $data['status'] = 0;
+        // App 分享面板举报笔记不选类型，统一记为笔记举报
+        if (empty($data['report_type'])) {
+            $data['report_type'] = 'note';
+        }
         if (isset($data['images']) && is_array($data['images'])) {
             $data['images'] = json_encode($data['images']);
         }
@@ -51,7 +55,7 @@ class CommunityReportRepository extends BaseRepository
     }
 
     /**
-     * 提交用户举报（私信场景）
+     * 提交用户举报（私信场景；评论长按举报也走这里，report_type=comment）
      */
     public function createUserReport(array $data, int $reporterUid, int $targetUid)
     {
@@ -82,7 +86,7 @@ class CommunityReportRepository extends BaseRepository
             'community_id' => 0,
             'reporter_uid' => $reporterUid,
             'target_uid' => $targetUid,
-            'report_type' => 'user',
+            'report_type' => ($data['report_type'] ?? '') === 'comment' ? 'comment' : 'user',
             'reason' => trim((string)$data['reason']),
             'images' => json_encode(array_values($images)),
             'status' => 0,
