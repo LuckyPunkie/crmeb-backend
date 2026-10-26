@@ -34,10 +34,12 @@ class AppEntryRepository
                 'review_version_ios' => '',
                 'review_version_android' => '',
                 'review_version_routine' => '',
+                'review_version_alipay' => '',
                 'feature_gift_enabled' => 1,
                 'hide_gift_when_review_ios' => 0,
                 'hide_gift_when_review_android' => 0,
                 'hide_gift_when_review_routine' => 0,
+                'hide_gift_when_review_alipay' => 0,
                 'update_time' => time(),
             ]);
             $review = Db::name('app_entry_review')->where('id', 1)->find();
@@ -65,10 +67,12 @@ class AppEntryRepository
                 'review_version_ios' => $reviewRow['review_version_ios'],
                 'review_version_android' => $reviewRow['review_version_android'],
                 'review_version_routine' => $reviewRow['review_version_routine'],
+                'review_version_alipay' => $reviewRow['review_version_alipay'],
                 'feature_gift_enabled' => $reviewRow['feature_gift_enabled'],
                 'hide_gift_when_review_ios' => $reviewRow['hide_gift_when_review_ios'],
                 'hide_gift_when_review_android' => $reviewRow['hide_gift_when_review_android'],
                 'hide_gift_when_review_routine' => $reviewRow['hide_gift_when_review_routine'],
+                'hide_gift_when_review_alipay' => $reviewRow['hide_gift_when_review_alipay'],
                 'update_time' => time(),
             ]);
 
@@ -125,6 +129,10 @@ class AppEntryRepository
                 } else {
                     $groupId = null;
                 }
+                // 旧版后台提交不带 alipay 字段：沿用微信小程序
+                $hideAlipay = !empty(array_key_exists('hide_when_review_alipay', $it)
+                    ? $it['hide_when_review_alipay']
+                    : ($it['hide_when_review_routine'] ?? 0)) ? 1 : 0;
                 $row = [
                     'slot_key' => $it['slot_key'],
                     'group_id' => $groupId,
@@ -141,10 +149,12 @@ class AppEntryRepository
                     'hide_when_review_ios' => !empty($it['hide_when_review_ios']) ? 1 : 0,
                     'hide_when_review_android' => !empty($it['hide_when_review_android']) ? 1 : 0,
                     'hide_when_review_routine' => !empty($it['hide_when_review_routine']) ? 1 : 0,
+                    'hide_when_review_alipay' => $hideAlipay,
                     'hide_when_review' => (
                         !empty($it['hide_when_review_ios'])
                         || !empty($it['hide_when_review_android'])
                         || !empty($it['hide_when_review_routine'])
+                        || $hideAlipay
                     ) ? 1 : 0,
                     'sort' => (int)($it['sort'] ?? 0),
                     'update_time' => $now,
@@ -340,6 +350,8 @@ class AppEntryRepository
                 return trim((string)($review['review_version_android'] ?? ''));
             case 'routine':
                 return trim((string)($review['review_version_routine'] ?? ''));
+            case 'alipay':
+                return trim((string)($review['review_version_alipay'] ?? ''));
             default:
                 return '';
         }
@@ -357,10 +369,15 @@ class AppEntryRepository
         $it['hide_when_review_routine'] = isset($it['hide_when_review_routine'])
             ? (int)(!empty($it['hide_when_review_routine']))
             : $legacy;
+        // 未迁移的旧行沿用微信小程序设置
+        $it['hide_when_review_alipay'] = isset($it['hide_when_review_alipay'])
+            ? (int)(!empty($it['hide_when_review_alipay']))
+            : $it['hide_when_review_routine'];
         $it['hide_when_review'] = (
             $it['hide_when_review_ios']
             || $it['hide_when_review_android']
             || $it['hide_when_review_routine']
+            || $it['hide_when_review_alipay']
         ) ? 1 : 0;
         $it['is_enabled'] = !isset($it['is_enabled']) || !empty($it['is_enabled']) ? 1 : 0;
         $it['act_id'] = (int)($it['act_id'] ?? 0);
@@ -385,6 +402,8 @@ class AppEntryRepository
                 return !empty($it['hide_when_review_android']);
             case 'routine':
                 return !empty($it['hide_when_review_routine']);
+            case 'alipay':
+                return !empty($it['hide_when_review_alipay']);
             default:
                 return !empty($it['hide_when_review']);
         }
@@ -396,10 +415,17 @@ class AppEntryRepository
             'review_version_ios' => trim((string)($review['review_version_ios'] ?? '')),
             'review_version_android' => trim((string)($review['review_version_android'] ?? '')),
             'review_version_routine' => trim((string)($review['review_version_routine'] ?? '')),
+            // 库未迁移 / 旧版后台提交不带 alipay 字段：沿用微信小程序
+            'review_version_alipay' => trim((string)(array_key_exists('review_version_alipay', $review)
+                ? $review['review_version_alipay']
+                : ($review['review_version_routine'] ?? ''))),
             'feature_gift_enabled' => !isset($review['feature_gift_enabled']) || !empty($review['feature_gift_enabled']) ? 1 : 0,
             'hide_gift_when_review_ios' => !empty($review['hide_gift_when_review_ios']) ? 1 : 0,
             'hide_gift_when_review_android' => !empty($review['hide_gift_when_review_android']) ? 1 : 0,
             'hide_gift_when_review_routine' => !empty($review['hide_gift_when_review_routine']) ? 1 : 0,
+            'hide_gift_when_review_alipay' => !empty(array_key_exists('hide_gift_when_review_alipay', $review)
+                ? $review['hide_gift_when_review_alipay']
+                : ($review['hide_gift_when_review_routine'] ?? 0)) ? 1 : 0,
         ];
     }
 
@@ -419,6 +445,8 @@ class AppEntryRepository
                 return empty($r['hide_gift_when_review_android']);
             case 'routine':
                 return empty($r['hide_gift_when_review_routine']);
+            case 'alipay':
+                return empty($r['hide_gift_when_review_alipay']);
             default:
                 return true;
         }
@@ -484,6 +512,7 @@ class AppEntryRepository
                 'hide_when_review_ios' => $legacy,
                 'hide_when_review_android' => $legacy,
                 'hide_when_review_routine' => $legacy,
+                'hide_when_review_alipay' => $legacy,
                 'hide_when_review' => $legacy,
                 'sort' => $sort,
                 'create_time' => $now,

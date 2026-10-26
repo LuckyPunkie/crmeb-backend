@@ -60,6 +60,7 @@ class AppEntryCommunityFeed
                 'hide_when_review_ios' => $h,
                 'hide_when_review_android' => $h,
                 'hide_when_review_routine' => $h,
+                'hide_when_review_alipay' => $h,
             ]);
         }
     }
@@ -93,6 +94,10 @@ class AppEntryCommunityFeed
                 'hide_when_review_ios' => !empty($row['hide_when_review_ios']) ? 1 : 0,
                 'hide_when_review_android' => !empty($row['hide_when_review_android']) ? 1 : 0,
                 'hide_when_review_routine' => !empty($row['hide_when_review_routine']) ? 1 : 0,
+                // 旧版后台提交不带 alipay 字段：沿用微信小程序
+                'hide_when_review_alipay' => !empty(array_key_exists('hide_when_review_alipay', $row)
+                    ? $row['hide_when_review_alipay']
+                    : ($row['hide_when_review_routine'] ?? 0)) ? 1 : 0,
                 'sort' => (int)($row['sort'] ?? self::TYPE_META[$key]['sort']),
             ]);
         }
@@ -110,6 +115,7 @@ class AppEntryCommunityFeed
                 'hide_when_review_ios' => $h,
                 'hide_when_review_android' => $h,
                 'hide_when_review_routine' => $h,
+                'hide_when_review_alipay' => $h,
             ];
         }
         return $out;
@@ -120,6 +126,8 @@ class AppEntryCommunityFeed
         $key = (string)($row['type_key'] ?? '');
         $meta = self::TYPE_META[$key] ?? ['label' => $key, 'sort' => 0, 'default_hide' => 0];
         $legacy = (int)$meta['default_hide'];
+        $routine = isset($row['hide_when_review_routine'])
+            ? (int)(!empty($row['hide_when_review_routine'])) : $legacy;
         return [
             'type_key' => $key,
             'label' => (string)($row['label'] ?? $meta['label']),
@@ -128,8 +136,9 @@ class AppEntryCommunityFeed
                 ? (int)(!empty($row['hide_when_review_ios'])) : $legacy,
             'hide_when_review_android' => isset($row['hide_when_review_android'])
                 ? (int)(!empty($row['hide_when_review_android'])) : $legacy,
-            'hide_when_review_routine' => isset($row['hide_when_review_routine'])
-                ? (int)(!empty($row['hide_when_review_routine'])) : $legacy,
+            'hide_when_review_routine' => $routine,
+            'hide_when_review_alipay' => isset($row['hide_when_review_alipay'])
+                ? (int)(!empty($row['hide_when_review_alipay'])) : $routine,
         ];
     }
 
@@ -144,7 +153,7 @@ class AppEntryCommunityFeed
             'hidden_category_ids' => [],
             'hidden_tab_keys' => [],
         ];
-        if (!$this->tablesReady() || $platform === '' || !in_array($platform, ['ios', 'android', 'routine'], true)) {
+        if (!$this->tablesReady() || $platform === '' || !in_array($platform, ['ios', 'android', 'routine', 'alipay'], true)) {
             return $empty;
         }
         $review = Db::name('app_entry_review')->where('id', 1)->find() ?: [];
@@ -246,6 +255,8 @@ class AppEntryCommunityFeed
                 return !empty($row['hide_when_review_android']);
             case 'routine':
                 return !empty($row['hide_when_review_routine']);
+            case 'alipay':
+                return !empty($row['hide_when_review_alipay']);
             default:
                 return false;
         }
@@ -260,6 +271,8 @@ class AppEntryCommunityFeed
                 return trim((string)($review['review_version_android'] ?? ''));
             case 'routine':
                 return trim((string)($review['review_version_routine'] ?? ''));
+            case 'alipay':
+                return trim((string)($review['review_version_alipay'] ?? ''));
             default:
                 return '';
         }

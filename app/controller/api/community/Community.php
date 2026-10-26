@@ -880,7 +880,7 @@ class Community extends BaseController
     {
         $platform = trim((string)$this->request->param('client_platform', ''));
         $appVersion = trim((string)$this->request->param('app_version', ''));
-        if (!in_array($platform, ['ios', 'android', 'routine'], true)) {
+        if (!in_array($platform, ['ios', 'android', 'routine', 'alipay'], true)) {
             return ['', ''];
         }
         return [$platform, $appVersion];

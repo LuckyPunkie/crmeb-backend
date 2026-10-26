@@ -59,10 +59,14 @@ class AppEntryDefaultSeed
             $row['hide_when_review_routine'] = isset($row['hide_when_review_routine'])
                 ? (int)(!empty($row['hide_when_review_routine']))
                 : $legacy;
+            $row['hide_when_review_alipay'] = isset($row['hide_when_review_alipay'])
+                ? (int)(!empty($row['hide_when_review_alipay']))
+                : $legacy;
             $row['hide_when_review'] = (
                 $row['hide_when_review_ios']
                 || $row['hide_when_review_android']
                 || $row['hide_when_review_routine']
+                || $row['hide_when_review_alipay']
             ) ? 1 : 0;
             return $row;
         };
@@ -184,6 +188,7 @@ class AppEntryDefaultSeed
                     'hide_when_review_ios' => 0,
                     'hide_when_review_android' => 0,
                     'hide_when_review_routine' => 0,
+                    'hide_when_review_alipay' => 0,
                     'sort' => $iSort,
                 ], $gi);
             }

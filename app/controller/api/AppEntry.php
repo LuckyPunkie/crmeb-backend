@@ -25,8 +25,8 @@ class AppEntry extends BaseController
         if ($appVersion === '') {
             throw new ValidateException('缺少 app_version');
         }
-        if (!in_array($platform, ['ios', 'android', 'routine'], true)) {
-            throw new ValidateException('client_platform 须为 ios/android/routine');
+        if (!in_array($platform, ['ios', 'android', 'routine', 'alipay'], true)) {
+            throw new ValidateException('client_platform 须为 ios/android/routine/alipay');
         }
         try {
             $data = $this->repository->clientConfig($platform, $appVersion);
