@@ -41,6 +41,8 @@ Route::group(function () {
     Route::get('nearby/search/lst', 'api.store.nearby.NearbySearch/lst');
     // 公益好物匹配
     Route::get('nearby/bill/welfare_products', 'api.store.nearby.NearbyBill/welfareProducts');
+    // 买单支付方式开关
+    Route::get('nearby/bill/pay_config', 'api.store.nearby.NearbyBill/payConfig');
 })->middleware(UserTokenMiddleware::class, false);
 
 // 扫码买单：允许游客（uid=0）；余额支付在控制器内校验登录

@@ -118,6 +118,22 @@ class NearbyBill extends BaseController
     }
 
     /**
+     * 买单可用支付方式开关（读后台「支付设置」，游客可读）
+     * GET /api/nearby/bill/pay_config
+     */
+    public function payConfig()
+    {
+        $config = systemConfig(['pay_weixin_open', 'alipay_open', 'pay_mock_open']);
+        return app('json')->success([
+            'pay_weixin_open' => (int)($config['pay_weixin_open'] ?? 0),
+            'alipay_open'     => (int)($config['alipay_open'] ?? 0),
+            'pay_mock_open'   => (int)($config['pay_mock_open'] ?? 0),
+            // 买单余额支付未实现（create 直接拒绝），不下发
+            'yue_pay_status'  => 0,
+        ]);
+    }
+
+    /**
      * 按消费金额匹配公益商品（售价升序）
      * GET /api/nearby/bill/welfare_products?pay_price=
      */
