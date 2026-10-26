@@ -515,11 +515,8 @@ class NearbyShopBillOrderRepository extends BaseRepository
      */
     protected function syncStoreOrder($billOrder, $payType = 'weixin')
     {
+        // 未登录买单 uid=0：也写入，商户后台「订单管理」要能看到；不属于任何用户，不会出现在谁的「我的订单」里
         $uid = (int)($billOrder['uid'] ?? 0);
-        if ($uid <= 0) {
-            // 未登录买单：无法挂到用户订单列表
-            return null;
-        }
 
         $exists = StoreOrder::getDB()
             ->where('uid', $uid)
@@ -547,10 +544,14 @@ class NearbyShopBillOrderRepository extends BaseRepository
             : time();
 
         $payTimeStr = date('Y-m-d H:i:s', $payTime);
-        // 收货人/订购人显示用户昵称，取不到再用「扫码顾客」
-        $realName = trim((string)Db::name('user')->where('uid', $uid)->value('nickname'));
-        if ($realName === '') {
-            $realName = '扫码顾客';
+        // 收货人/订购人显示用户昵称；未登录写「未登录用户」，登录但取不到昵称用「扫码顾客」
+        if ($uid <= 0) {
+            $realName = '未登录用户';
+        } else {
+            $realName = trim((string)Db::name('user')->where('uid', $uid)->value('nickname'));
+            if ($realName === '') {
+                $realName = '扫码顾客';
+            }
         }
 
         return Db::transaction(function () use (

@@ -14,7 +14,6 @@ namespace app\controller\api\store\nearby;
 use think\App;
 use crmeb\basic\BaseController;
 use crmeb\services\PayService;
-use crmeb\services\wechat\Payment;
 use crmeb\services\wechat\MiniProgram;
 use app\common\model\user\User;
 use app\common\model\store\product\Product;
@@ -161,17 +160,7 @@ class NearbyBill extends BaseController
                 'guest' => $uid <= 0,
             ]);
         } catch (\Exception $e) {
-            // 排查「appid 和 mch_id 不匹配」：带上实际发给微信的 app_id / mch_id（均非密钥），查完删掉（见 memo.md）
-            $debug = '';
-            if ($data['pay_type'] === 'routine') {
-                try {
-                    $cfg = Payment::instance()->setAccessEnd(Payment::MINI)->application()->getConfig();
-                    $debug = ' [app_id=' . $cfg->get('app_id') . ', mch_id=' . $cfg->get('mch_id') . ']';
-                } catch (\Throwable $t) {
-                    $debug = ' [读取支付配置失败: ' . $t->getMessage() . ']';
-                }
-            }
-            return app('json')->fail('支付配置失败: ' . $e->getMessage() . $debug);
+            return app('json')->fail('支付配置失败: ' . $e->getMessage());
         }
     }
 
