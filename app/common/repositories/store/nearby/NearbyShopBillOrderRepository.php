@@ -17,14 +17,17 @@ use app\common\model\store\order\StoreGroupOrder;
 use app\common\model\store\order\StoreOrder;
 use app\common\model\store\order\StoreOrderProduct;
 use app\common\model\store\service\StoreService;
+use app\common\model\user\User;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
 use app\common\repositories\system\merchant\MerchantRepository;
+use app\common\repositories\user\UserBillRepository;
 use crmeb\services\SwooleTaskService;
 use crmeb\services\UniPushService;
 use think\facade\Cache;
 use think\facade\Db;
 use think\facade\Log;
+use think\exception\ValidateException;
 
 class NearbyShopBillOrderRepository extends BaseRepository
 {
@@ -54,6 +57,48 @@ class NearbyShopBillOrderRepository extends BaseRepository
         }
 
         return $this->dao->create($orderData);
+    }
+
+    /**
+     * 余额支付：同一事务内扣 now_money、记余额明细、标记已支付（失败整体回滚，不会扣了钱单子没付）
+     */
+    public function payByBalance($order, int $uid)
+    {
+        if ($uid <= 0 || (int)($order['uid'] ?? 0) !== $uid) {
+            throw new ValidateException('请先登录后再使用余额支付');
+        }
+        if (!systemConfig('yue_pay_status') || !systemConfig('balance_func_status')) {
+            throw new ValidateException('未开启余额支付');
+        }
+        $payPrice = (string)$order['pay_price'];
+
+        return Db::transaction(function () use ($order, $uid, $payPrice) {
+            $user = User::getDB()->where('uid', $uid)->lock(true)->find();
+            if (!$user) {
+                throw new ValidateException('用户不存在');
+            }
+            if (bccomp((string)$user['now_money'], $payPrice, 2) < 0) {
+                throw new ValidateException('余额不足，请更换支付方式');
+            }
+            $balance = bcsub((string)$user['now_money'], $payPrice, 2);
+            User::getDB()->where('uid', $uid)->update(['now_money' => $balance]);
+
+            $merName = (string)Db::name('merchant')->where('mer_id', (int)$order['mer_id'])->value('mer_name');
+            app()->make(UserBillRepository::class)->decBill($uid, 'now_money', 'pay_product', [
+                'link_id' => (int)$order['id'],
+                'status' => 1,
+                'title' => '扫码买单',
+                'number' => $payPrice,
+                'mark' => '余额支付' . floatval($payPrice) . '元扫码买单' . ($merName !== '' ? '（' . $merName . '）' : ''),
+                'balance' => $balance,
+            ]);
+
+            $paid = $this->paySuccess($order['order_sn'], 'balance');
+            if (!$paid) {
+                throw new ValidateException('订单状态异常，请重新下单');
+            }
+            return $paid;
+        });
     }
 
     /**

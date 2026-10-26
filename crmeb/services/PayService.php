@@ -100,6 +100,16 @@ class PayService
         $openId = $wechatUserRepository->idByRoutineId($user['wechat_user_id']);
         if (!$openId)
             throw new ValidateException('请关联微信小程序!');
+        return $this->payRoutineByOpenid($openId);
+    }
+
+    /**
+     * 小程序 JSAPI 支付，直接按 openid 下单（游客买单：openid 由 wx.login code 换取，不需要用户账号）
+     */
+    public function payRoutineByOpenid(string $openId)
+    {
+        if ($openId === '')
+            throw new ValidateException('支付用户微信信息缺失');
         $services = Payment::instance()->setAccessEnd(Payment::MINI);
         if (systemConfig('pay_routine_new_mchid')) {
             $config = $services->miniPay(

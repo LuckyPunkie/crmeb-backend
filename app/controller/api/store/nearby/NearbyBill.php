@@ -14,6 +14,8 @@ namespace app\controller\api\store\nearby;
 use think\App;
 use crmeb\basic\BaseController;
 use crmeb\services\PayService;
+use crmeb\services\wechat\Payment;
+use crmeb\services\wechat\MiniProgram;
 use app\common\model\user\User;
 use app\common\model\store\product\Product;
 use app\common\repositories\store\nearby\NearbyShopBillOrderRepository;
@@ -24,7 +26,7 @@ use think\facade\Db;
 
 /**
  * 附近好店买单 - C端API控制器
- * 支持游客扫码买单（uid=0）；余额 / 小程序 JSAPI 等仍需登录
+ * 支持游客扫码买单（uid=0）；余额仍需登录；小程序 JSAPI 游客需带 wx.login code
  */
 class NearbyBill extends BaseController
 {
@@ -62,7 +64,18 @@ class NearbyBill extends BaseController
         $uid = $this->currentUid();
         $user = $this->currentUser();
 
-        if (in_array($data['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0) {
+        // 小程序游客：前端带 wx.login 的 code，后端换 openid 直接 JSAPI 下单，不要求登录
+        $wxCode = trim((string)$this->request->param('code', ''));
+        $guestRoutineOpenid = '';
+        if ($data['pay_type'] === 'routine' && $uid <= 0 && $wxCode !== '') {
+            $guestRoutineOpenid = $this->routineOpenidByCode($wxCode);
+            if ($guestRoutineOpenid === '') {
+                return app('json')->fail('获取微信身份失败，请重试');
+            }
+            $wxCode = ''; // code 只能换一次
+        }
+
+        if (in_array($data['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0 && $guestRoutineOpenid === '') {
             return app('json')->fail('请先登录后再使用该支付方式');
         }
 
@@ -70,6 +83,16 @@ class NearbyBill extends BaseController
         $merchant = $this->merchantRepository->get((int)$data['mer_id']);
         if (!$merchant || $merchant['is_del'] || $merchant['status'] != 1) {
             return app('json')->fail('商家不存在或已下架');
+        }
+
+        // 余额支付：先查开关和余额，不够就不建单（扣款时事务内还会加锁再查一次）
+        if ($data['pay_type'] === 'balance') {
+            if (!systemConfig('yue_pay_status') || !systemConfig('balance_func_status')) {
+                return app('json')->fail('未开启余额支付');
+            }
+            if (!$user || bccomp((string)$user['now_money'], (string)$data['pay_price'], 2) < 0) {
+                return app('json')->fail('余额不足，请更换支付方式');
+            }
         }
 
         // 创建订单（游客 uid=0）
@@ -91,7 +114,19 @@ class NearbyBill extends BaseController
         }
 
         if ($data['pay_type'] === 'balance') {
-            return app('json')->fail('余额支付暂未开通，请使用微信支付');
+            try {
+                $this->repository->payByBalance($order, $uid);
+            } catch (\think\exception\ValidateException $e) {
+                return app('json')->fail($e->getMessage());
+            } catch (\Throwable $e) {
+                \think\facade\Log::error('NearbyBill balance pay failed: ' . $order['order_sn'] . ' ' . $e->getMessage());
+                return app('json')->fail('余额支付失败，请稍后重试');
+            }
+            return app('json')->success([
+                'order_sn'     => $order['order_sn'],
+                'pay_price'    => $order['pay_price'],
+                'balance_paid' => true,
+            ]);
         }
 
         // 调起支付
@@ -104,7 +139,20 @@ class NearbyBill extends BaseController
                 'attach'    => 'bill_pay',
             ], 'bill');
 
-            $payResult = $payService->pay($user);
+            if ($guestRoutineOpenid !== '') {
+                $payResult = $payService->payRoutineByOpenid($guestRoutineOpenid);
+            } else {
+                try {
+                    $payResult = $payService->pay($user);
+                } catch (\think\exception\ValidateException $ve) {
+                    // 已登录但账号没绑小程序（如小程序里用账号密码登录）：有 code 就用当前微信身份付
+                    $openid = ($payType === 'routine' && $wxCode !== '') ? $this->routineOpenidByCode($wxCode) : '';
+                    if ($openid === '') {
+                        throw $ve;
+                    }
+                    $payResult = $payService->payRoutineByOpenid($openid);
+                }
+            }
 
             return app('json')->success([
                 'order_sn' => $order['order_sn'],
@@ -113,7 +161,17 @@ class NearbyBill extends BaseController
                 'guest' => $uid <= 0,
             ]);
         } catch (\Exception $e) {
-            return app('json')->fail('支付配置失败: ' . $e->getMessage());
+            // 排查「appid 和 mch_id 不匹配」：带上实际发给微信的 app_id / mch_id（均非密钥），查完删掉（见 memo.md）
+            $debug = '';
+            if ($data['pay_type'] === 'routine') {
+                try {
+                    $cfg = Payment::instance()->setAccessEnd(Payment::MINI)->application()->getConfig();
+                    $debug = ' [app_id=' . $cfg->get('app_id') . ', mch_id=' . $cfg->get('mch_id') . ']';
+                } catch (\Throwable $t) {
+                    $debug = ' [读取支付配置失败: ' . $t->getMessage() . ']';
+                }
+            }
+            return app('json')->fail('支付配置失败: ' . $e->getMessage() . $debug);
         }
     }
 
@@ -123,13 +181,13 @@ class NearbyBill extends BaseController
      */
     public function payConfig()
     {
-        $config = systemConfig(['pay_weixin_open', 'alipay_open', 'pay_mock_open']);
+        $config = systemConfig(['pay_weixin_open', 'alipay_open', 'pay_mock_open', 'yue_pay_status', 'balance_func_status']);
         return app('json')->success([
             'pay_weixin_open' => (int)($config['pay_weixin_open'] ?? 0),
             'alipay_open'     => (int)($config['alipay_open'] ?? 0),
             'pay_mock_open'   => (int)($config['pay_mock_open'] ?? 0),
-            // 买单余额支付未实现（create 直接拒绝），不下发
-            'yue_pay_status'  => 0,
+            // 与商城一致：余额支付开关 + 余额功能开关都开才算；是否登录由前端判断（未登录不显示）
+            'yue_pay_status'  => ($config['yue_pay_status'] ?? 0) && ($config['balance_func_status'] ?? 0) ? 1 : 0,
         ]);
     }
 
@@ -274,6 +332,22 @@ class NearbyBill extends BaseController
             return app('json')->fail('请先登录后再支付');
         }
 
+        if ($order['pay_type'] === 'balance') {
+            try {
+                $this->repository->payByBalance($order, $uid);
+            } catch (\think\exception\ValidateException $e) {
+                return app('json')->fail($e->getMessage());
+            } catch (\Throwable $e) {
+                \think\facade\Log::error('NearbyBill balance repay failed: ' . $order['order_sn'] . ' ' . $e->getMessage());
+                return app('json')->fail('余额支付失败，请稍后重试');
+            }
+            return app('json')->success([
+                'order_sn'     => $order['order_sn'],
+                'pay_price'    => $order['pay_price'],
+                'balance_paid' => true,
+            ]);
+        }
+
         try {
             $payService = new PayService($order['pay_type'], [
                 'order_sn' => $order['order_sn'],
@@ -292,6 +366,18 @@ class NearbyBill extends BaseController
             ]);
         } catch (\Exception $e) {
             return app('json')->fail('支付配置失败: ' . $e->getMessage());
+        }
+    }
+
+    /** 小程序 wx.login code 换 openid；失败返回空串 */
+    protected function routineOpenidByCode(string $code): string
+    {
+        try {
+            $session = MiniProgram::getUserInfo($code);
+            return (string)($session['openid'] ?? '');
+        } catch (\Throwable $e) {
+            \think\facade\Log::error('NearbyBill routine code2session failed: ' . $e->getMessage());
+            return '';
         }
     }
 
