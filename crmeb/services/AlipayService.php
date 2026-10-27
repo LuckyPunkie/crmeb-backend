@@ -11,6 +11,7 @@
 
 namespace crmeb\services;
 
+use app\common\repositories\alipay\AlipayUserRepository;
 use crmeb\utils\Hook;
 use think\facade\Event;
 use think\facade\Log;
@@ -85,6 +86,24 @@ class AliPayService
     }
 
     /**
+     * 支付宝小程序实例：用后台「支付宝小程序支付配置」tab 的 app_id / 支付密钥 / 支付宝公钥，与 App 分开配
+     * @return static
+     */
+    public static function makeMini(): self
+    {
+        $alipay = systemConfig(['site_url', 'alipay_mini_app_id', 'alipay_mini_public_key', 'alipay_mini_private_key']);
+        if (empty($alipay['alipay_mini_app_id']) || empty($alipay['alipay_mini_public_key']) || empty($alipay['alipay_mini_private_key'])) {
+            throw new PayException('支付宝小程序支付配置不完整，请在后台「支付宝小程序支付配置」填写 app_id、支付宝公钥、支付密钥');
+        }
+        return new static([
+            'appId' => $alipay['alipay_mini_app_id'],
+            'merchantPrivateKey' => $alipay['alipay_mini_private_key'],
+            'alipayPublicKey' => $alipay['alipay_mini_public_key'],
+            'notifyUrl' => rtrim($alipay['site_url'], '/') . Route::buildUrl('alipayNotify')->build(),
+        ]);
+    }
+
+    /**
      * 是否是支付宝付款码
      * @param string $authCode
      * @return bool
@@ -99,6 +118,11 @@ class AliPayService
      */
     protected function initialize()
     {
+        // EasySDK 的 Factory 是单例，setOptions 只认进程里第一次的配置；Swoole 常驻下会导致
+        // 后台改的密钥要重启才生效、App 与小程序 app_id 互相串，所以每次先清掉单例再设置
+        $instance = new \ReflectionProperty(Factory::class, 'instance');
+        $instance->setAccessible(true);
+        $instance->setValue(null, null);
         Factory::setOptions($this->getOptions());
     }
 
@@ -258,6 +282,83 @@ class AliPayService
     }
 
     /**
+     * 小程序授权码（my.getAuthCode auth_base）换支付宝用户标识
+     * 应用开了 OpenID 时返回 open_id，否则返回 user_id（2088 开头）；顺手把 open_id / union_id 记进 eb_alipay_user
+     * @param string $authCode
+     * @return string
+     */
+    public function miniOpenId(string $authCode): string
+    {
+        return $this->miniIdentity($authCode)['open_id'];
+    }
+
+    /**
+     * 小程序授权码换身份：['open_id' => 下单用的买家标识, 'union_id' => 可能为空, 'alipay_user_id' => eb_alipay_user 主键，记失败为 0]
+     * @param string $authCode
+     * @return array
+     */
+    public function miniIdentity(string $authCode): array
+    {
+        $this->initialize();
+        try {
+            $result = Factory::util()->generic()->execute('alipay.system.oauth.token', [
+                'grant_type' => 'authorization_code',
+                'code' => $authCode,
+            ], []);
+        } catch (\Exception $e) {
+            throw new PayException('支付宝授权失败:' . $e->getMessage());
+        }
+        $body = json_decode((string)$result->httpBody, true) ?: [];
+        $data = $body['alipay_system_oauth_token_response'] ?? [];
+        $openId = $data['open_id'] ?? ($data['user_id'] ?? '');
+        if (!$openId) {
+            $error = $body['error_response'] ?? $data;
+            throw new PayException('支付宝授权失败:' . ($error['sub_msg'] ?? ($error['msg'] ?? '未获取到用户标识')));
+        }
+        $unionId = (string)($data['union_id'] ?? '');
+        $alipayUserId = app()->make(AlipayUserRepository::class)->sync($this->config['appId'], 'routine', $openId, $unionId);
+        return ['open_id' => $openId, 'union_id' => $unionId, 'alipay_user_id' => $alipayUserId];
+    }
+
+    /**
+     * 小程序支付下单（alipay.trade.create），返回给 my.tradePay 用的支付宝交易号
+     * @param string $title
+     * @param string $orderId
+     * @param string $totalAmount
+     * @param string $passbackParams
+     * @param string $buyer miniOpenId() 的返回值
+     * @return string
+     */
+    public function miniCreate(string $title, string $orderId, string $totalAmount, string $passbackParams, string $buyer): string
+    {
+        $data = [
+            'subject' => trim($title),
+            'out_trade_no' => $orderId,
+            'total_amount' => $totalAmount,
+            'product_code' => 'JSAPI_PAY',
+            'passback_params' => $passbackParams,
+        ];
+        $data[preg_match('/^2088\d+$/', $buyer) ? 'buyer_id' : 'buyer_open_id'] = $buyer;
+        // miniOpenId 发请求期间协程可能被切走，别的请求会改掉 Factory，下单前重新设一次
+        $this->initialize();
+        try {
+            $result = Factory::util()->generic()->execute('alipay.trade.create', ['notify_url' => $this->config['notifyUrl']], $data);
+        } catch (\Exception $e) {
+            throw new PayException($e->getMessage());
+        }
+        Event::until('pay.create.order', [$data, $orderId, 'alipay']);
+        if (!$this->response->success($result)) {
+            throw new PayException('失败原因:' . $result->msg . ',' . $result->subMsg);
+        }
+        $body = json_decode((string)$result->httpBody, true) ?: [];
+        $tradeNo = $body['alipay_trade_create_response']['trade_no'] ?? '';
+        if (!$tradeNo) {
+            throw new PayException('支付宝下单失败:未返回交易号');
+        }
+        return $tradeNo;
+    }
+
+    /**
      * 订单退款
      * @param string $outTradeNo 订单号
      * @param string $totalAmount 退款金额
@@ -323,8 +424,16 @@ class AliPayService
      */
     public static function handleNotify()
     {
-
-        return self::make()->notify(function ($notify) {
+        // 支付宝小程序下的单，回调里 app_id 是小程序的，要用小程序那套支付宝公钥验签
+        $miniAppId = systemConfig('alipay_mini_app_id');
+        $appId = (string)app()->request->param('app_id', '');
+        $isMini = $miniAppId && $appId === $miniAppId;
+        $service = $isMini ? self::makeMini() : self::make();
+        return $service->notify(function ($notify) use ($appId, $isMini) {
+            // 验签通过后记下付款人（回调只有 open_id，没有 union_id），供订单记录付款的支付宝用户
+            $notify['alipay_user_id'] = app()->make(AlipayUserRepository::class)->sync(
+                $appId, $isMini ? 'routine' : 'app', (string)app()->request->param('buyer_open_id', '')
+            );
             Log::info('支付宝回调$notify:' . var_export([$notify], true));
             if (isset($notify['out_trade_no']) && isset($notify['attach']) && $notify['attach']) {
                 event('pay_success_' . $notify['attach'], ['order_sn' => $notify['out_trade_no'], 'data' => $notify]);

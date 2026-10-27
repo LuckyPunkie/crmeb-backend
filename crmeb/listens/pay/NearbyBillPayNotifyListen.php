@@ -27,8 +27,8 @@ class NearbyBillPayNotifyListen implements ListenerInterface
             $notify = $data[0];
             if (isset($notify['out_trade_no']) && strpos($notify['out_trade_no'], 'NB') === 0) {
                 Log::info('NearbyBillPayNotifyListen (V3 pay.notify): ' . $notify['out_trade_no']);
-                // V3透传的'wechat'是支付渠道标识，统一归一化为'weixin'，保证与Validate:in一致
-                $this->processPaySuccess($notify['out_trade_no'], 'weixin', $notify['transaction_id'] ?? '');
+                // 传空串保留下单时的支付方式（routine / weixinApp / weixin），后台按它区分哪个平台的游客
+                $this->processPaySuccess($notify['out_trade_no'], '', $notify['transaction_id'] ?? '');
                 return;
             }
         }
@@ -38,7 +38,16 @@ class NearbyBillPayNotifyListen implements ListenerInterface
             $orderSn = $data['order_sn'];
             $transactionId = $data['data']['transaction_id'] ?? $data['data']['trade_no'] ?? '';
             Log::info('NearbyBillPayNotifyListen (V2): ' . $orderSn);
-            $this->processPaySuccess($orderSn, 'weixin', $transactionId);
+            // 传空串保留下单时的支付方式（以前统一写 weixin，支付宝单也被记成微信）
+            $this->processPaySuccess($orderSn, '', $transactionId);
+            // 支付宝回调带上了付款人（AlipayService::handleNotify 记进 eb_alipay_user），记到订单上，二期给游客单补归属
+            if (!empty($data['data']['alipay_user_id'])) {
+                try {
+                    app()->make(NearbyShopBillOrderRepository::class)->setAlipayUser($orderSn, (int)$data['data']['alipay_user_id']);
+                } catch (\Throwable $e) {
+                    Log::error('NearbyBillPayNotifyListen setAlipayUser failed: ' . $orderSn . ' ' . $e->getMessage());
+                }
+            }
             return;
         }
 
@@ -46,7 +55,7 @@ class NearbyBillPayNotifyListen implements ListenerInterface
         if (isset($data['order_sn']) && strpos($data['order_sn'], 'NB') === 0) {
             $orderSn = $data['order_sn'];
             Log::info('NearbyBillPayNotifyListen (compat): ' . $orderSn);
-            $this->processPaySuccess($orderSn, 'weixin', '');
+            $this->processPaySuccess($orderSn, '', '');
             return;
         }
     }

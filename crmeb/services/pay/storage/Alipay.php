@@ -22,6 +22,20 @@ class Alipay extends BasePay implements PayInterface
     {
         $affect = $order['attach'];
         $order['openid'] = $openid;
+        // 支付宝小程序：前端（utils/request.js）在支付请求里带上 my.getAuthCode 的授权码，走 trade.create + my.tradePay
+        $miniAuthCode = (string)app('request')->param('alipay_auth_code', '');
+        if ($miniAuthCode !== '' && in_array($type, ['alipay', 'alipayQr'], true)) {
+            $service = AlipayService::makeMini();
+            $identity = $service->miniIdentity($miniAuthCode);
+            $tradeNo = $service->miniCreate(
+                title: $order['body'],
+                orderId: $order['order_sn'],
+                totalAmount: (string)$order['pay_price'],
+                passbackParams: $affect,
+                buyer: $identity['open_id']
+            );
+            return ['config' => ['alipay_trade_no' => $tradeNo]];
+        }
         $service = AlipayService::make();
         switch ($type){
             case 'alipay':
@@ -82,7 +96,15 @@ class Alipay extends BasePay implements PayInterface
     public function payOrderRefund(string $outTradeNo, array $options = [], $channel = '')
     {
         $refundId = $options['refund_id'] ?? $options['refund_no'] ?? $outTradeNo;
-        $config = AlipayService::make()->refund($outTradeNo, (string)floatval($options['refund_price']), $refundId);
+        try {
+            $config = AlipayService::make()->refund($outTradeNo, (string)floatval($options['refund_price']), $refundId);
+        } catch (\Throwable $e) {
+            // 支付宝小程序下的单用 App 的 app_id 查不到，换小程序 app_id 再退一次
+            if (strpos($e->getMessage(), '交易不存在') === false || !systemConfig('alipay_mini_app_id')) {
+                throw $e;
+            }
+            $config = AlipayService::makeMini()->refund($outTradeNo, (string)floatval($options['refund_price']), $refundId);
+        }
         return compact('config');
     }
 

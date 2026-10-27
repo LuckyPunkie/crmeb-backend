@@ -67,14 +67,23 @@ class NearbyBill extends BaseController
         $wxCode = trim((string)$this->request->param('code', ''));
         $guestRoutineOpenid = '';
         if ($data['pay_type'] === 'routine' && $uid <= 0 && $wxCode !== '') {
-            $guestRoutineOpenid = $this->routineOpenidByCode($wxCode);
+            $session = $this->routineSessionByCode($wxCode);
+            $guestRoutineOpenid = $session['openid'];
             if ($guestRoutineOpenid === '') {
                 return app('json')->fail('获取微信身份失败，请重试');
             }
             $wxCode = ''; // code 只能换一次
+            // 按 unionid 认回老用户（同一开放平台下 App / 小程序 unionid 一致）：订单挂到他名下，进「我的订单」、发消费送股
+            $matched = $this->userByUnionid($session['unionid']);
+            if ($matched) {
+                $uid = (int)$matched['uid'];
+                $user = $matched;
+            }
         }
 
-        if (in_array($data['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0 && $guestRoutineOpenid === '') {
+        // 支付宝小程序游客：带了 my.getAuthCode 的授权码，付款人由支付宝识别，不要求登录
+        $guestAlipayMini = $data['pay_type'] === 'alipay' && trim((string)$this->request->param('alipay_auth_code', '')) !== '';
+        if (in_array($data['pay_type'], $this->loginRequiredPayTypes, true) && $uid <= 0 && $guestRoutineOpenid === '' && !$guestAlipayMini) {
             return app('json')->fail('请先登录后再使用该支付方式');
         }
 
@@ -358,15 +367,42 @@ class NearbyBill extends BaseController
         }
     }
 
-    /** 小程序 wx.login code 换 openid；失败返回空串 */
-    protected function routineOpenidByCode(string $code): string
+    /** 小程序 wx.login code 换 openid / unionid（unionid 需小程序绑定开放平台才有）；失败返回空串 */
+    protected function routineSessionByCode(string $code): array
     {
         try {
             $session = MiniProgram::getUserInfo($code);
-            return (string)($session['openid'] ?? '');
+            return [
+                'openid'  => (string)($session['openid'] ?? ''),
+                'unionid' => (string)($session['unionid'] ?? ''),
+            ];
         } catch (\Throwable $e) {
             \think\facade\Log::error('NearbyBill routine code2session failed: ' . $e->getMessage());
-            return '';
+            return ['openid' => '', 'unionid' => ''];
+        }
+    }
+
+    protected function routineOpenidByCode(string $code): string
+    {
+        return $this->routineSessionByCode($code)['openid'];
+    }
+
+    /** unionid → eb_wechat_user → eb_user；找不到或账号被禁用返回 null */
+    protected function userByUnionid(string $unionid)
+    {
+        if ($unionid === '') {
+            return null;
+        }
+        try {
+            $wechatUserId = (int)Db::name('wechat_user')->where('unionid', $unionid)->value('wechat_user_id');
+            if ($wechatUserId <= 0) {
+                return null;
+            }
+            $user = User::getDB()->where('wechat_user_id', $wechatUserId)->where('status', 1)->whereNull('cancel_time')->find();
+            return $user ?: null;
+        } catch (\Throwable $e) {
+            \think\facade\Log::error('NearbyBill userByUnionid failed: ' . $e->getMessage());
+            return null;
         }
     }
 

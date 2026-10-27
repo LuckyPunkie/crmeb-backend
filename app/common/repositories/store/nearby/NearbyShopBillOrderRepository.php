@@ -102,6 +102,17 @@ class NearbyShopBillOrderRepository extends BaseRepository
     }
 
     /**
+     * 记录付款的支付宝用户（eb_alipay_user），只在还没记过时写，回调重发不会改
+     */
+    public function setAlipayUser(string $orderSn, int $alipayUserId): void
+    {
+        NearbyShopBillOrder::getDB()
+            ->where('order_sn', $orderSn)
+            ->where('alipay_user_id', 0)
+            ->update(['alipay_user_id' => $alipayUserId]);
+    }
+
+    /**
      * 支付成功回调处理
      */
     public function paySuccess($orderSn, $payType = 'weixin', $transactionId = '')
@@ -115,8 +126,11 @@ class NearbyShopBillOrderRepository extends BaseRepository
             'paid' => 1,
             'status' => 1,
             'pay_time' => time(),
-            'pay_type' => $payType,
         ];
+        // 传空串表示保留下单时的支付方式（支付宝回调用）
+        if ($payType !== '') {
+            $updateData['pay_type'] = $payType;
+        }
 
         // 幂等保护：WHERE paid=0 防止并发回调重复处理
         $affected = NearbyShopBillOrder::getDB()
@@ -147,7 +161,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
 
         // Demo：同步写入商城订单，便于用户订单列表展示
         try {
-            $this->syncStoreOrder($order, $payType);
+            $this->syncStoreOrder($order, (string)$order['pay_type']);
         } catch (\Exception $e) {
             Log::error('NearbyBill syncStoreOrder failed: ' . $e->getMessage());
         }
@@ -457,7 +471,8 @@ class NearbyShopBillOrderRepository extends BaseRepository
         }
 
         $payType = (string)($updateData['pay_type'] ?? $order['pay_type'] ?? 'weixin');
-        $payTypeIndex = array_search($payType, StoreOrderRepository::PAY_TYPE, true);
+        // 买单的 App 支付方式不在 PAY_TYPE 里，按渠道归到 alipay / weixin，否则会落到 10（mock）
+        $payTypeIndex = array_search(['alipayApp' => 'alipay', 'weixinApp' => 'weixin'][$payType] ?? $payType, StoreOrderRepository::PAY_TYPE, true);
         if ($payTypeIndex === false) {
             $payTypeIndex = 10;
         }
@@ -470,7 +485,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
             $lockAmount
         );
 
-        $userInfo = 'uid:' . (int)($order['uid'] ?? 0);
+        $userInfo = empty($order['uid']) ? $this->guestLabel($payType) : 'uid:' . (int)$order['uid'];
         try {
             if (!empty($order['uid'])) {
                 $nick = \app\common\model\user\User::getDB()->where('uid', (int)$order['uid'])->value('nickname');
@@ -513,6 +528,20 @@ class NearbyShopBillOrderRepository extends BaseRepository
     /**
      * 买单成功后写入 store_order，合并进用户订单列表
      */
+    /**
+     * 未登录买单的显示名：按下单时的支付方式区分平台（不显示 openid / unionid）
+     */
+    protected function guestLabel(string $payType): string
+    {
+        return [
+            'routine' => '微信小程序游客',
+            'alipay' => '支付宝小程序游客',
+            'weixinApp' => 'App游客',
+            'alipayApp' => 'App游客',
+            'weixin' => 'H5游客',
+        ][$payType] ?? '未登录用户';
+    }
+
     protected function syncStoreOrder($billOrder, $payType = 'weixin')
     {
         // 未登录买单 uid=0：也写入，商户后台「订单管理」要能看到；不属于任何用户，不会出现在谁的「我的订单」里
@@ -529,7 +558,7 @@ class NearbyShopBillOrderRepository extends BaseRepository
         $orderRepository = app()->make(StoreOrderRepository::class);
         $merchant = app()->make(MerchantRepository::class)->get((int)$billOrder['mer_id']);
         $amount = (string)$billOrder['pay_price'];
-        $payTypeIndex = array_search($payType, StoreOrderRepository::PAY_TYPE, true);
+        $payTypeIndex = array_search(['alipayApp' => 'alipay', 'weixinApp' => 'weixin'][$payType] ?? $payType, StoreOrderRepository::PAY_TYPE, true);
         if ($payTypeIndex === false) {
             $payTypeIndex = array_search('routine', StoreOrderRepository::PAY_TYPE, true);
         }
@@ -544,9 +573,9 @@ class NearbyShopBillOrderRepository extends BaseRepository
             : time();
 
         $payTimeStr = date('Y-m-d H:i:s', $payTime);
-        // 收货人/订购人显示用户昵称；未登录写「未登录用户」，登录但取不到昵称用「扫码顾客」
+        // 收货人/订购人显示用户昵称；未登录按支付方式写哪个平台的游客，登录但取不到昵称用「扫码顾客」
         if ($uid <= 0) {
-            $realName = '未登录用户';
+            $realName = $this->guestLabel((string)($billOrder['pay_type'] ?? $payType));
         } else {
             $realName = trim((string)Db::name('user')->where('uid', $uid)->value('nickname'));
             if ($realName === '') {
