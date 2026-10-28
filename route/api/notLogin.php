@@ -105,6 +105,12 @@ Route::post('auth/mp', [app\controller\api\Auth::class, 'mpAuth']);
 Route::post('auth/app', [app\controller\api\Auth::class, 'appAuth']);
 //apple授权
 Route::post('auth/apple', [app\controller\api\Auth::class, 'appleAuth']);
+//支付宝小程序授权
+Route::post('auth/alipay_mini', [app\controller\api\Auth::class, 'alipayMiniAuth']);
+//支付宝小程序登录前检查是否需绑手机号
+Route::post('auth/alipay_mini_type', [app\controller\api\Auth::class, 'alipayMiniLoginType']);
+//支付宝小程序手机号登录
+Route::post('auth/alipay_mini_phone', [app\controller\api\Auth::class, 'alipayMiniPhone']);
 //Sign in with Apple 服务器通知（填到苹果后台 Server-to-Server Notification Endpoint）
 Route::post('apple/notify', 'api.AppleNotify/notify');
 //修改密码

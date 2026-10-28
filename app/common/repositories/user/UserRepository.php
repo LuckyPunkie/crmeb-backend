@@ -16,6 +16,7 @@ use app\common\dao\BaseDao;
 use app\common\dao\user\UserDao;
 use app\common\model\user\User;
 use app\common\model\wechat\WechatUser;
+use app\common\repositories\alipay\AlipayUserRepository;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\community\CommunityRepository;
 use app\common\repositories\store\order\StoreOrderRepository;
@@ -2386,6 +2387,9 @@ class UserRepository extends BaseRepository
 
             // 更新搜索引擎中的用户数据，解除主账号关联。
             $this->getSearch([])->where('main_uid', $uid)->update(['main_uid' => 0]);
+
+            // 解绑支付宝身份，同一支付宝再登录会建新账号。
+            app()->make(AlipayUserRepository::class)->unbindUid((int)$uid);
 
             // 删除用户的收货地址信息。
             app()->make(UserAddressRepository::class)->getSearch([])->where('uid', $uid)->delete();

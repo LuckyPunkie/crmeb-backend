@@ -30,6 +30,8 @@ use app\common\repositories\wechat\WechatUserRepository;
 use app\validate\api\ChangePasswordValidate;
 use app\validate\api\UserAuthValidate;
 use crmeb\basic\BaseController;
+use app\common\repositories\alipay\AlipayUserRepository;
+use crmeb\services\AlipayService;
 use crmeb\services\AppleIdentityService;
 use crmeb\services\security\captcha\SliderCaptchaService;
 use crmeb\services\wechat\MiniProgram;
@@ -770,6 +772,124 @@ class Auth extends BaseController
         $userRepository->loginAfter($user[1]);
 
         return app('json')->success($userRepository->returnToken($user[1], $tokenInfo));
+    }
+
+    /**
+     * 授权码换支付宝身份；失败返回错误信息字符串
+     * @param string $authCode my.getAuthCode(auth_base) 的授权码
+     * @return array|string
+     */
+    protected function alipayMiniIdentity(string $authCode)
+    {
+        if ($authCode === '') {
+            return '授权失败,参数有误';
+        }
+        try {
+            $identity = AlipayService::makeMini()->miniIdentity($authCode);
+        } catch (\Throwable $e) {
+            return $e->getMessage();
+        }
+        return $identity['alipay_user_id'] ? $identity : '授权失败';
+    }
+
+    /**
+     * 强制手机号绑定时，没绑账号或账号没手机号的要先授权手机号（alipayMiniPhone）；需要时返回手机号登录用的 key
+     * @param int $alipayUserId
+     * @param mixed $user
+     * @param int $spread
+     * @return string 不需要时为空
+     */
+    protected function alipayMiniPhoneKey(int $alipayUserId, $user, int $spread): string
+    {
+        // systemConfig 读出来是 int 1，不能用 === '1'
+        if ((string)systemConfig('is_phone_login') !== '1' || ($user && $user['phone'])) {
+            return '';
+        }
+        $key = 'A' . md5(uniqid((string)random_int(1, 100000000), true));
+        Cache::set('alipay_try' . $key, ['alipay_user_id' => $alipayUserId, 'spread' => $spread], 3600);
+        return $key;
+    }
+
+    /**
+     * 支付宝小程序登录前检查（对标微信 mpLoginType）：进登录页静默调用，只查要不要先授权手机号，不登录
+     * @return mixed
+     */
+    public function alipayMiniLoginType()
+    {
+        $identity = $this->alipayMiniIdentity(trim((string)$this->request->param('auth_code', '')));
+        if (is_string($identity)) {
+            return app('json')->fail($identity);
+        }
+        $user = app()->make(AlipayUserRepository::class)->boundUser($identity['alipay_user_id']);
+        $key = $this->alipayMiniPhoneKey($identity['alipay_user_id'], $user, $this->request->param('spread/d', 0));
+        return app('json')->success(['need_phone' => $key !== '' ? 1 : 0, 'key' => $key]);
+    }
+
+    /**
+     * 支付宝小程序授权登录：my.getAuthCode(auth_base) 的授权码换身份，已绑账号直接登录，没有就建新账号（对标微信 routine 授权登录，不要手机号）
+     * @return mixed
+     */
+    public function alipayMiniAuth()
+    {
+        $spread = $this->request->param('spread/d', 0);
+        $identity = $this->alipayMiniIdentity(trim((string)$this->request->param('auth_code', '')));
+        if (is_string($identity)) {
+            return app('json')->fail($identity);
+        }
+        $alipayUserRepository = app()->make(AlipayUserRepository::class);
+        $userRepository = app()->make(UserRepository::class);
+        $user = $alipayUserRepository->boundUser($identity['alipay_user_id']);
+        // 强制手机号绑定：前端改走手机号授权
+        $key = $this->alipayMiniPhoneKey($identity['alipay_user_id'], $user, $spread);
+        if ($key !== '') {
+            return app('json')->success(['need_phone' => 1, 'key' => $key]);
+        }
+        if (!$user) {
+            $user = $alipayUserRepository->createUser($identity['alipay_user_id']);
+        }
+        $user = $userRepository->mainUser($user);
+        $userRepository->bindSpread($user, $spread);
+        $tokenInfo = $userRepository->createToken($user);
+        $userRepository->loginAfter($user);
+        return app('json')->success($userRepository->returnToken($user, $tokenInfo));
+    }
+
+    /**
+     * 支付宝小程序手机号登录（强制手机号绑定时）：手机号已有账号就改绑过去（认回老账号），没有就给支付宝账号补上手机号
+     * @return mixed
+     */
+    public function alipayMiniPhone()
+    {
+        $key = trim((string)$this->request->param('key', ''));
+        $response = (string)$this->request->param('response', '');
+        $auth = $key !== '' ? Cache::get('alipay_try' . $key) : null;
+        if (!$auth) {
+            return app('json')->fail('登录已超时，请重新点击授权登录');
+        }
+        try {
+            $phone = AlipayService::makeMini()->miniPhoneNumber($response);
+        } catch (\Throwable $e) {
+            return app('json')->fail($e->getMessage());
+        }
+        $alipayUserRepository = app()->make(AlipayUserRepository::class);
+        $userRepository = app()->make(UserRepository::class);
+        $user = $userRepository->accountByUser($phone) ?: $userRepository->getWhere(['phone' => $phone]);
+        if ($user) {
+            $alipayUserRepository->bindUid($auth['alipay_user_id'], (int)$user['uid']);
+        } else {
+            $user = $alipayUserRepository->boundUser($auth['alipay_user_id']) ?: $alipayUserRepository->createUser($auth['alipay_user_id']);
+            $patch = ['phone' => $phone];
+            if (str_starts_with((string)$user['account'], 'zfb')) {
+                $patch['account'] = $phone;
+            }
+            $user->save($patch);
+        }
+        Cache::delete('alipay_try' . $key);
+        $user = $userRepository->mainUser($user);
+        $userRepository->bindSpread($user, (int)$auth['spread']);
+        $tokenInfo = $userRepository->createToken($user);
+        $userRepository->loginAfter($user);
+        return app('json')->success($userRepository->returnToken($user, $tokenInfo));
     }
 
     public function getMerCertificate($merId)

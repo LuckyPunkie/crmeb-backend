@@ -321,6 +321,60 @@ class AliPayService
     }
 
     /**
+     * 解出 my.getPhoneNumber 返回的会员手机号
+     * @param string $response my.getPhoneNumber 成功回调里的 response（JSON 字符串）
+     * @return string
+     */
+    public function miniPhoneNumber(string $response): string
+    {
+        $result = $this->miniOpenResponse($response);
+        if (empty($result['mobile'])) {
+            throw new PayException('获取手机号失败:未返回手机号');
+        }
+        return (string)$result['mobile'];
+    }
+
+    /**
+     * 解开小程序开放数据（my.getPhoneNumber / my.getOpenUserInfo 的 response）：
+     * 密文先用支付宝公钥验签、再用「接口内容加密方式」AES 密钥解密；明文直接取
+     * @param string $response 回调里的 response（JSON 字符串）
+     * @return array 业务数据（code=10000 的那层）
+     */
+    public function miniOpenResponse(string $response): array
+    {
+        $data = json_decode($response, true);
+        if (!is_array($data) || empty($data['response'])) {
+            throw new PayException('授权数据有误，请重试');
+        }
+        if (is_array($data['response'])) {
+            $result = $data['response'];
+        } else {
+            $content = (string)$data['response'];
+            $aesKey = base64_decode((string)systemConfig('alipay_mini_aes_key'));
+            if (!$aesKey) {
+                throw new PayException('请在后台「支付宝小程序支付配置」填写接口内容加密密钥');
+            }
+            $publicKey = "-----BEGIN PUBLIC KEY-----\n" . wordwrap($this->config['alipayPublicKey'], 64, "\n", true) . "\n-----END PUBLIC KEY-----";
+            $sign = base64_decode((string)($data['sign'] ?? ''));
+            // 密文验签内容是带双引号的密文串；兼容不带引号的情况
+            $verified = $sign && (openssl_verify('"' . $content . '"', $sign, $publicKey, OPENSSL_ALGO_SHA256) === 1
+                || openssl_verify($content, $sign, $publicKey, OPENSSL_ALGO_SHA256) === 1);
+            if (!$verified) {
+                throw new PayException('授权数据验签失败');
+            }
+            $plain = openssl_decrypt(base64_decode($content), 'aes-' . (strlen($aesKey) * 8) . '-cbc', $aesKey, OPENSSL_RAW_DATA, str_repeat("\0", 16));
+            $result = $plain ? json_decode($plain, true) : null;
+            if (!is_array($result)) {
+                throw new PayException('授权数据解密失败，请检查接口内容加密密钥');
+            }
+        }
+        if (($result['code'] ?? '') !== '10000') {
+            throw new PayException('支付宝授权失败:' . ($result['subMsg'] ?? ($result['msg'] ?? '未知错误')));
+        }
+        return $result;
+    }
+
+    /**
      * 小程序支付下单（alipay.trade.create），返回给 my.tradePay 用的支付宝交易号
      * @param string $title
      * @param string $orderId
