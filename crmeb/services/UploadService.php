@@ -15,6 +15,7 @@ namespace crmeb\services;
 
 use app\common\repositories\system\StorageRepository;
 use crmeb\services\upload\Upload;
+use think\facade\Log;
 
 /**
  * Class UploadService
@@ -104,6 +105,34 @@ class UploadService
 
         $config = array_merge($config, ['thumb' => $thumb,'water' => $water,]);
         return new Upload($type, $config);
+    }
+
+    /**
+     * 服务器本地生成 / 处理过的文件（证件加水印、带台号的桌码等）按当前存储方式转存
+     * 本地存储时原样返回；转存失败也返回本地地址，不影响业务
+     * @param string $localFile 本地绝对路径
+     * @param string $dir 云存储目录
+     * @param string $localUrl 本地文件的访问地址
+     * @return string
+     */
+    public static function storeLocalFile(string $localFile, string $dir, string $localUrl): string
+    {
+        $type = (int)systemConfig('upload_type') ?: self::STORAGE_LOCAL;
+        if ($type === self::STORAGE_LOCAL || !is_file($localFile)) {
+            return $localUrl;
+        }
+        try {
+            $upload = self::create($type);
+            if ($upload->to($dir)->stream(file_get_contents($localFile), basename($localFile)) === false) {
+                Log::warning('本地文件转存云存储失败: ' . $localFile . ' ' . $upload->getError());
+                return $localUrl;
+            }
+        } catch (\Throwable $e) {
+            Log::warning('本地文件转存云存储异常: ' . $localFile . ' ' . $e->getMessage());
+            return $localUrl;
+        }
+        @unlink($localFile);
+        return $upload->getFileInfo()->filePath;
     }
 
     /**

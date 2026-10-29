@@ -162,7 +162,9 @@ class QrcodeService
             if ($imageInfo) {
                 $url = $imageInfo['attachment_src'];
                 $urlArr = parse_url($url);
-                if (!$urlArr['path'] || !is_file(public_path().$urlArr['path']))
+                // 只有本站本地文件才查磁盘；云存储上的码直接复用，否则每次都会重新生成
+                $isLocal = empty($urlArr['host']) || $urlArr['host'] === parse_url((string)systemConfig('site_url'), PHP_URL_HOST);
+                if (empty($urlArr['path']) || ($isLocal && !is_file(public_path().$urlArr['path'])))
                     $imageInfo = null;
             }
 

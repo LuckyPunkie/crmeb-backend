@@ -2,8 +2,13 @@
 
 namespace crmeb\services;
 
+use app\common\repositories\system\UploadMediaRepository;
+use crmeb\services\oss\ImmService;
+use crmeb\services\oss\OssDirectService;
+
 /**
  * 视频兼容处理：截封面 + HEVC 转 H.264（小程序可播）
+ * 直传 OSS 的视频不落本机：封面 / 审核抽帧走 OSS 截帧，转码走 IMM（OssVideoProcessJob）
  */
 class VideoCoverService
 {
@@ -13,6 +18,11 @@ class VideoCoverService
      */
     public static function extract(string $videoPath): ?string
     {
+        // 直传 OSS 的视频：用 OSS 原生截帧，不下载到本机
+        $ossKey = OssDirectService::keyFromUrl($videoPath);
+        if ($ossKey !== '') {
+            return OssDirectService::snapshotUrl($ossKey);
+        }
         $local = self::resolveLocalPath($videoPath);
         if (!$local || !is_file($local)) {
             return null;
@@ -43,6 +53,10 @@ class VideoCoverService
      */
     public static function extractFrames(string $videoPath, int $intervalSec = 4, int $extraRandom = 2, int $maxFrames = 15): array
     {
+        $ossKey = OssDirectService::keyFromUrl($videoPath);
+        if ($ossKey !== '') {
+            return self::extractOssFrames($ossKey, $intervalSec, $extraRandom, $maxFrames);
+        }
         $local = self::resolveLocalPath($videoPath);
         $ffmpeg = self::findFfmpeg();
         if (!$local || !is_file($local) || !$ffmpeg) {
@@ -50,26 +64,7 @@ class VideoCoverService
         }
 
         $duration = self::probeDuration($local);
-        if ($duration <= 0) {
-            $duration = 1.0;
-        }
-        $points = [];
-        for ($t = min(0.5, $duration / 2); $t < $duration; $t += max(1, $intervalSec)) {
-            $points[] = round($t, 2);
-        }
-        for ($i = 0; $i < $extraRandom; $i++) {
-            $points[] = round(mt_rand(0, (int)($duration * 100)) / 100, 2);
-        }
-        $points = array_values(array_unique($points));
-        sort($points);
-        if (count($points) > $maxFrames) {
-            $step = count($points) / $maxFrames;
-            $sampled = [];
-            for ($i = 0; $i < $maxFrames; $i++) {
-                $sampled[] = $points[(int)floor($i * $step)];
-            }
-            $points = $sampled;
-        }
+        $points = self::samplePoints($duration, $intervalSec, $extraRandom, $maxFrames);
 
         $relDir = 'uploads/def/' . date('Ymd');
         $absDir = rtrim(public_path(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relDir);
@@ -96,6 +91,54 @@ class VideoCoverService
             }
         }
         return $urls;
+    }
+
+    /**
+     * 直传 OSS 的视频：按同样的时间点生成 OSS 截帧地址（走图片 CDN，微信 / 阿里云审核可直接拉取）
+     * 时长取直传登记表；视频刚上传、转码任务还没读到时长时同步问一次 IMM
+     */
+    protected static function extractOssFrames(string $key, int $intervalSec, int $extraRandom, int $maxFrames): array
+    {
+        $media = app()->make(UploadMediaRepository::class)->getByKey($key);
+        $duration = $media ? (float)$media['duration'] : 0.0;
+        if ($duration <= 0) {
+            try {
+                $duration = ImmService::detect($key)['duration'];
+            } catch (\Throwable $e) {
+                $duration = 0.0;
+            }
+        }
+        $urls = [];
+        foreach (self::samplePoints($duration, $intervalSec, $extraRandom, $maxFrames) as $sec) {
+            $urls[] = OssDirectService::snapshotUrl($key, (int)round($sec * 1000));
+        }
+        return $urls;
+    }
+
+    /** 每 $intervalSec 秒 1 帧 + 随机追加几帧，超过上限均匀抽样 */
+    protected static function samplePoints(float $duration, int $intervalSec, int $extraRandom, int $maxFrames): array
+    {
+        if ($duration <= 0) {
+            $duration = 1.0;
+        }
+        $points = [];
+        for ($t = min(0.5, $duration / 2); $t < $duration; $t += max(1, $intervalSec)) {
+            $points[] = round($t, 2);
+        }
+        for ($i = 0; $i < $extraRandom; $i++) {
+            $points[] = round(mt_rand(0, (int)($duration * 100)) / 100, 2);
+        }
+        $points = array_values(array_unique($points));
+        sort($points);
+        if (count($points) > $maxFrames) {
+            $step = count($points) / $maxFrames;
+            $sampled = [];
+            for ($i = 0; $i < $maxFrames; $i++) {
+                $sampled[] = $points[(int)floor($i * $step)];
+            }
+            $points = $sampled;
+        }
+        return $points;
     }
 
     protected static function probeDuration(string $local): float

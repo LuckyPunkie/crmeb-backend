@@ -195,6 +195,15 @@ class CommunityRepository extends BaseRepository
                 if ($blockedUids) {
                     $query->whereNotIn('Community.uid', $blockedUids);
                 }
+
+                // 「不喜欢」过滤：当前用户点过不喜欢的笔记不再出现
+                $dislikedIds = \think\facade\Db::name('relevance')
+                    ->where('left_id', $viewerUid)
+                    ->where('type', \app\common\repositories\system\RelevanceRepository::TYPE_COMMUNITY_DISLIKE)
+                    ->column('right_id');
+                if ($dislikedIds) {
+                    $query->whereNotIn('Community.community_id', $dislikedIds);
+                }
             } else {
                 $query->where('Community.visibility', 0);
             }
@@ -1350,6 +1359,21 @@ class CommunityRepository extends BaseRepository
             $this->dao->decField($id, 'count_start', 1);
             if ($user) $userRepository->decField((int)$user->uid, 'count_start', 1);
         }
+    }
+
+    /**
+     * 笔记「不喜欢」：只在该用户的信息流里屏蔽这一条，不影响作者
+     */
+    public function dislikeCommunity(int $id, int $uid): void
+    {
+        $ownerUid = (int)$this->dao->search(['community_id' => $id])->value('Community.uid');
+        if (!$ownerUid) {
+            throw new ValidateException('内容不存在');
+        }
+        if ($ownerUid === $uid) {
+            throw new ValidateException('不能对自己的笔记操作');
+        }
+        app()->make(RelevanceRepository::class)->create($uid, $id, RelevanceRepository::TYPE_COMMUNITY_DISLIKE, true);
     }
 
     /**

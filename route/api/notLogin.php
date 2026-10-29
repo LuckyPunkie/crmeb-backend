@@ -31,6 +31,10 @@ Route::any('pay/refund/:type', [app\controller\api\Common::class, 'refundNotify'
 
 
 Route::post('upload/video', [app\controller\admin\system\attachment\Attachment::class, 'uploadVideo']);
+
+// 直传 OSS：上传完成回调（OSS RSA 验签）、IMM 转码完成通知（MNS HTTP 推送验签）
+Route::post('oss/callback', [app\controller\api\OssUpload::class, 'callback']);
+Route::any('oss/imm-notify', [app\controller\api\OssUpload::class, 'immNotify']);
 Route::get('excel/download/:id', [app\controller\merchant\store\order\Order::class, 'download']);
 
 //企业付款到零钱回调

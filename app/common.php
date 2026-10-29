@@ -757,7 +757,13 @@ if (!function_exists('image_to_base64')) {
             $host = $dir['dirname'];
             $refer = $host . '/';
             $curl = curl_init();
-            curl_setopt($curl, CURLOPT_REFERER, $refer);
+            // 自家 CDN 开了 Referer 白名单（允许空 Referer），这里拼出来的 "./" 会被拦
+            $ownCdn = array_filter(array_map(function ($u) {
+                return (string)parse_url((string)$u, PHP_URL_HOST);
+            }, (array)systemConfig(['oss_direct_img_cdn', 'oss_direct_video_cdn'])));
+            if (!in_array($url, $ownCdn, true)) {
+                curl_setopt($curl, CURLOPT_REFERER, $refer);
+            }
             curl_setopt($curl, CURLOPT_URL, $avatar);
             curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($curl, CURLOPT_FOLLOWLOCATION, true);

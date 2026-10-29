@@ -256,8 +256,11 @@ class Common extends BaseController
         if ($data === false) {
             return app('json')->fail($upload->getError());
         }
-        app()->make(ImageWaterMarkService::class)->run(public_path() . $upload->getFileInfo()->filePath);
-        return app('json')->success(['src' => tidy_url($upload->getFileInfo()->filePath)]);
+        // 水印要在本地加，加完再按存储方式转存
+        $local = public_path() . $upload->getFileInfo()->filePath;
+        app()->make(ImageWaterMarkService::class)->run($local);
+        $src = UploadService::storeLocalFile($local, $this->request->merId() . '/attach', tidy_url($upload->getFileInfo()->filePath));
+        return app('json')->success(['src' => $src]);
     }
 
 

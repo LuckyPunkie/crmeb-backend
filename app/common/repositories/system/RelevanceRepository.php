@@ -35,6 +35,8 @@ class RelevanceRepository extends BaseRepository
     const TYPE_COMMUNITY_REPLY_START  =  'community_reply_start';
     //社区笔记收藏
     const TYPE_COMMUNITY_COLLECT = 'community_collect';
+    //社区笔记「不喜欢」：只对该用户在信息流里屏蔽这一条
+    const TYPE_COMMUNITY_DISLIKE = 'community_dislike';
     //商户权限
     const TYPE_MERCHANT_AUTH = 'mer_auth';
     //用户互喜欢

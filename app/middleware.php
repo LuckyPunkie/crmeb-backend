@@ -17,4 +17,6 @@ return [
     // \think\middleware\LoadLangPack::class,
     // Session初始化
     // \think\middleware\SessionInit::class
+    // 视频 CDN 地址输出时换转码路径并加 URL 鉴权
+    \app\common\middleware\VideoUrlSignMiddleware::class,
 ];

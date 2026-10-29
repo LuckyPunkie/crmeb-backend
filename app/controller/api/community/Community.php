@@ -715,6 +715,12 @@ class Community extends BaseController
     /**
      * 笔记收藏 / 取消收藏
      */
+    public function dislikeCommunity($id)
+    {
+        $this->repository->dislikeCommunity((int)$id, (int)$this->user->uid);
+        return app('json')->success('将不再为你展示这篇笔记');
+    }
+
     public function collectCommunity($id)
     {
         $status = $this->request->param('status') == 1 ? 1 : 0;

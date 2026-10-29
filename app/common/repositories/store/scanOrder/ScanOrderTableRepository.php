@@ -11,6 +11,7 @@ use app\common\model\store\scanOrder\ScanOrderTable;
 use app\common\repositories\BaseRepository;
 use app\common\repositories\system\attachment\AttachmentRepository;
 use crmeb\services\QrcodeService;
+use crmeb\services\UploadService;
 use think\exception\ValidateException;
 
 class ScanOrderTableRepository extends BaseRepository
@@ -277,7 +278,8 @@ class ScanOrderTableRepository extends BaseRepository
             imagepng($im, $file);
             imagedestroy($im);
             $siteUrl = rtrim((string)systemConfig('site_url'), '/');
-            return $siteUrl . '/' . ltrim((string)config('qrcode.cache_dir'), '/') . '/' . basename($file);
+            $cacheDir = ltrim((string)config('qrcode.cache_dir'), '/');
+            return UploadService::storeLocalFile($file, $cacheDir, $siteUrl . '/' . $cacheDir . '/' . basename($file));
         } catch (\Throwable $e) {
             return '';
         }

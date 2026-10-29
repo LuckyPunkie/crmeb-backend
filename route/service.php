@@ -41,6 +41,8 @@ Route::group(config('admin.api_service_prefix'), function () {
         Route::get('user', 'service.Common/user');
         //图片上传
         Route::post('upload/:field', 'service.Service/upload');
+        //直传 OSS 签名
+        Route::post('oss/sign', 'service.OssUpload/sign');
         //订单信息
         Route::get('order/:id', 'service.Service/getOrderInfo');
 

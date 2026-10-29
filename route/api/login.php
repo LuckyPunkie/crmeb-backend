@@ -280,6 +280,7 @@ Route::group(function () {
         Route::get('start/lst', 'Community/getUserStartCommunity');
         Route::post('collect/:id', 'Community/collectCommunity');
         Route::get('collect/lst', 'Community/getUserCollectCommunity');
+        Route::post('dislike/:id', 'Community/dislikeCommunity');
 
         Route::post('reply/create/:id', 'CommunityReply/create');
         Route::post('reply/start/:id', 'CommunityReply/start');
@@ -596,6 +597,9 @@ Route::group(function () {
     Route::post('upload/attachment/:field', 'api.Common/uploadAttachment');
     //入住商户上传证件接口
     Route::post('upload/certificate/:field', [app\controller\api\Common::class,'uploadCertificate']);
+    //直传 OSS：开关读取、签名（未登录时签名接口返回失败，前端回退原上传接口）
+    Route::get('oss/config', 'api.OssUpload/config');
+    Route::post('oss/sign', 'api.OssUpload/sign');
     //公共配置
     Route::get('config', [app\controller\api\Common::class,'config']);
     Route::get('navigation', [app\controller\api\Common::class,'getNavigation']);
