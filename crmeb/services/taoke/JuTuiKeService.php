@@ -188,6 +188,58 @@ class JuTuiKeService extends BaseServices
      * 格式：毫秒时间戳 + 4位随机数，保证唯一性
      * @return string
      */
+    /**
+     * 批量活动转链（并发请求，后台归类打开方式用）
+     * 聚推客 QPS 上限 50/秒：每秒最多发 $perSecond 个，给线上用户转链留余量；被限流的再补一轮
+     * @param array $actIds
+     * @param int $perSecond
+     * @return array [act_id => 转链 data，接口明确失败为 []；仍被限流/网络失败的不返回该 act_id]
+     */
+    public function activityUnionBatch(array $actIds, int $perSecond = 30): array
+    {
+        $ids = array_values(array_unique(array_filter(array_map('intval', $actIds))));
+        if (!$ids || empty($this->appKey) || empty($this->apiUrl)) {
+            return [];
+        }
+        $out = [];
+        for ($round = 0; $round < 2 && $ids; $round++) {
+            $retry = [];
+            foreach (array_chunk($ids, max(1, $perSecond)) as $i => $chunk) {
+                if ($i > 0 || $round > 0) {
+                    usleep(1100000);
+                }
+                $requests = function () use ($chunk) {
+                    foreach ($chunk as $id) {
+                        yield $id => function () use ($id) {
+                            return $this->httpClient->getAsync($this->apiUrl . 'union/act', [
+                                'query' => ['act_id' => $id, 'sid' => '1234', 'apikey' => $this->appKey],
+                            ]);
+                        };
+                    }
+                };
+                $pool = new \GuzzleHttp\Pool($this->httpClient, $requests(), [
+                    'concurrency' => 10,
+                    'fulfilled' => function ($response, $id) use (&$out, &$retry) {
+                        $result = json_decode((string)$response->getBody(), true);
+                        if (is_array($result) && (int)($result['code'] ?? 0) === 1 && is_array($result['data'] ?? null)) {
+                            $out[$id] = $result['data'];
+                        } elseif (stripos((string)($result['msg'] ?? ''), 'QPS') !== false) {
+                            $retry[] = $id;
+                        } else {
+                            $out[$id] = [];
+                        }
+                    },
+                    'rejected' => function ($reason, $id) use (&$retry) {
+                        $retry[] = $id;
+                    },
+                ]);
+                $pool->promise()->wait();
+            }
+            $ids = $retry;
+        }
+        return $out;
+    }
+
     private function generateSid(): string
     {
         [$usec, $sec] = explode(' ', microtime());

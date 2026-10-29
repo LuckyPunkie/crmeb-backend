@@ -121,7 +121,7 @@ class CommunityRepository extends BaseRepository
      * 获取与当前用户存在拉黑关系（任一方向）的对方 uid 列表
      * 用于视频/图文列表过滤：被作者拉黑或我拉黑作者，双向不可见
      */
-    protected function getBlockedRelatedUids(int $viewerUid): array
+    public function getBlockedRelatedUids(int $viewerUid): array
     {
         if ($viewerUid <= 0) return [];
         $rows = \think\facade\Db::name('user_dialog')
@@ -584,6 +584,10 @@ class CommunityRepository extends BaseRepository
                     throw new ValidateException('该内容仅互关好友可见');
                 }
             }
+            // 拉黑过滤：作者与当前用户存在拉黑关系（任一方向）时不可查看
+            if ($user && app()->make(\app\common\repositories\user\UserDialogRepository::class)->isBlockedBetween((int)$user->uid, (int)$data['uid'])) {
+                throw new ValidateException('你们之间存在拉黑关系，无法查看该内容');
+            }
         }
         $data = $this->appendTopics($data);
         $data = UgcTextSecurity::applyMaskToCommunity($data);
@@ -972,12 +976,20 @@ class CommunityRepository extends BaseRepository
         } else {
             $user = app()->make(UserRepository::class)->get($uid);
             if (!$user) return app('json')->fail('用户不存在');
-            if ($self && app()->make(\app\common\repositories\user\UserDialogRepository::class)->isBlockedBetween($self->uid, $uid)) {
+            $dialogRepository = app()->make(\app\common\repositories\user\UserDialogRepository::class);
+            if ($self && $dialogRepository->isBlockedBetween($self->uid, $uid)) {
                 return [
                     'uid' => $uid,
                     'nickname' => $user->nickname,
                     'avatar' => $user->avatar,
+                    'sex' => $user->sex ?? 0,
+                    // 拉黑态主页关注 / 粉丝 / 获赞固定显示 0，不暴露真实数据
+                    'focus' => 0,
+                    'fans' => 0,
+                    'start' => 0,
                     'is_blocked' => true,
+                    // 区分提示文字：我拉黑了对方 / 被对方拉黑
+                    'is_blacked_by_me' => $dialogRepository->isBlacklistedByMe((int)$self->uid, (int)$uid),
                     'is_self' => false,
                 ];
             }

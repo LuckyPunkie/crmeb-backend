@@ -43,8 +43,15 @@ class AppEntry extends BaseController
     public function jtkActivities()
     {
         $keyword = (string)$this->request->param('keyword', '');
-        $page = (int)$this->request->param('page/d', 1);
-        $pageSize = (int)$this->request->param('pageSize/d', 100);
-        return app('json')->success($this->repository->listJutuikeActivities($keyword, $page, $pageSize));
+        $data = $this->repository->listJutuikeActivities($keyword);
+        // with_modes=1：附带微信小程序 / App 打开方式（首次需逐个转链，较慢）
+        if ((int)$this->request->param('with_modes/d', 0) === 1 && !empty($data['list'])) {
+            $modes = $this->repository->jutuikeActivityOpenModes(array_column($data['list'], 'act_id'));
+            foreach ($data['list'] as &$it) {
+                $it = array_merge($it, $modes[$it['act_id']] ?? []);
+            }
+            unset($it);
+        }
+        return app('json')->success($data);
     }
 }

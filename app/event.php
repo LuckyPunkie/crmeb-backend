@@ -58,6 +58,8 @@ return [
              \crmeb\listens\SettleExpiredRedpacketListen::class,
             // 媒体内容审核超时未回调，按服务不可用放行
              \crmeb\listens\ReleaseStaleMediaCheckListen::class,
+            // 每日好券打开方式缓存刷新，⑤⑥ 自动不下发
+             \crmeb\listens\RefreshJtkActOpenModeListen::class,
             // 自动发送短信提醒用户支付 10分钟未支付提醒
             \crmeb\listens\AutoSendPayOrderSmsListen::class,
             //自动同步短信状态

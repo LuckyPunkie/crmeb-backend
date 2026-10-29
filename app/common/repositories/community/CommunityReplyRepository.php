@@ -135,6 +135,8 @@ class CommunityReplyRepository extends BaseRepository
         unset($where['status']);
         $where['pid'] = 0;
         $viewerUid = (int)($userInfo->uid ?? 0);
+        // 拉黑过滤：与当前用户存在拉黑关系（任一方向）的人发的评论不展示
+        $blockedUids = $viewerUid ? $make->getBlockedRelatedUids($viewerUid) : [];
 
         // 最热按点赞数，最新按时间
         $order = ($sort === 'hot')
@@ -150,6 +152,9 @@ class CommunityReplyRepository extends BaseRepository
                         $own->where('uid', $viewerUid)->whereIn('status', [0, -1]);
                     });
                 }
+            })
+            ->when($blockedUids, function ($q) use ($blockedUids) {
+                $q->whereNotIn('uid', $blockedUids);
             })
             ->order($order)
             ->hidden(['refusal'])
@@ -185,6 +190,18 @@ class CommunityReplyRepository extends BaseRepository
         $this->attachIsUnlock($list, (int)$where['community_id']);
 
         $list = $this->maskReplyListText($list);
+
+        // 楼中楼里与当前用户有拉黑关系的人的回复也不展示
+        if ($blockedUids) {
+            foreach ($list as $i => $row) {
+                if (!empty($row['children'])) {
+                    $row['children'] = array_values(array_filter($row['children'], function ($c) use ($blockedUids) {
+                        return !in_array((int)($c['uid'] ?? 0), $blockedUids, true);
+                    }));
+                    $list[$i] = $row;
+                }
+            }
+        }
 
         // 返回包含所有、开始、计数和列表的数组
         return compact('all', 'start', 'count', 'list');

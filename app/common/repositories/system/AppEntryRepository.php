@@ -275,6 +275,10 @@ class AppEntryRepository
             if ($inReview && $this->itemHiddenInReview($it, $platform)) {
                 continue;
             }
+            if (($it['slot_key'] ?? '') === 'service_daily_coupon'
+                && $this->jtkActHiddenOnPlatform((int)($it['act_id'] ?? 0), $platform)) {
+                continue;
+            }
             if ($it['group_id']) {
                 $itemsByGroup[$it['group_id']][] = $it;
             } else {
@@ -390,6 +394,32 @@ class AppEntryRepository
             return true;
         }
         return (int)$it['is_enabled'] === 1;
+    }
+
+    /**
+     * 每日好券：已上架但当前端打不开的活动不下发（只读打开方式缓存，未识别的照常显示；运营开关不动，恢复后自动重新显示）
+     * ⑥ 转链失败：全端隐藏；⑤ 仅微信内可用的引导页：App / 支付宝隐藏，微信小程序有 appid 能直接跳则保留
+     */
+    protected function jtkActHiddenOnPlatform(int $actId, string $platform): bool
+    {
+        if ($actId <= 0) {
+            return false;
+        }
+        $mode = Cache::get('jtk_act_open_mode:' . $actId);
+        if (!is_array($mode)) {
+            return false;
+        }
+        $openMode = (int)($mode['open_mode'] ?? 0);
+        if ($openMode === 6) {
+            return true;
+        }
+        if ($openMode !== 5) {
+            return false;
+        }
+        if ($platform === 'routine') {
+            return ($mode['mp_open'] ?? '') !== '直接跳转小程序';
+        }
+        return true;
     }
 
     protected function itemHiddenInReview(array $it, string $platform): bool
@@ -576,20 +606,28 @@ class AppEntryRepository
     }
 
     /**
-     * 后台：聚推客活动列表（添加入口用）
+     * 后台：聚推客全部活动（逐页拉完，单页上限 100；平台新增活动自动出现，开关默认关）
      */
-    public function listJutuikeActivities(string $keyword = '', int $page = 1, int $pageSize = 100): array
+    public function listJutuikeActivities(string $keyword = ''): array
     {
-        $page = max(1, $page);
-        $pageSize = min(100, max(1, $pageSize));
+        $pageSize = 100;
         /** @var \crmeb\services\taoke\JuTuiKeService $jtk */
         $jtk = app()->make(\crmeb\services\taoke\JuTuiKeService::class);
-        $result = $jtk->getActivityList('', $page, $pageSize);
         $list = [];
-        if (isset($result['data']) && is_array($result['data'])) {
-            $list = $result['data'];
-        } elseif (is_array($result) && isset($result[0])) {
-            $list = $result;
+        $total = 0;
+        for ($page = 1; $page <= 20; $page++) {
+            $result = $jtk->getActivityList('', $page, $pageSize);
+            $rows = [];
+            if (isset($result['data']) && is_array($result['data'])) {
+                $rows = $result['data'];
+            } elseif (is_array($result) && isset($result[0])) {
+                $rows = $result;
+            }
+            $total = max($total, (int)($result['total'] ?? 0));
+            $list = array_merge($list, $rows);
+            if (count($rows) < $pageSize || ($total > 0 && count($list) >= $total)) {
+                break;
+            }
         }
         $kw = trim($keyword);
         if ($kw !== '') {
@@ -625,9 +663,116 @@ class AppEntryRepository
             ];
         }
         return [
-            'total' => (int)($result['total'] ?? count($items)),
+            'total' => count($items),
             'list' => $items,
         ];
+    }
+
+    /**
+     * 定时任务：强制刷新已上架每日好券的打开方式缓存；有活动类别变化就让 App 配置缓存失效
+     */
+    public function refreshDailyCouponOpenModes(): void
+    {
+        if (!$this->tablesReady()) {
+            return;
+        }
+        $actIds = Db::name('app_entry_item')
+            ->where('slot_key', 'service_daily_coupon')
+            ->where('is_enabled', 1)
+            ->where('act_id', '>', 0)
+            ->column('act_id');
+        if (!$actIds) {
+            return;
+        }
+        $before = [];
+        foreach ($actIds as $id) {
+            $cached = Cache::get('jtk_act_open_mode:' . (int)$id);
+            $before[(int)$id] = is_array($cached) ? (int)($cached['open_mode'] ?? 0) . '|' . ($cached['mp_open'] ?? '') : '';
+        }
+        $after = $this->jutuikeActivityOpenModes($actIds, true);
+        foreach ($after as $id => $mode) {
+            if (($before[$id] ?? '') !== (int)$mode['open_mode'] . '|' . $mode['mp_open']) {
+                $this->clearCache();
+                return;
+            }
+        }
+    }
+
+    /**
+     * 后台：聚推客活动在微信小程序 / App 的打开方式（按转链返回字段归类，单个活动缓存 12h）
+     * open_mode：1 唤起原生App 2 App内打开网页 3 网页需登录 4 网页→拉起微信→小程序 5 打不开 6 转链失败
+     * 归类依据见 .claude/docs/每日好券跳转梳理.md
+     * $force：忽略缓存重新转链（定时任务用）；限流 / 失败的仍沿用旧缓存
+     * @return array [act_id => ['open_mode' => int, 'mp_open' => string, 'app_open' => string]]
+     */
+    public function jutuikeActivityOpenModes(array $actIds, bool $force = false): array
+    {
+        $modes = [];
+        $miss = [];
+        foreach (array_unique(array_filter(array_map('intval', $actIds))) as $id) {
+            $cached = Cache::get('jtk_act_open_mode:' . $id);
+            if (is_array($cached)) {
+                $modes[$id] = $cached;
+            }
+            if ($force || !is_array($cached)) {
+                $miss[] = $id;
+            }
+        }
+        if ($miss) {
+            /** @var \crmeb\services\taoke\JuTuiKeService $jtk */
+            $jtk = app()->make(\crmeb\services\taoke\JuTuiKeService::class);
+            $unions = $jtk->activityUnionBatch($miss);
+            foreach ($miss as $id) {
+                if (!array_key_exists($id, $unions)) {
+                    continue; // 限流 / 网络失败：不归类也不缓存，下次再试
+                }
+                $mode = $this->classifyJtkOpenMode($unions[$id]);
+                Cache::set('jtk_act_open_mode:' . $id, $mode, $mode['open_mode'] === 6 ? 1800 : 43200);
+                $modes[$id] = $mode;
+            }
+        }
+        return $modes;
+    }
+
+    protected function classifyJtkOpenMode(array $d): array
+    {
+        $we = is_array($d['we_app_info'] ?? null) ? $d['we_app_info'] : [];
+        $weAppId = (string)($we['app_id'] ?? $we['appid'] ?? '');
+        $h5 = (string)($d['h5'] ?? '');
+        $longH5 = (string)($d['long_h5'] ?? '');
+        if ($weAppId === '' && $h5 === '' && $longH5 === '') {
+            return ['open_mode' => 6, 'mp_open' => '转链失败', 'app_open' => '⑥ 转链失败'];
+        }
+        $mpOpen = $weAppId !== '' ? '直接跳转小程序' : '打开网页';
+        $host = strtolower((string)parse_url($longH5 !== '' ? $longH5 : $h5, PHP_URL_HOST));
+        // 聚推客「打开小程序」引导页：微信外弹「请在微信环境内打开」
+        $isWxGuide = $host === 'h5cms.jutuike.cn';
+        $loginHosts = [
+            'u.jd.com' => '京东', 'union-click.jd.com' => '京东',
+            'p.pinduoduo.com' => '拼多多', 'mobile.yangkeduo.com' => '拼多多',
+            'h5.ele.me' => '饿了么',
+        ];
+        $deeplink = (string)($d['deeplink'] ?? '');
+        if ($deeplink !== '') {
+            $scheme = strtolower((string)parse_url($deeplink, PHP_URL_SCHEME));
+            $appName = ['imeituan' => '美团', 'eleme' => '饿了么', 'tbopen' => '淘宝'][$scheme] ?? $scheme;
+            if ($isWxGuide) {
+                $fallback = !empty($d['h5_evoke']) ? '未装则显示打开/下载App页' : '未装则打不开';
+            } else {
+                $fallback = isset($loginHosts[$host]) ? '未装则打开网页（需登录）' : '未装则打开网页';
+            }
+            return ['open_mode' => 1, 'mp_open' => $mpOpen, 'app_open' => "① 唤起{$appName}App（{$scheme}://），{$fallback}"];
+        }
+        if ($isWxGuide) {
+            return ['open_mode' => 5, 'mp_open' => $mpOpen, 'app_open' => '⑤ 打不开（仅微信内可用的引导页）'];
+        }
+        if (in_array($host, ['a.feizhu.com', 'proxy-er.feizhu.com', 'wxmpurl.cn'], true)) {
+            return ['open_mode' => 4, 'mp_open' => $mpOpen, 'app_open' => '④ 网页→拉起微信→进小程序'];
+        }
+        if (isset($loginHosts[$host])) {
+            return ['open_mode' => 3, 'mp_open' => $mpOpen, 'app_open' => "③ App内打开网页，需登录{$loginHosts[$host]}"];
+        }
+        return ['open_mode' => 2, 'mp_open' => $mpOpen, 'app_open' => '② App内打开网页，直接可用'];
     }
 
     protected function assertTables(): void
